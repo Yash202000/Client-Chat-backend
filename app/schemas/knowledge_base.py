@@ -19,3 +19,10 @@ class KnowledgeBase(KnowledgeBaseBase):
 
     class Config:
         orm_mode = True
+
+class KnowledgeBaseQnAGenerate(BaseModel):
+    knowledge_base_id: int
+    prompt: Optional[str] = "Generate a list of 10 questions and answers based on the following content. Format as Q: ...\nA: ..."
+
+class KnowledgeBaseQnA(BaseModel):
+    generated_content: str

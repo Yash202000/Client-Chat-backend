@@ -3,3 +3,5 @@ uvicorn
 websockets
 sqlalchemy
 httpx
+requests
+beautifulsoup4

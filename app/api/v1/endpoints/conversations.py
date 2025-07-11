@@ -5,7 +5,7 @@ import httpx
 import os
 
 from app.schemas import chat_message as schemas_chat_message
-from app.services import chat_service, credential_service, agent_service
+from app.services import chat_service, credential_service, agent_service, knowledge_base_service
 from app.core.dependencies import get_db, get_current_company
 from app.core.config import settings
 from app.models import credential as models_credential
@@ -30,6 +30,17 @@ async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: in
         await websocket.send_text("Agent not found")
         await websocket.close()
         return
+
+    system_prompt = agent.prompt or "You are a helpful AI assistant."
+
+    if agent.knowledge_base_id:
+        knowledge_base = knowledge_base_service.get_knowledge_base(db, agent.knowledge_base_id, company_id)
+        if knowledge_base:
+            system_prompt += f"\n\nUse the following knowledge base to answer questions:\n\n{knowledge_base.content}"
+        else:
+            await websocket.send_text("Error: Knowledge base not found for this agent.")
+            await websocket.close()
+            return
 
     await websocket.send_json({"message": agent.welcome_message or f"Hello! You are connected to agent {agent.name}.", "sender": "agent"})
     
@@ -57,8 +68,7 @@ async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: in
                     messages = []
 
                     # Add agent's prompt as a system message
-                    if agent.prompt:
-                        messages.append({"role": "system", "content": agent.prompt})
+                    messages.append({"role": "system", "content": system_prompt})
                     
                     # Add past messages from chat history
                     for msg in chat_history:
