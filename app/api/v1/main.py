@@ -1,12 +1,15 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import agents, webhooks, knowledge_bases
+from app.api.v1.endpoints import agents, webhooks, knowledge_bases, websocket_conversations
 from app.api.v1.endpoints import conversations
 from app.api.v1.endpoints import credentials, users, user_settings, company_settings, companies, notification_settings, teams, team_memberships
 
 api_router = APIRouter()
+websocket_router = APIRouter() # New router for WebSocket endpoints
+
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
+websocket_router.include_router(websocket_conversations.router, prefix="/conversations", tags=["conversations"])
 api_router.include_router(credentials.router, prefix="/credentials", tags=["credentials"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(user_settings.router, prefix="/settings", tags=["settings"])

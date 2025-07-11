@@ -1,0 +1,104 @@
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from sqlalchemy.orm import Session
+import httpx
+import os
+
+from app.schemas import chat_message as schemas_chat_message
+from app.services import chat_service, credential_service, agent_service, knowledge_base_service
+from app.core.dependencies import get_db
+from app.core.config import settings
+
+router = APIRouter()
+
+@router.websocket("/ws/{company_id}/{agent_id}/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: int, session_id: str, db: Session = Depends(get_db)):
+    print(f"WebSocket connection attempt: company_id={company_id}, agent_id={agent_id}, session_id={session_id}")
+    await websocket.accept()
+    agent = agent_service.get_agent(db, agent_id, company_id)
+    if not agent:
+        await websocket.send_text("Agent not found")
+        await websocket.close()
+        return
+
+    system_prompt = agent.prompt or "You are a helpful AI assistant."
+
+    if agent.knowledge_base_id:
+        knowledge_base = knowledge_base_service.get_knowledge_base(db, agent.knowledge_base_id, company_id)
+        if knowledge_base:
+            system_prompt += f"\n\nUse the following knowledge base to answer questions:\n\n{knowledge_base.content}"
+        else:
+            await websocket.send_text("Error: Knowledge base not found for this agent.")
+            await websocket.close()
+            return
+
+    await websocket.send_json({"message": agent.welcome_message or f"Hello! You are connected to agent {agent.name}.", "sender": "agent"})
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            chat_service.create_chat_message(db, schemas_chat_message.ChatMessageCreate(message=data, sender="user"), agent_id, session_id, company_id, sender="user")
+
+            # Grok integration
+            response_message = "I'm sorry, I don't understand."
+            try:
+                api_key = None
+                if agent.credential_id:
+                    credential = credential_service.get_credential(db, agent.credential_id, company_id)
+                    if credential:
+                        api_key = credential.api_key
+                    else:
+                        response_message = "Error: Credential not found for this agent."
+                
+                if not api_key:
+                    response_message = "Error: API key not configured for this agent."
+                else:
+                    # Fetch chat history for context
+                    chat_history = chat_service.get_chat_messages(db, agent_id, session_id, company_id)
+                    messages = []
+
+                    # Add agent's prompt as a system message
+                    messages.append({"role": "system", "content": system_prompt})
+                    
+                    # Add past messages from chat history
+                    for msg in chat_history:
+                        messages.append({"role": "user", "content": msg.message}) # For simplicity, treating all as user for now
+
+                    # Add current user message
+                    messages.append({"role": "user", "content": data})
+
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {api_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={
+                                "model": "llama3-8b-8192", # You can choose a different Grok model
+                                "messages": messages,
+                                "temperature": 0.7,
+                                "max_tokens": 150,
+                            },
+                            timeout=30.0
+                        )
+                        response.raise_for_status() # Raise an exception for HTTP errors
+                        grok_response = response.json()
+                        response_message = grok_response["choices"][0]["message"]["content"]
+
+            except httpx.RequestError as e:
+                response_message = f"Error communicating with Grok API: {e}"
+                print(response_message)
+            except httpx.HTTPStatusError as e:
+                response_message = f"Grok API returned an error: {e.response.status_code} - {e.response.text}"
+                print(response_message)
+            except Exception as e:
+                response_message = f"An unexpected error occurred during Grok processing: {e}"
+                print(response_message)
+
+            chat_service.create_chat_message(db, schemas_chat_message.ChatMessageCreate(message=response_message, sender="agent"), agent_id, session_id, company_id, sender="agent")
+            await websocket.send_json({"message": response_message, "sender": "agent"})
+
+    except WebSocketDisconnect:
+        print("WebSocket disconnected")
+    except Exception as e:
+        print(f"WebSocket Error: {e}")

@@ -4,7 +4,7 @@ import uvicorn
 
 from app.core.database import Base, engine
 from app.core.config import settings
-from app.api.v1.main import api_router
+from app.api.v1.main import api_router, websocket_router
 
 # Create all database tables
 Base.metadata.create_all(bind=engine)
@@ -24,6 +24,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(websocket_router, prefix="/ws") # Include WebSocket router separately
 
 @app.get("/")
 async def read_root():
