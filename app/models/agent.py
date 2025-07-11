@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -13,10 +13,13 @@ class Agent(Base):
     personality = Column(String, default="helpful")
     language = Column(String, default="en")
     timezone = Column(String, default="UTC")
+    is_active = Column(Boolean, default=True)
     credential_id = Column(Integer, ForeignKey("credentials.id"), nullable=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
 
     company = relationship("Company", back_populates="agents")
     messages = relationship("ChatMessage", back_populates="agent")
     credential = relationship("Credential")
+    knowledge_base = relationship("KnowledgeBase")
     webhooks = relationship("Webhook", back_populates="agent")

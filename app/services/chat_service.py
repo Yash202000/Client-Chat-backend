@@ -14,4 +14,10 @@ def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: i
         models_chat_message.ChatMessage.agent_id == agent_id,
         models_chat_message.ChatMessage.session_id == session_id,
         models_chat_message.ChatMessage.company_id == company_id
-    ).offset(skip).limit(limit).all()
+    ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()
+
+def get_unique_session_ids_for_agent(db: Session, agent_id: int, company_id: int):
+    return db.query(models_chat_message.ChatMessage.session_id).filter(
+        models_chat_message.ChatMessage.agent_id == agent_id,
+        models_chat_message.ChatMessage.company_id == company_id
+    ).distinct().all()

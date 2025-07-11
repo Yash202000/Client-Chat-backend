@@ -5,6 +5,7 @@ from app.schemas.chat_message import ChatMessage
 from app.schemas.webhook import Webhook
 
 from app.schemas.credential import Credential
+from app.schemas.knowledge_base import KnowledgeBase
 
 class AgentBase(BaseModel):
     name: str
@@ -14,6 +15,8 @@ class AgentBase(BaseModel):
     language: Optional[str] = "en"
     timezone: Optional[str] = "UTC"
     credential_id: Optional[int] = None
+    is_active: Optional[bool] = True
+    knowledge_base_id: Optional[int] = None
 
 class AgentCreate(AgentBase):
     pass
@@ -26,11 +29,14 @@ class AgentUpdate(BaseModel):
     language: Optional[str] = None
     timezone: Optional[str] = None
     credential_id: Optional[int] = None
+    is_active: Optional[bool] = None
+    knowledge_base_id: Optional[int] = None
 
 class Agent(AgentBase):
     id: int
     messages: List[ChatMessage] = []
     credential: Optional[Credential] = None
+    knowledge_base: Optional[KnowledgeBase] = None
     webhooks: List[Webhook] = []
 
     class Config:
