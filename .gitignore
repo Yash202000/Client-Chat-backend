@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# IDEs
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+.env
+
+# Database
+*.db
+/app/data/*.db
+
+# FastAPI/Uvicorn
+.uvicorn_reload_history
