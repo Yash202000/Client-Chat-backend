@@ -4,7 +4,7 @@ from app.models import agent as models_agent, tool as models_tool
 from app.schemas import agent as schemas_agent
 
 def get_agent(db: Session, agent_id: int, company_id: int):
-    return db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
+    return db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools), joinedload(models_agent.Agent.workflows)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
 
 def get_agents(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_agent.Agent).filter(models_agent.Agent.company_id == company_id).offset(skip).limit(limit).all()

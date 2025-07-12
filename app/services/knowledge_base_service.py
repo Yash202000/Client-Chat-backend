@@ -19,7 +19,7 @@ async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, 
     api_key = None
     for cred in credentials:
         # You might want to have a more robust way to identify Groq credentials
-        if "grok" in cred.platform.lower():
+        if "groq" in cred.platform.lower():
             api_key = cred.api_key
             break
     
@@ -48,8 +48,8 @@ async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, 
                 timeout=60.0
             )
             response.raise_for_status()
-            grok_response = response.json()
-            return grok_response["choices"][0]["message"]["content"]
+            groq_response = response.json()
+            return groq_response["choices"][0]["message"]["content"]
     except httpx.RequestError as e:
         raise ValueError(f"Error communicating with Groq API: {e}")
     except httpx.HTTPStatusError as e:

@@ -8,3 +8,4 @@ from app.schemas.company import Company, CompanyCreate
 from app.schemas.notification_settings import NotificationSettings, NotificationSettingsCreate, NotificationSettingsUpdate
 from app.schemas.team import Team, TeamCreate, TeamUpdate
 from app.schemas.team_membership import TeamMembership, TeamMembershipCreate, TeamMembershipUpdate
+from app.schemas.workflow import Workflow, WorkflowCreate, WorkflowUpdate

@@ -27,3 +27,4 @@ class Agent(Base):
     knowledge_base = relationship("KnowledgeBase")
     tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")
+    workflows = relationship("Workflow", back_populates="agent")
