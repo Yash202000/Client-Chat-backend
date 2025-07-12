@@ -15,6 +15,8 @@ class Agent(Base):
     language = Column(String, default="en")
     timezone = Column(String, default="UTC")
     is_active = Column(Boolean, default=True)
+    response_style = Column(String, nullable=True)
+    instructions = Column(String, nullable=True)
     credential_id = Column(Integer, ForeignKey("credentials.id"), nullable=True)
     knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))

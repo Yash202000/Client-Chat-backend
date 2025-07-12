@@ -14,6 +14,8 @@ class AgentBase(BaseModel):
     personality: Optional[str] = "helpful"
     language: Optional[str] = "en"
     timezone: Optional[str] = "UTC"
+    response_style: Optional[str] = None
+    instructions: Optional[str] = None
     credential_id: Optional[int] = None
     is_active: Optional[bool] = True
     knowledge_base_id: Optional[int] = None
@@ -28,6 +30,8 @@ class AgentUpdate(BaseModel):
     personality: Optional[str] = None
     language: Optional[str] = None
     timezone: Optional[str] = None
+    response_style: Optional[str] = None
+    instructions: Optional[str] = None
     credential_id: Optional[int] = None
     is_active: Optional[bool] = None
     knowledge_base_id: Optional[int] = None

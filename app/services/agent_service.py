@@ -17,6 +17,8 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         personality=agent.personality,
         language=agent.language,
         timezone=agent.timezone,
+        response_style=agent.response_style,
+        instructions=agent.instructions,
         credential_id=agent.credential_id,
         company_id=company_id
     )

@@ -23,6 +23,13 @@ async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: in
 
     system_prompt = agent.prompt or "You are a helpful AI assistant."
 
+    if agent.personality:
+        system_prompt += f"\n\nYour personality: {agent.personality}"
+    if agent.response_style:
+        system_prompt += f"\n\nYour response style: {agent.response_style}"
+    if agent.instructions:
+        system_prompt += f"\n\nInstructions: {agent.instructions}"
+
     # Load existing memories
     memories = memory_service.get_all_memories(db, agent_id, session_id)
     if memories:
