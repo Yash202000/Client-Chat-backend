@@ -13,7 +13,7 @@ router = APIRouter()
 
 @router.websocket("/ws/{company_id}/{agent_id}/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: int, session_id: str, db: Session = Depends(get_db)):
-    print(f"WebSocket connection attempt: company_id={company_id}, agent_id={agent_id}, session_id={session_id}")
+    
     await websocket.accept()
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
@@ -58,7 +58,7 @@ When performing addition operations, consider using the `add_numbers` tool. For 
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"Received message from frontend: {data}")
+            
             chat_service.create_chat_message(db, schemas_chat_message.ChatMessageCreate(message=data, sender="user"), agent_id, session_id, company_id, sender="user")
 
             # Grok integration
@@ -75,7 +75,7 @@ When performing addition operations, consider using the `add_numbers` tool. For 
                 if not api_key:
                     response_message = "Error: API key not configured for this agent."
                 else:
-                    print(f"Using API Key: {api_key[:5]}...") # Log first 5 chars of API key
+                    
                     # Fetch chat history for context
                     chat_history = chat_service.get_chat_messages(db, agent_id, session_id, company_id)
                     messages = []
@@ -101,10 +101,9 @@ When performing addition operations, consider using the `add_numbers` tool. For 
                     # Add current user message
                     messages.append({"role": "user", "content": data})
 
-                    print(f"Messages sent to Groq: {messages}")
                     
-                    print(agent_tools_spec)
-                    print(agent.tools)
+                    
+                    
 
                     # First call to Groq - potentially with tools
                     tool_call_response = None
@@ -128,18 +127,14 @@ When performing addition operations, consider using the `add_numbers` tool. For 
                         tool_call_response.raise_for_status()
                         tool_call_data = tool_call_response.json()
                         
-                        print()
                         
-                        
-                        print(tool_call_data)
-                        print(tool_call_data["choices"][0]["message"].get("tool_calls"))
                         
                         if tool_call_data["choices"][0]["message"].get("tool_calls"):
                             tool_calls = tool_call_data["choices"][0]["message"]["tool_calls"]
                             messages.append(tool_call_data["choices"][0]["message"])
                             
                             for tool_call in tool_calls:
-                                print("calling tool here ")
+                                
                                 function_name = tool_call["function"]["name"]
                                 function_args = tool_call["function"]["arguments"]
                                 
@@ -152,14 +147,14 @@ When performing addition operations, consider using the `add_numbers` tool. For 
                                 
                                 if tool_code:
                                     try:
-                                        print(f"Executing tool: {function_name} with args: {function_args}")
+                                        
                                         # Execute the tool code dynamically
                                         # WARNING: Executing arbitrary code is dangerous. 
                                         # In a production environment, use a secure sandbox.
                                         exec_globals = {"args": json.loads(function_args), "result": None}
                                         exec(tool_code, exec_globals)
                                         tool_output = exec_globals["result"]
-                                        print(f"Tool {function_name} executed. Output: {tool_output}")
+                                        
                                         messages.append({
                                             "tool_call_id": tool_call["id"],
                                             "role": "tool",
@@ -229,13 +224,10 @@ When performing addition operations, consider using the `add_numbers` tool. For 
 
             except httpx.RequestError as e:
                 response_message = f"Error communicating with Grok API: {e}"
-                print(response_message)
             except httpx.HTTPStatusError as e:
                 response_message = f"Grok API returned an error: {e.response.status_code} - {e.response.text}"
-                print(response_message)
             except Exception as e:
                 response_message = f"An unexpected error occurred during Grok processing: {e}"
-                print(response_message)
 
             if response_message:
                 chat_service.create_chat_message(db, schemas_chat_message.ChatMessageCreate(message=response_message, sender="agent"), agent_id, session_id, company_id, sender="agent")
@@ -246,6 +238,6 @@ When performing addition operations, consider using the `add_numbers` tool. For 
                 memory_service.create_memory(db, schemas_memory.MemoryCreate(key="last_user_request", value=data), agent_id, session_id)
 
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        pass
     except Exception as e:
-        print(f"WebSocket Error: {e}")
+        pass
