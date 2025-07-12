@@ -3,9 +3,9 @@ from pydantic import BaseModel
 from typing import List, Optional
 from app.schemas.chat_message import ChatMessage
 from app.schemas.webhook import Webhook
-
 from app.schemas.credential import Credential
 from app.schemas.knowledge_base import KnowledgeBase
+from app.schemas.tool import Tool
 
 class AgentBase(BaseModel):
     name: str
@@ -31,6 +31,7 @@ class AgentUpdate(BaseModel):
     credential_id: Optional[int] = None
     is_active: Optional[bool] = None
     knowledge_base_id: Optional[int] = None
+    tool_ids: Optional[List[int]] = None
 
 class Agent(AgentBase):
     id: int
@@ -38,6 +39,7 @@ class Agent(AgentBase):
     credential: Optional[Credential] = None
     knowledge_base: Optional[KnowledgeBase] = None
     webhooks: List[Webhook] = []
+    tools: List[Tool] = []
 
     class Config:
         orm_mode = True

@@ -1,10 +1,12 @@
+from typing import List
 from sqlalchemy.orm import Session
 from app.models import knowledge_base as models_knowledge_base
 from app.schemas import knowledge_base as schemas_knowledge_base
 import requests
 from bs4 import BeautifulSoup
 import httpx
-from app.services import credential_service
+from app.services import credential_service, vectorization_service
+import numpy as np
 
 async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, company_id: int, prompt: str) -> str:
     kb = get_knowledge_base(db, knowledge_base_id, company_id)
@@ -87,8 +89,19 @@ def get_knowledge_bases(db: Session, company_id: int, skip: int = 0, limit: int 
         models_knowledge_base.KnowledgeBase.company_id == company_id
     ).offset(skip).limit(limit).all()
 
+def _chunk_content(content: str, chunk_size: int = 500, chunk_overlap: int = 50) -> List[str]:
+    # A simple chunking strategy for now. Can be replaced with more sophisticated methods.
+    words = content.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - chunk_overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
 def create_knowledge_base(db: Session, knowledge_base: schemas_knowledge_base.KnowledgeBaseCreate, company_id: int):
-    db_knowledge_base = models_knowledge_base.KnowledgeBase(**knowledge_base.dict(), company_id=company_id)
+    chunks = _chunk_content(knowledge_base.content)
+    chunk_embeddings = [vectorization_service.get_embedding(chunk).tolist() for chunk in chunks]
+    db_knowledge_base = models_knowledge_base.KnowledgeBase(**knowledge_base.dict(), company_id=company_id, embeddings=chunk_embeddings)
     db.add(db_knowledge_base)
     db.commit()
     db.refresh(db_knowledge_base)
@@ -97,7 +110,11 @@ def create_knowledge_base(db: Session, knowledge_base: schemas_knowledge_base.Kn
 def update_knowledge_base(db: Session, knowledge_base_id: int, knowledge_base: schemas_knowledge_base.KnowledgeBaseUpdate, company_id: int):
     db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
     if db_knowledge_base:
-        for key, value in knowledge_base.dict(exclude_unset=True).items():
+        update_data = knowledge_base.dict(exclude_unset=True)
+        if 'content' in update_data:
+            chunks = _chunk_content(update_data['content'])
+            db_knowledge_base.embeddings = [vectorization_service.get_embedding(chunk).tolist() for chunk in chunks]
+        for key, value in update_data.items():
             setattr(db_knowledge_base, key, value)
         db.commit()
         db.refresh(db_knowledge_base)
@@ -109,3 +126,28 @@ def delete_knowledge_base(db: Session, knowledge_base_id: int, company_id: int):
         db.delete(db_knowledge_base)
         db.commit()
     return db_knowledge_base
+
+def find_relevant_chunks(db: Session, knowledge_base_id: int, company_id: int, query: str, top_k: int = 3):
+    kb = get_knowledge_base(db, knowledge_base_id, company_id)
+    if not kb or not kb.embeddings:
+        return []
+
+    query_embedding = vectorization_service.get_embedding(query)
+    content_chunks = _chunk_content(kb.content)
+    
+    # Ensure embeddings are treated as a list of 1D arrays
+    if not kb.embeddings or not isinstance(kb.embeddings[0], list):
+        # If embeddings are missing or stored as a single list of floats, re-embed chunks
+        chunk_embeddings = [vectorization_service.get_embedding(chunk) for chunk in content_chunks]
+        # Optionally, update the KB with these new embeddings for future use
+        # kb.embeddings = [e.tolist() for e in chunk_embeddings]
+        # db.add(kb); db.commit(); db.refresh(kb)
+    else:
+        chunk_embeddings = [np.array(e) for e in kb.embeddings]
+
+    similarities = [vectorization_service.cosine_similarity(query_embedding, chunk_embedding) for chunk_embedding in chunk_embeddings]
+    
+    # Get the indices of the top-k most similar chunks
+    top_k_indices = np.argsort(similarities)[-top_k:][::-1]
+    
+    return [content_chunks[i] for i in top_k_indices]

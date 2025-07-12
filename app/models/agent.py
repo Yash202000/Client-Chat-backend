@@ -2,6 +2,7 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+from app.models.tool import agent_tools
 
 class Agent(Base):
     __tablename__ = "agents"
@@ -22,4 +23,5 @@ class Agent(Base):
     messages = relationship("ChatMessage", back_populates="agent")
     credential = relationship("Credential")
     knowledge_base = relationship("KnowledgeBase")
+    tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")

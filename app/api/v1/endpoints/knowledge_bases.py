@@ -108,6 +108,14 @@ async def generate_qna_for_knowledge_base(
 ):
     try:
         generated_content = await knowledge_base_service.generate_qna_from_knowledge_base(db, knowledge_base_id, current_company_id, qna_generate.prompt)
+        
+        # Update the knowledge base with the generated Q&A
+        updated_kb_schema = schemas_knowledge_base.KnowledgeBaseUpdate(content=generated_content)
+        updated_kb = knowledge_base_service.update_knowledge_base(db, knowledge_base_id, updated_kb_schema, current_company_id)
+        
+        if not updated_kb:
+            raise HTTPException(status_code=404, detail="Knowledge Base not found after Q&A generation")
+
         return schemas_knowledge_base.KnowledgeBaseQnA(generated_content=generated_content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

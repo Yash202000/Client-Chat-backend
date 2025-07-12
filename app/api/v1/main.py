@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import agents, webhooks, knowledge_bases, websocket_conversations
+from app.api.v1.endpoints import agents, webhooks, knowledge_bases, websocket_conversations, tools
 from app.api.v1.endpoints import conversations
 from app.api.v1.endpoints import credentials, users, user_settings, company_settings, companies, notification_settings, teams, team_memberships
 
@@ -20,3 +20,4 @@ api_router.include_router(teams.router, prefix="/teams", tags=["teams"])
 api_router.include_router(team_memberships.router, prefix="/team-memberships", tags=["team-memberships"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
+api_router.include_router(tools.router, prefix="/tools", tags=["tools"])

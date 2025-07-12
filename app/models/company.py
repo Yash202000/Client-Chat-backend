@@ -14,3 +14,4 @@ class Company(Base):
     credentials = relationship("Credential", back_populates="company")
     teams = relationship("Team", back_populates="company")
     knowledge_bases = relationship("KnowledgeBase", back_populates="company")
+    tools = relationship("Tool", back_populates="company")

@@ -5,3 +5,5 @@ sqlalchemy
 httpx
 requests
 beautifulsoup4
+sentence-transformers
+numpy
