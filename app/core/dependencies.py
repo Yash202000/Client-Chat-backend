@@ -9,7 +9,6 @@ def get_db():
         db.close()
 
 async def get_current_company(x_company_id: int | None = Header(None, alias="X-Company-ID")):
-    print(f"get_current_company called with X-Company-ID: {x_company_id}")
     # In a real application, you would validate the company ID against a database
     # and ensure the user making the request is authorized for this company.
     # For now, we'll just return the company ID from the header.

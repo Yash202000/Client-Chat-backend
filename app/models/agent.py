@@ -28,3 +28,4 @@ class Agent(Base):
     tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")
     workflows = relationship("Workflow", back_populates="agent")
+    widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")

@@ -9,3 +9,4 @@ from app.schemas.notification_settings import NotificationSettings, Notification
 from app.schemas.team import Team, TeamCreate, TeamUpdate
 from app.schemas.team_membership import TeamMembership, TeamMembershipCreate, TeamMembershipUpdate
 from app.schemas.workflow import Workflow, WorkflowCreate, WorkflowUpdate
+from app.schemas.widget_settings import WidgetSettings, WidgetSettingsCreate, WidgetSettingsUpdate

@@ -1,6 +1,6 @@
 import traceback
 from sqlalchemy.orm import Session
-from app.services import tool_service
+from app.services import tool_service, workflow_service, workflow_execution_service
 
 def execute_tool(db: Session, tool_id: int, company_id: int, parameters: dict):
     """
@@ -21,12 +21,14 @@ def execute_tool(db: Session, tool_id: int, company_id: int, parameters: dict):
 
     # Prepare the execution environment
     local_scope = {}
-    # The tool's code is expected to define a function called 'run'
-    # that takes 'params' and 'config' as arguments.
+    execution_globals = {
+        "workflow_service": workflow_service,
+        "workflow_execution_service": workflow_execution_service
+    }
     
     try:
         # Execute the tool's code, which defines the 'run' function
-        exec(db_tool.code, globals(), local_scope)
+        exec(db_tool.code, execution_globals, local_scope)
         
         # Get the 'run' function from the local scope
         tool_function = local_scope.get("run")
@@ -34,8 +36,14 @@ def execute_tool(db: Session, tool_id: int, company_id: int, parameters: dict):
         if not callable(tool_function):
             return {"error": "Tool code does not define a callable 'run' function"}
 
+        # Prepare the config for the tool
+        config = {
+            "db": db,
+            "company_id": company_id
+        }
+
         # Call the tool's 'run' function with the provided parameters and stored configuration
-        result = tool_function(params=parameters, config=db_tool.configuration)
+        result = tool_function(params=parameters, config=config)
         return {"result": result}
 
     except Exception as e:

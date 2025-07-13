@@ -9,3 +9,4 @@ from app.models.notification_settings import NotificationSettings
 from app.models.team import Team
 from app.models.team_membership import TeamMembership
 from app.models.workflow import Workflow
+from app.models.widget_settings import WidgetSettings

@@ -13,8 +13,8 @@ def create_workflow(workflow: schemas_workflow.WorkflowCreate, db: Session = Dep
     return workflow_service.create_workflow(db=db, workflow=workflow)
 
 @router.get("/", response_model=List[schemas_workflow.Workflow])
-def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    workflows = workflow_service.get_workflows(db=db, skip=skip, limit=limit)
+def read_workflows(company_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    workflows = workflow_service.get_workflows(db=db, company_id=company_id, skip=skip, limit=limit)
     return workflows
 
 @router.get("/{workflow_id}", response_model=schemas_workflow.Workflow)

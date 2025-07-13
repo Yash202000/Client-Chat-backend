@@ -203,6 +203,8 @@ Carefully consider the user's request and the descriptions of the available tool
                                 else:
                                     # --- General tool execution ---
                                     tool_code = None
+                                    local_scope = {}
+                                    
                                     for t in agent.tools:
                                         if t.name == function_name:
                                             tool_code = t.code
@@ -211,8 +213,15 @@ Carefully consider the user's request and the descriptions of the available tool
                                     if tool_code:
                                         try:
                                             exec_globals = {"args": json.loads(function_args), "result": None}
-                                            exec(tool_code, exec_globals)
-                                            tool_output = exec_globals["result"]
+                                            exec(tool_code, exec_globals, local_scope)
+                                            
+                                            # Get the 'run' function from the local scope
+                                            tool_function = local_scope.get("run")
+                                                                                
+                                            if not callable(tool_function):
+                                                return {"error": "Tool code does not define a callable 'run' function"}
+                            
+                                            tool_output = tool_function(args=json.loads(function_args))                
                                         except Exception as e:
                                             tool_output = f"Error executing tool {function_name}: {e}"
                                     else:
