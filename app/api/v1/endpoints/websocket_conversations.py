@@ -78,19 +78,25 @@ async def websocket_endpoint(websocket: WebSocket, company_id: int, agent_id: in
 
     # Add tool instructions to the system prompt if tools are available
     if agent_tools_spec:
-        system_prompt += "\n\nYou have access to the following tools:\n"
+        system_prompt += """
+You have access to the following tools:
+"""
         for tool_spec in agent_tools_spec:
             system_prompt += f"- {tool_spec['function']['name']}: {tool_spec['function']['description']}\n"
+            if tool_spec['function']['parameters'] and tool_spec['function']['parameters'].get('properties'):
+                system_prompt += "  Parameters:\n"
+                for param_name, param_details in tool_spec['function']['parameters']['properties'].items():
+                    param_type = param_details.get('type', 'any')
+                    param_description = param_details.get('description', '')
+                    system_prompt += f"    - {param_name} ({param_type}): {param_description}\n"
+                if tool_spec['function']['parameters'].get('required'):
+                    required_params = ', '.join(tool_spec['function']['parameters']['required'])
+                    system_prompt += f"  Required Parameters: {required_params}\n"
+        
         system_prompt += """
 When appropriate, you can use these tools by calling them with the following format: `tool_name(arg1=value1, arg2=value2)`
 
-For general questions or conversation, respond directly. However, if the user asks you to perform a specific task that matches a known workflow, you MUST use the corresponding tool.
-
-**Workflow Tool Usage:**
-- If the user asks you to add numbers, you MUST use the `trigger_workflow` tool.
-- Extract the two numbers from the user's request.
-- Call the tool like this: `trigger_workflow(workflow_name="Add Numbers Workflow", inputs={"num1": <extracted_number_1>, "num2": <extracted_number_2>})`.
-- If you cannot clearly identify two numbers, ask the user for clarification (e.g., "Please provide two numbers for me to add.").
+Carefully consider the user's request and the descriptions of the available tools. If a tool's description matches the user's intent, use that tool. Extract all necessary parameters from the user's query. If you cannot extract all required parameters, ask the user for clarification.
 """
 
     # Send welcome message

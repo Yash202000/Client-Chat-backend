@@ -2,8 +2,9 @@ fastapi
 uvicorn
 websockets
 sqlalchemy
-httpx
+python-dotenv
 requests
 beautifulsoup4
 sentence-transformers
 numpy
+cryptography

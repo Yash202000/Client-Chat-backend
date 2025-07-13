@@ -133,30 +133,32 @@ if [ "$COMMUNICATION_TOOL_ID" == "null" ] || [ -z "$COMMUNICATION_TOOL_ID" ]; th
 fi
 echo "   'communication_tool' Tool created with ID: $COMMUNICATION_TOOL_ID"
 
+TRIGGER_WORKFLOW_TOOL_CODE=$(cat trigger_workflow_tool_code.py | jq -Rs .)
+
 # --- 5. Create 'trigger_workflow' Tool ---
 echo "5. Creating 'trigger_workflow' Tool..."
 TRIGGER_WORKFLOW_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
      -H "Content-Type: application/json" \
      -H "X-Company-ID: ${COMPANY_ID}" \
-     -d '{
-           "name": "trigger_workflow",
-           "description": "Triggers a specific workflow with provided inputs.",
-           "parameters": {
-             "type": "object",
-             "properties": {
-               "workflow_name": {
-                 "type": "string",
-                 "description": "The name of the workflow to trigger."
+     -d "{
+           \"name\": \"trigger_workflow\",
+           \"description\": \"Initiates a predefined workflow by its name and passes a dictionary of inputs to it. Use this tool when a user's request clearly maps to a known automated process.\",
+           \"parameters\": {
+             \"type\": \"object\",
+             \"properties\": {
+               \"workflow_name\": {
+                 \"type\": \"string\",
+                 \"description\": \"The name of the workflow to trigger.\"
                },
-               "inputs": {
-                 "type": "object",
-                 "description": "A JSON object containing key-value pairs of inputs for the workflow."
+               \"inputs\": {
+                 \"type\": \"object\",
+                 \"description\": \"A JSON object containing key-value pairs of inputs for the workflow.\"
                }
              },
-             "required": ["workflow_name", "inputs"]
+             \"required\": [\"workflow_name\", \"inputs\"]
            },
-           "code": "workflow_name = args.get(\"workflow_name\")\ninputs = args.get(\"inputs\", {}\nresult = {\"workflow_name\": workflow_name, \"inputs\": inputs}"
-         }')
+           \"code\": ${TRIGGER_WORKFLOW_TOOL_CODE}
+         }")
 
 TRIGGER_WORKFLOW_TOOL_ID=$(echo "$TRIGGER_WORKFLOW_TOOL_RESPONSE" | jq -r '.id')
 
@@ -171,37 +173,4 @@ echo "6. Creating 'Add Numbers Workflow'..."
 WORKFLOW_RESPONSE=$(curl -s -X POST "${BASE_URL}/workflows/" \
      -H "Content-Type: application/json" \
      -H "X-Company-ID: ${COMPANY_ID}" \
-     -d "{
-           "name": "Add Numbers Workflow",
-           "description": "A workflow to add two numbers provided in the context.",
-           "agent_id": ${AGENT_ID},
-           "steps": {
-             "step1": {
-               "tool": "add_numbers",
-               "params": {
-                 "a": "{{context.num1}}",
-                 "b": "{{context.num2}}"
-               },
-               "next_step_on_success": "final_response"
-             },
-             "final_response": {
-               "tool": "communication_tool",
-               "params": {
-                 "message": "The sum is: {{step1.output}}",
-                 "recipient": "user"
-               }
-             }
-           }
-         }")
-
-WORKFLOW_ID=$(echo "$WORKFLOW_RESPONSE" | jq -r '.id')
-
-if [ "$WORKFLOW_ID" == "null" ] || [ -z "$WORKFLOW_ID" ]; then
-  echo "Failed to create 'Add Numbers Workflow'. Response: $WORKFLOW_RESPONSE"
-  exit 1
-fi
-echo "   'Add Numbers Workflow' created with ID: $WORKFLOW_ID"
-
-echo "--- Setup Complete ---"
-echo "You can now interact with Agent ID ${AGENT_ID} to test the workflow."
-echo "Remember to restart your backend server if you made any code changes."
+     -d "{\"name\": \"Add Numbers Workflow\",\"description\": \"A workflow to add two numbers provided in the context.\",\"agent_id\": ${AGENT_ID},\"steps\": {\"step1\": {\"tool\": \"add_numbers\",\"params\": {\"a\": \"{{context.num1}}\",\"b\": \"{{context.num2}}\"},\"next_step_on_success\": \"final_response\"},\"final_response\": {\"tool\": \"communication_tool\",\"params\": {\"message\": \"The sum is: {{step1.output}}\",\"recipient\": \"user\"}}}}")

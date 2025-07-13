@@ -1,26 +1,78 @@
 from sqlalchemy.orm import Session
 from app.models import tool as models_tool
 from app.schemas import tool as schemas_tool
+from .pre_built_connectors import PRE_BUILT_CONNECTORS
+from .tool_code import TOOL_CODE
+from . import vault_service
+
+def get_pre_built_connectors():
+    return PRE_BUILT_CONNECTORS
+
+def get_pre_built_connector_by_name(name: str):
+    return PRE_BUILT_CONNECTORS.get(name)
 
 def get_tool(db: Session, tool_id: int, company_id: int):
-    return db.query(models_tool.Tool).filter(
+    db_tool = db.query(models_tool.Tool).filter(
         models_tool.Tool.id == tool_id,
         models_tool.Tool.company_id == company_id
     ).first()
+    if db_tool and db_tool.configuration:
+        db_tool.configuration = vault_service.decrypt_dict(db_tool.configuration)
+    return db_tool
 
 def get_tool_by_name(db: Session, name: str, company_id: int):
-    return db.query(models_tool.Tool).filter(
+    db_tool = db.query(models_tool.Tool).filter(
         models_tool.Tool.name == name,
         models_tool.Tool.company_id == company_id
     ).first()
+    if db_tool and db_tool.configuration:
+        db_tool.configuration = vault_service.decrypt_dict(db_tool.configuration)
+    return db_tool
 
 def get_tools(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_tool.Tool).filter(
+    custom_tools = db.query(models_tool.Tool).filter(
         models_tool.Tool.company_id == company_id
     ).offset(skip).limit(limit).all()
+    
+    for tool in custom_tools:
+        if tool.configuration:
+            tool.configuration = vault_service.decrypt_dict(tool.configuration)
+
+    pre_built_tools = []
+    for i, (name, connector) in enumerate(PRE_BUILT_CONNECTORS.items()):
+        pre_built_tools.append(
+            models_tool.Tool(
+                id=-(i + 1),
+                name=connector["name"],
+                description=connector["description"],
+                parameters=connector["parameters"],
+                code="",
+                company_id=company_id
+            )
+        )
+    
+    return custom_tools + pre_built_tools
 
 def create_tool(db: Session, tool: schemas_tool.ToolCreate, company_id: int):
-    db_tool = models_tool.Tool(**tool.dict(), company_id=company_id)
+    if tool.pre_built_connector_name:
+        pre_built_connector = get_pre_built_connector_by_name(tool.pre_built_connector_name)
+        if pre_built_connector:
+            tool_data = {
+                "name": pre_built_connector["name"],
+                "description": pre_built_connector["description"],
+                "parameters": pre_built_connector["parameters"],
+                "code": TOOL_CODE.get(tool.pre_built_connector_name, ""),
+            }
+            db_tool = models_tool.Tool(**tool_data, company_id=company_id)
+        else:
+            return None
+    else:
+        tool_data = tool.dict()
+        del tool_data["pre_built_connector_name"]
+        if tool_data.get("configuration"):
+            tool_data["configuration"] = vault_service.encrypt_dict(tool_data["configuration"])
+        db_tool = models_tool.Tool(**tool_data, company_id=company_id)
+    
     db.add(db_tool)
     db.commit()
     db.refresh(db_tool)
@@ -29,8 +81,13 @@ def create_tool(db: Session, tool: schemas_tool.ToolCreate, company_id: int):
 def update_tool(db: Session, tool_id: int, tool: schemas_tool.ToolUpdate, company_id: int):
     db_tool = get_tool(db, tool_id, company_id)
     if db_tool:
-        for key, value in tool.dict(exclude_unset=True).items():
+        update_data = tool.dict(exclude_unset=True)
+        if "configuration" in update_data and update_data["configuration"]:
+            update_data["configuration"] = vault_service.encrypt_dict(update_data["configuration"])
+        
+        for key, value in update_data.items():
             setattr(db_tool, key, value)
+        
         db.commit()
         db.refresh(db_tool)
     return db_tool

@@ -1,4 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Header
+from sqlalchemy.orm import Session
+from app.core.dependencies import get_db
+from app.services import tool_service, tool_execution_service
+from app.schemas.tool import Tool, ToolCreate, ToolUpdate
+from typing import List, Dict, Any
 
 from app.api.v1.endpoints import agents, webhooks, knowledge_bases, websocket_conversations, tools, workflow
 from app.api.v1.endpoints import conversations
@@ -6,6 +11,21 @@ from app.api.v1.endpoints import credentials, users, user_settings, company_sett
 
 api_router = APIRouter()
 websocket_router = APIRouter() # New router for WebSocket endpoints
+
+@api_router.get("/pre-built-connectors")
+def get_pre_built_connectors():
+    return tool_service.get_pre_built_connectors()
+
+@api_router.post("/tools/{tool_id}/execute")
+def execute_tool(
+    tool_id: int,
+    parameters: Dict[str, Any],
+    db: Session = Depends(get_db),
+    x_company_id: int = Header(...)
+):
+    return tool_execution_service.execute_tool(
+        db=db, tool_id=tool_id, company_id=x_company_id, parameters=parameters
+    )
 
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])

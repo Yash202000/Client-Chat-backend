@@ -18,6 +18,7 @@ class Tool(Base):
     parameters = Column(JSON) # Stores JSON schema for parameters
     code = Column(Text) # Stores the Python code for the tool
     company_id = Column(Integer, ForeignKey("companies.id"))
+    configuration = Column(JSON, nullable=True) # Stores tool configuration
 
     company = relationship("Company", back_populates="tools")
     agents = relationship("Agent", secondary=agent_tools, back_populates="tools")
