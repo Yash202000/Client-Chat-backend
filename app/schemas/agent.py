@@ -9,16 +9,18 @@ from app.schemas.tool import Tool
 
 class AgentBase(BaseModel):
     name: str
-    welcome_message: Optional[str] = None
-    prompt: Optional[str] = None
+    welcome_message: str
+    prompt: str
+    llm_provider: Optional[str] = "groq"
+    model_name: Optional[str] = "llama3-8b-8192"
     personality: Optional[str] = "helpful"
     language: Optional[str] = "en"
     timezone: Optional[str] = "UTC"
     response_style: Optional[str] = None
     instructions: Optional[str] = None
     credential_id: Optional[int] = None
-    is_active: Optional[bool] = True
     knowledge_base_id: Optional[int] = None
+    tool_ids: Optional[List[int]] = []
 
 class AgentCreate(AgentBase):
     pass

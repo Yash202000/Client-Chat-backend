@@ -11,6 +11,8 @@ class Agent(Base):
     name = Column(String, index=True)
     welcome_message = Column(String)
     prompt = Column(String) # System prompt for the agent
+    llm_provider = Column(String, default="groq") # e.g., 'groq', 'gemini'
+    model_name = Column(String, default="llama3-8b-8192") # e.g., 'llama3-8b-8192', 'gemini-1.5-flash'
     personality = Column(String, default="helpful")
     language = Column(String, default="en")
     timezone = Column(String, default="UTC")

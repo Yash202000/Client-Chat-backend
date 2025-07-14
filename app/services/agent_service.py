@@ -4,7 +4,11 @@ from app.models import agent as models_agent, tool as models_tool
 from app.schemas import agent as schemas_agent
 
 def get_agent(db: Session, agent_id: int, company_id: int):
-    return db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools), joinedload(models_agent.Agent.workflows)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
+    return db.query(models_agent.Agent).options(
+        joinedload(models_agent.Agent.tools), 
+        joinedload(models_agent.Agent.workflows),
+        joinedload(models_agent.Agent.credential)  # Eagerly load the credential
+    ).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
 
 def get_agents(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_agent.Agent).filter(models_agent.Agent.company_id == company_id).offset(skip).limit(limit).all()
@@ -14,6 +18,8 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         name=agent.name,
         welcome_message=agent.welcome_message,
         prompt=agent.prompt,
+        llm_provider=agent.llm_provider,
+        model_name=agent.model_name,
         personality=agent.personality,
         language=agent.language,
         timezone=agent.timezone,

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.core.database import Base, engine
+from app.models import role, permission, contact # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
 from app.core.dependencies import get_db
@@ -61,7 +62,20 @@ def on_startup():
         default_agent_list = agent_service.get_agents(db, company.id, limit=1)
         if not default_agent_list:
             print("Creating default agent...")
-            agent = agent_service.create_agent(db, schemas_agent.AgentCreate(name="Default Agent", welcome_message="Hello! How can I help you?", prompt="You are a helpful assistant. You have access to a set of tools. Use them when necessary to answer the user's questions. When asked a math question, use the 'calculate_sum' tool."), company_id=company.id)
+            prompt = (
+                "You are a helpful assistant. You have access to a set of tools. "
+                "Use them when necessary to answer the user's questions. "
+                "When asked a math question, use the 'calculate_sum' tool. "
+                "If the user provides their name, email, or phone number, you MUST use the 'update_contact_details' tool to save this information."
+            )
+            agent_create_data = schemas_agent.AgentCreate(
+                name="Default Agent",
+                welcome_message="Hello! How can I help you?",
+                prompt=prompt,
+                llm_provider="groq",
+                model_name="llama3-8b-8192"
+            )
+            agent = agent_service.create_agent(db, agent_create_data, company_id=company.id)
         else:
             agent = default_agent_list[0]
         

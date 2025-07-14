@@ -1,5 +1,35 @@
 
 PRE_BUILT_CONNECTORS = {
+    "update_contact_details": {
+        "name": "update_contact_details",
+        "description": "Update a contact's details, such as name, email, or phone number. Use this tool whenever a user provides their contact information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The user's full name."},
+                "email": {"type": "string", "description": "The user's email address."},
+                "phone_number": {"type": "string", "description": "The user's phone number."}
+            },
+            "required": []
+        }
+    },
+    "calculate_sum": {
+        "name": "calculate_sum",
+        "description": "Calculates the sum of a list of numbers.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "numbers": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "A list of numbers to add together."
+                }
+            },
+            "required": ["numbers"]
+        }
+    },
     "crm": {
         "name": "CRM Connector",
         "description": "Connects to a CRM to manage customer data.",

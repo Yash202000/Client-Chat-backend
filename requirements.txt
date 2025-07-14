@@ -1,8 +1,12 @@
 fastapi
 uvicorn
-websockets
 sqlalchemy
+pydantic
 python-dotenv
+websockets
+google-generativeai
+groq
+
 requests
 beautifulsoup4
 sentence-transformers
