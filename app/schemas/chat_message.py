@@ -14,8 +14,11 @@ class ChatMessage(ChatMessageBase):
     sender: str
     session_id: str
     timestamp: datetime
-    status: str
+    agent_id: int
+    company_id: int
+    contact_id: int
+    status: Optional[str] = None
     assignee_id: Optional[int] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True

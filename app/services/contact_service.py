@@ -26,10 +26,12 @@ def get_or_create_contact_by_session(db: Session, session_id: str, company_id: i
             models_contact.Contact.company_id == company_id
         ).first()
         if existing_contact:
+            link_session_to_contact(db, session_id, existing_contact.id)
             return existing_contact
 
     # Create a new contact if none exists
     new_contact = create_contact(db, contact_info if contact_info else schemas_contact.ContactCreate(), company_id)
+    link_session_to_contact(db, session_id, new_contact.id)
     return new_contact
 
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int):

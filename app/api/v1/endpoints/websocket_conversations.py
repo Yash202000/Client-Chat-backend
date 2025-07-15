@@ -1,29 +1,41 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.dependencies import get_db
 from app.services import chat_service, agent_execution_service
 from app.schemas import chat_message as schemas_chat_message
+import json
+from typing import List, Dict, Any
 
 router = APIRouter()
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[str, WebSocket] = {}
+        self.active_connections: Dict[str, List[Dict[str, Any]]] = {}
 
-    async def connect(self, websocket: WebSocket, session_id: str):
+    async def connect(self, websocket: WebSocket, session_id: str, user_type: str):
         await websocket.accept()
-        self.active_connections[session_id] = websocket
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = []
+        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type})
 
-    def disconnect(self, session_id: str):
+    def disconnect(self, websocket: WebSocket, session_id: str):
         if session_id in self.active_connections:
-            del self.active_connections[session_id]
+            connection_to_remove = next((c for c in self.active_connections[session_id] if c["websocket"] == websocket), None)
+            if connection_to_remove:
+                self.active_connections[session_id].remove(connection_to_remove)
+                if not self.active_connections[session_id]:
+                    del self.active_connections[session_id]
 
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
+    async def broadcast_to_session(self, session_id: str, message: str, sender_type: str):
+        if session_id in self.active_connections:
+            message_data = json.loads(message)
+            if message_data.get('message_type') == 'note':
+                connections_to_send = [c for c in self.active_connections[session_id] if c["user_type"] == "agent"]
+            else:
+                connections_to_send = self.active_connections[session_id]
+            
+            for connection in connections_to_send:
+                await connection["websocket"].send_text(message)
 
 manager = ConnectionManager()
 
@@ -33,29 +45,53 @@ async def websocket_endpoint(
     company_id: int,
     agent_id: int,
     session_id: str,
+    user_type: str = Query(...), # 'user' or 'agent'
     db: Session = Depends(get_db)
 ):
-    await manager.connect(websocket, session_id)
+    await manager.connect(websocket, session_id, user_type)
     try:
         while True:
             data = await websocket.receive_text()
+            if not data:
+                continue
+            try:
+                message_data = json.loads(data)
+            except json.JSONDecodeError:
+                print(f"Received invalid JSON from session #{session_id}: {data}")
+                continue
             
-            # 1. Save user's message to the database
-            user_message = schemas_chat_message.ChatMessageCreate(message=data, message_type="message")
-            chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
+            print(message_data)
+            
+            sender = message_data.get('sender')
+            
+            chat_message = schemas_chat_message.ChatMessageCreate(message=message_data['message'], message_type=message_data['message_type'])
+            db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
+            
+            print(db_message)
+            
+            # Use Pydantic's .json() method for correct serialization
+            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
+            
+            print("here line 75")
 
-            # 2. Get agent's response using the new execution service
-            agent_response_text = agent_execution_service.generate_agent_response(
-                db, agent_id, session_id, company_id, data
-            )
+            if sender == 'user':
+                agent_response_text = agent_execution_service.generate_agent_response(
+                    db, agent_id, session_id, company_id, message_data['message']
+                )
+                
+                print("here something ",agent_response_text)
 
-            # 3. Save agent's response to the database
-            agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-            chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                print(agent_message)
+                
+                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
 
-            # 4. Send agent's response back to the user
-            await manager.send_personal_message(agent_response_text, websocket)
+                print(db_agent_message)
+                # Use Pydantic's .json() method for correct serialization
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                
+                print("here is 88")
 
     except WebSocketDisconnect:
-        manager.disconnect(session_id)
-        print(f"Client #{session_id} disconnected")
+        manager.disconnect(websocket, session_id)
+        print(f"Client in session #{session_id} disconnected")

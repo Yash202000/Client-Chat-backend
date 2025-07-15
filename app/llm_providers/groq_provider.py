@@ -1,56 +1,41 @@
 from groq import Groq
-from app.core.config import settings
 import json
 
-def generate_response(api_key: str, model_name: str, system_prompt: str, chat_history: list, tools: list):
+def generate_response(api_key: str, model_name: str, system_prompt: str, chat_history: list, tools: list = None):
     """
-    Generates a response using the Groq API with a provided API key.
+    Generates a response from the Groq API, handling chat history and potential tool calls.
     """
-    if not api_key:
-        raise ValueError("GROQ_API_KEY is not configured for this agent.")
-
     client = Groq(api_key=api_key)
 
-    # Format messages for Groq API
     messages = [{"role": "system", "content": system_prompt}]
-    for msg in chat_history:
-        role = "user" if msg.sender == "user" else "assistant"
-        messages.append({"role": role, "content": msg.message})
+    # The chat_history is already formatted as a list of dicts with 'role' and 'content'
+    messages.extend(chat_history)
 
-    # Format tools for Groq API
-    groq_tools = []
-    if tools:
-        for tool in tools:
-            groq_tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool['name'],
-                    "description": tool['description'],
-                    "parameters": tool['parameters']
-                }
-            })
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=messages,
+            model=model_name,
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None,
+        )
+        response_message = chat_completion.choices[0].message
 
-    chat_completion = client.chat.completions.create(
-        messages=messages,
-        model=model_name,
-        tools=groq_tools if groq_tools else None,
-        tool_choice="auto"
-    )
+        if response_message.tool_calls:
+            tool_call = response_message.tool_calls[0]
+            return {
+                "type": "tool_call",
+                "tool_name": tool_call.function.name,
+                "parameters": json.loads(tool_call.function.arguments)
+            }
+        else:
+            return {
+                "type": "text",
+                "content": response_message.content
+            }
 
-    response_message = chat_completion.choices[0].message
-    
-    if response_message.tool_calls:
-        tool_call = response_message.tool_calls[0]
-        try:
-            # Use json.loads for safe and reliable parsing
-            arguments = json.loads(tool_call.function.arguments)
-        except json.JSONDecodeError:
-            arguments = {} # Handle cases where arguments are not valid JSON
-
+    except Exception as e:
+        print(f"Groq API Error: {e}")
         return {
-            "type": "tool_call",
-            "tool_name": tool_call.function.name,
-            "parameters": arguments
+            "type": "text",
+            "content": f"An error occurred with the LLM provider: {e}"
         }
-
-    return {"type": "text", "content": response_message.content}
