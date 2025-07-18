@@ -12,3 +12,4 @@ beautifulsoup4
 sentence-transformers
 numpy
 cryptography
+livekit-api

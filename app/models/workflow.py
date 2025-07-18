@@ -10,5 +10,6 @@ class Workflow(Base):
     description = Column(String, nullable=True)
     agent_id = Column(Integer, ForeignKey("agents.id"))
     steps = Column(JSON) # Stores the sequence of tool executions and logic
+    visual_steps = Column(Text, nullable=True) # Stores the React Flow JSON for visual representation
 
     agent = relationship("Agent", back_populates="workflows")

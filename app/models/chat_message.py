@@ -19,6 +19,8 @@ class ChatMessage(Base):
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     
     status = Column(String, default="bot") # bot, pending, assigned, resolved
+    feedback_rating = Column(Integer, nullable=True)
+    feedback_notes = Column(String, nullable=True)
 
     agent = relationship("Agent", back_populates="messages")
     company = relationship("Company")

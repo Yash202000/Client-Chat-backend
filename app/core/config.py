@@ -1,15 +1,22 @@
 import os
 
-class Settings:
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
     PROJECT_NAME: str = "AgentConnect"
     API_V1_STR: str = "/api/v1"
     DATABASE_URL: str
     GOOGLE_API_KEY: str = ""
     GROQ_API_KEY: str = ""
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+    LIVEKIT_URL: str = ""
+    FRONTEND_URL: str = "http://localhost:8080"
     
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg=")
+    SECRET_KEY: str = "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg="
 
     class Config:
         env_file = ".env"
+        env_file_encoding = 'utf-8'
 
 settings = Settings()

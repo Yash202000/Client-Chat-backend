@@ -16,7 +16,7 @@ def generate_response(api_key: str, model_name: str, system_prompt: str, chat_hi
             messages=messages,
             model=model_name,
             tools=tools if tools else None,
-            tool_choice="auto" if tools else None,
+            tool_choice="auto" if tools else "none",
         )
         response_message = chat_completion.choices[0].message
 

@@ -81,27 +81,27 @@ else
   exit 1
 fi
 
-# --- 3. Create 'calculate_sum' Tool ---
-echo "3. Creating 'calculate_sum' Tool..."
-# Read the tool code from its dedicated file
-CALCULATE_SUM_TOOL_CODE=$(cat calculate_sum_tool_code.py)
+# # --- 3. Create 'calculate_sum' Tool ---
+# echo "3. Creating 'calculate_sum' Tool..."
+# # Read the tool code from its dedicated file
+# CALCULATE_SUM_TOOL_CODE=$(cat calculate_sum_tool_code.py)
 
-# Use jq to safely build the JSON payload on a single line to avoid shell parsing issues
-JSON_PAYLOAD=$(jq -n --arg name "calculate_sum" --arg description "Calculates the sum of two numbers." --argjson params '{"type": "object", "properties": {"num1": {"type": "number", "description": "The first number"}, "num2": {"type": "number", "description": "The second number"}}, "required": ["num1", "num2"]}' --arg code "$CALCULATE_SUM_TOOL_CODE" '{name: $name, description: $description, parameters: $params, code: $code}')
+# # Use jq to safely build the JSON payload on a single line to avoid shell parsing issues
+# JSON_PAYLOAD=$(jq -n --arg name "calculate_sum" --arg description "Calculates the sum of two numbers." --argjson params '{"type": "object", "properties": {"num1": {"type": "number", "description": "The first number"}, "num2": {"type": "number", "description": "The second number"}}, "required": ["num1", "num2"]}' --arg code "$CALCULATE_SUM_TOOL_CODE" '{name: $name, description: $description, parameters: $params, code: $code}')
 
-CALCULATE_SUM_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
-     -H "Content-Type: application/json" \
-     -H "X-Company-ID: ${COMPANY_ID}" \
-     -d "$JSON_PAYLOAD")
+# CALCULATE_SUM_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
+#      -H "Content-Type: application/json" \
+#      -H "X-Company-ID: ${COMPANY_ID}" \
+#      -d "$JSON_PAYLOAD")
 
-CALCULATE_SUM_TOOL_ID=$(echo "$CALCULATE_SUM_TOOL_RESPONSE" | jq -r '.id')
+# CALCULATE_SUM_TOOL_ID=$(echo "$CALCULATE_SUM_TOOL_RESPONSE" | jq -r '.id')
 
 
-if [ "$CALCULATE_SUM_TOOL_ID" == "null" ] || [ -z "$CALCULATE_SUM_TOOL_ID" ]; then
-  echo "Failed to create 'calculate_sum' tool. Response: $CALCULATE_SUM_TOOL_RESPONSE"
-  exit 1
-fi
-echo "   'calculate_sum' Tool created with ID: $CALCULATE_SUM_TOOL_ID"
+# if [ "$CALCULATE_SUM_TOOL_ID" == "null" ] || [ -z "$CALCULATE_SUM_TOOL_ID" ]; then
+#   echo "Failed to create 'calculate_sum' tool. Response: $CALCULATE_SUM_TOOL_RESPONSE"
+#   exit 1
+# fi
+# echo "   'calculate_sum' Tool created with ID: $CALCULATE_SUM_TOOL_ID"
 
 
 # --- 4. Associate tool with agent ---
@@ -130,83 +130,45 @@ else
     exit 1
 fi
 
+# --- 5. Create 'communication_tool' ---
+echo "5. Creating 'communication_tool'..."
+COMMUNICATION_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
+     -H "Content-Type: application/json" \
+     -H "X-Company-ID: ${COMPANY_ID}" \
+     -d '{
+           "name": "communication_tool",
+           "description": "Communicates a message to a recipient.",
+           "parameters": {
+             "type": "object",
+             "properties": {
+               "message": {
+                 "type": "string",
+                 "description": "The message to communicate"
+               },
+               "recipient": {
+                 "type": "string",
+                 "description": "The recipient of the message (e.g., user, admin)",
+                 "default": "user"
+               }
+             },
+             "required": ["message"]
+           },
+           "code": "message = args.get(\"message\", \"\")\nresult = message"
+         }')
 
+COMMUNICATION_TOOL_ID=$(echo "$COMMUNICATION_TOOL_RESPONSE" | jq -r '.id')
 
+if [ "$COMMUNICATION_TOOL_ID" == "null" ] || [ -z "$COMMUNICATION_TOOL_ID" ]; then
+  echo "Failed to create 'communication_tool'. Response: $COMMUNICATION_TOOL_RESPONSE"
+  exit 1
+fi
+echo "   'communication_tool' Tool created with ID: $COMMUNICATION_TOOL_ID"
 
-# # --- 4. Create 'communication_tool' ---
-# echo "4. Creating 'communication_tool'..."
-# COMMUNICATION_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
-#      -H "Content-Type: application/json" \
-#      -H "X-Company-ID: ${COMPANY_ID}" \
-#      -d '{
-#            "name": "communication_tool",
-#            "description": "Communicates a message to a recipient.",
-#            "parameters": {
-#              "type": "object",
-#              "properties": {
-#                "message": {
-#                  "type": "string",
-#                  "description": "The message to communicate"
-#                },
-#                "recipient": {
-#                  "type": "string",
-#                  "description": "The recipient of the message (e.g., user, admin)",
-#                  "default": "user"
-#                }
-#              },
-#              "required": ["message"]
-#            },
-#            "code": "message = args.get(\"message\", \"\")\nexec_globals[\"result\"] = message"
-#          }')
-
-# COMMUNICATION_TOOL_ID=$(echo "$COMMUNICATION_TOOL_RESPONSE" | jq -r '.id')
-
-# if [ "$COMMUNICATION_TOOL_ID" == "null" ] || [ -z "$COMMUNICATION_TOOL_ID" ]; then
-#   echo "Failed to create 'communication_tool'. Response: $COMMUNICATION_TOOL_RESPONSE"
-#   exit 1
-# fi
-# echo "   'communication_tool' Tool created with ID: $COMMUNICATION_TOOL_ID"
-
-# TRIGGER_WORKFLOW_TOOL_CODE=$(cat trigger_workflow_tool_code.py | jq -Rs .)
-
-# # --- 5. Create 'trigger_workflow' Tool ---
-# echo "5. Creating 'trigger_workflow' Tool..."
-# TRIGGER_WORKFLOW_TOOL_RESPONSE=$(curl -s -X POST "${BASE_URL}/tools/" \
-#      -H "Content-Type: application/json" \
-#      -H "X-Company-ID: ${COMPANY_ID}" \
-#      -d "{
-#            \"name\": \"trigger_workflow\",
-#            \"description\": \"Initiates a predefined workflow by its name and passes a dictionary of inputs to it. Use this tool when a user's request clearly maps to a known automated process.\",
-#            \"parameters\": {
-#              \"type\": \"object\",
-#              \"properties\": {
-#                \"workflow_name\": {
-#                  \"type\": \"string\",
-#                  \"description\": \"The name of the workflow to trigger.\"
-#                },
-#                \"inputs\": {
-#                  \"type\": \"object\",
-#                  \"description\": \"A JSON object containing key-value pairs of inputs for the workflow.\"
-#                }
-#              },
-#              \"required\": [\"workflow_name\", \"inputs\"]
-#            },
-#            \"code\": ${TRIGGER_WORKFLOW_TOOL_CODE}
-#          }")
-
-# TRIGGER_WORKFLOW_TOOL_ID=$(echo "$TRIGGER_WORKFLOW_TOOL_RESPONSE" | jq -r '.id')
-
-# if [ "$TRIGGER_WORKFLOW_TOOL_ID" == "null" ] || [ -z "$TRIGGER_WORKFLOW_TOOL_ID" ]; then
-#   echo "Failed to create 'trigger_workflow' tool. Response: $TRIGGER_WORKFLOW_TOOL_RESPONSE"
-#   exit 1
-# fi
-# echo "   'trigger_workflow' Tool created with ID: $TRIGGER_WORKFLOW_TOOL_ID"
-
-# # --- 6. Create 'Add Numbers Workflow' ---
-# echo "6. Creating 'Add Numbers Workflow'..."
-# WORKFLOW_RESPONSE=$(curl -s -X POST "${BASE_URL}/workflows/" \
-#      -H "Content-Type: application/json" \
-#      -H "X-Company-ID: ${COMPANY_ID}" \
-#      -d "{\"name\": \"Add Numbers Workflow\",\"description\": \"A workflow to add two numbers provided in the context.\",\"agent_id\": ${AGENT_ID},\"steps\": {\"step1\": {\"tool\": \"add_numbers\",\"params\": {\"a\": \"{{context.num1}}\",\"b\": \"{{context.num2}}\"},\"next_step_on_success\": \"final_response\"},\"final_response\": {\"tool\": \"communication_tool\",\"params\": {\"message\": \"The sum is: {{step1.output}}\",\"recipient\": \"user\"}}}}")
+# --- 6. Create 'Add Numbers Workflow' ---
+echo "6. Creating 'Add Numbers Workflow'..."
+WORKFLOW_RESPONSE=$(curl -s -X POST "${BASE_URL}/workflows/" \
+     -H "Content-Type: application/json" \
+     -H "X-Company-ID: ${COMPANY_ID}" \
+     -d "{\"name\": \"Add Numbers Workflow\",\"description\": \"A workflow to add two numbers provided in the context.\",\"agent_id\": ${AGENT_ID},\"steps\": {\"steps\": {\"step1\": {\"tool\": \"calculate_sum\",\"params\": {\"num1\": \"{{context.num1}}\",\"num2\": \"{{context.num2}}\"},\"next_step_on_success\": \"final_response\"},\"final_response\": {\"tool\": \"communication_tool\",\"params\": {\"message\": \"The sum is: {{step1.output}}\"},\"next_step_on_success\": null}}}}")
 
 

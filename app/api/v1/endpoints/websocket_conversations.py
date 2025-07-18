@@ -60,37 +60,25 @@ async def websocket_endpoint(
                 print(f"Received invalid JSON from session #{session_id}: {data}")
                 continue
             
-            print(message_data)
-            
             sender = message_data.get('sender')
             
             chat_message = schemas_chat_message.ChatMessageCreate(message=message_data['message'], message_type=message_data['message_type'])
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             
-            print(db_message)
-            
             # Use Pydantic's .json() method for correct serialization
             await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
-            
-            print("here line 75")
 
             if sender == 'user':
                 agent_response_text = agent_execution_service.generate_agent_response(
                     db, agent_id, session_id, company_id, message_data['message']
                 )
                 
-                print("here something ",agent_response_text)
-
                 agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                print(agent_message)
                 
                 db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
 
-                print(db_agent_message)
                 # Use Pydantic's .json() method for correct serialization
                 await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
-                
-                print("here is 88")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

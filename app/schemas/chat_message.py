@@ -19,6 +19,8 @@ class ChatMessage(ChatMessageBase):
     contact_id: int
     status: Optional[str] = None
     assignee_id: Optional[int] = None
+    feedback_rating: Optional[int] = None
+    feedback_notes: Optional[str] = None
 
     class Config:
         from_attributes = True

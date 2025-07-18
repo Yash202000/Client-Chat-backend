@@ -47,30 +47,37 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
     """
     all_workflows = get_workflows(db, company_id=company_id)
     if not all_workflows:
+        print("DEBUG: No workflows found for company_id:", company_id)
         return None
 
     query_embedding = vectorization_service.get_embedding(query)
+    print("DEBUG: Query:", query)
+    print("DEBUG: Query Embedding (first 5 elements):", query_embedding[:5])
     
     best_match = None
     highest_similarity = -1
 
     for workflow in all_workflows:
-        # We can use a combination of name and description for the embedding
-        workflow_text = f"{workflow.name} {workflow.description}"
+        workflow_text = f"{workflow.name} {workflow.description or ''}"
         workflow_embedding = vectorization_service.get_embedding(workflow_text)
         
-        print(workflow_text, workflow_embedding)
+        print(f"DEBUG: Comparing with Workflow: '{workflow.name}'")
+        print("DEBUG: Workflow Text:", workflow_text)
+        print("DEBUG: Workflow Embedding (first 5 elements):", workflow_embedding[:5])
         
         similarity = vectorization_service.cosine_similarity(query_embedding, workflow_embedding)
-        
-        print(similarity)
+        print("DEBUG: Similarity:", similarity)
         
         if similarity > highest_similarity:
             highest_similarity = similarity
             best_match = workflow
             
     # You might want to set a threshold for similarity
-    if highest_similarity > 0.5: # Example threshold
+    # The current threshold is 0.5, which might be too high for some cases.
+    # Consider adjusting this based on your data and desired behavior.
+    if highest_similarity > 0.4: # Lowered threshold to 0.4
+        print(f"DEBUG: Best match found: '{best_match.name}' with similarity: {highest_similarity}")
         return best_match
     else:
+        print(f"DEBUG: No workflow found above similarity threshold (0.5). Highest: {highest_similarity}")
         return None

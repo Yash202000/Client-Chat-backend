@@ -18,6 +18,10 @@ class StatusUpdate(BaseModel):
 class AssigneeUpdate(BaseModel):
     user_id: int
 
+class FeedbackUpdate(BaseModel):
+    feedback_rating: int
+    feedback_notes: Optional[str] = None
+
 @router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session])
 def get_sessions(agent_id: int, db: Session = Depends(get_db), x_company_id: int = Header(...)):
     sessions_from_db = chat_service.get_sessions_with_details(db, agent_id=agent_id, company_id=x_company_id)
@@ -81,3 +85,21 @@ def update_assignee(
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or assignee update failed")
     return {"message": "Assignee updated successfully"}
+
+@router.put("/{session_id}/feedback")
+def update_feedback(
+    session_id: str,
+    feedback_update: FeedbackUpdate,
+    db: Session = Depends(get_db),
+    x_company_id: int = Header(...)
+):
+    success = chat_service.update_conversation_feedback(
+        db=db,
+        session_id=session_id,
+        feedback_rating=feedback_update.feedback_rating,
+        feedback_notes=feedback_update.feedback_notes,
+        company_id=x_company_id
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found or feedback update failed")
+    return {"message": "Feedback submitted successfully"}
