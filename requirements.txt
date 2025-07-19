@@ -3,6 +3,8 @@ uvicorn
 sqlalchemy
 pydantic
 python-dotenv
+requests
+
 websockets
 google-generativeai
 groq

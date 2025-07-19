@@ -2,30 +2,40 @@ from sqlalchemy.orm import Session
 from app.models.workflow import Workflow
 from app.models.tool import Tool
 from app.services import tool_service
+from app.services.llm_tool_service import LLMToolService # Import the new service
 import json
 import re
 
 class WorkflowExecutionService:
     def __init__(self, db: Session):
         self.db = db
+        self.llm_tool_service = LLMToolService(db) # Initialize LLMToolService
 
-    def _execute_tool(self, tool_name: str, params: dict):
+    def _execute_tool(self, tool_name: str, params: dict, company_id: int = None):
+        if tool_name == "llm_tool":
+            model = params.get("model")
+            prompt = params.get("prompt")
+            if not model or not prompt:
+                return {"error": "LLM tool requires 'model' and 'prompt' parameters."}
+            knowledge_base_id = params.get("knowledge_base_id")
+            return {"output": self.llm_tool_service.execute(model=model, prompt=prompt, knowledge_base_id=knowledge_base_id, company_id=company_id)}
+
         tool = self.db.query(Tool).filter(Tool.name == tool_name).first()
         if not tool:
             return {"error": f"Tool '{tool_name}' not found."}
 
-        local_scope = {}
-        execution_globals = {
-            "db": self.db, # Make the database session available
+        # A single scope for globals and locals ensures imports are available to the executed function.
+        execution_scope = {
+            "db": self.db,
             # Add other services or utilities here if needed by tools
         }
 
         try:
-            # Execute the tool's code, which defines the 'run' function
-            exec(tool.code, execution_globals, local_scope)
+            # Execute the tool's code, which defines the 'run' function within the execution_scope
+            exec(tool.code, execution_scope)
             
-            # Get the 'run' function from the local scope
-            tool_function = local_scope.get("run")
+            # Get the 'run' function from the execution scope
+            tool_function = execution_scope.get("run")
             
             if not callable(tool_function):
                 return {"error": "Tool code does not define a callable 'run' function"}
@@ -43,7 +53,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error executing tool {tool_name}: {e}"}
 
-    def execute_workflow(self, workflow: Workflow, initial_context: dict = None):
+    def execute_workflow(self, workflow: Workflow, initial_context: dict = None, company_id: int = None):
         print(f"DEBUG: INITIAL OCNTEXT : {initial_context}")
         print(f"DEBUG: Starting workflow execution for workflow: {workflow.name}")
         print(f"DEBUG: Workflow steps received: {workflow.steps}")
@@ -56,10 +66,22 @@ class WorkflowExecutionService:
         
         context = initial_context if initial_context is not None else {}
         results = {}
-        current_step_name = "step1" # Assuming the first step is always named 'step1'
+        
+        workflow_data = workflow.steps
+        workflow_steps = workflow_data.get("steps", {})
+        
+        # Determine the starting step
+        current_step_name = workflow_data.get("first_step")
+        if not current_step_name:
+            # Fallback for older workflows: grab the first key from the steps dictionary
+            if workflow_steps:
+                current_step_name = next(iter(workflow_steps))
+            else:
+                print("DEBUG: Workflow has no steps to execute.")
+                return {"error": "Workflow has no steps."}
+
         last_successful_step_name = None # Track the last successful step
 
-        workflow_steps = workflow.steps.get("steps", {}) # Access the nested 'steps' dictionary
         print(f"DEBUG: Extracted workflow_steps dictionary: {workflow_steps}")
 
         def replace_placeholder(match):
@@ -111,7 +133,7 @@ class WorkflowExecutionService:
                     resolved_params[key] = value
             print(f"DEBUG: Resolved params: {resolved_params}")
 
-            tool_result = self._execute_tool(tool_name, resolved_params)
+            tool_result = self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id)
             results[current_step_name] = tool_result
             print(f"DEBUG: Tool execution result for '{current_step_name}': {tool_result}")
 
