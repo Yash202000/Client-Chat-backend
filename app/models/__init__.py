@@ -3,6 +3,7 @@ from app.models.chat_message import ChatMessage
 from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.contact import Contact
+from app.models.conversation_session import ConversationSession
 from app.models.credential import Credential
 from app.models.knowledge_base import KnowledgeBase
 from app.models.memory import Memory

@@ -50,20 +50,6 @@ def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
             continue
     return history
 
-import re
-
-def extract_numbers_from_query(query: str) -> dict:
-    """
-    Extracts numbers from a query string and returns them in a dictionary.
-    Assumes simple cases like 'add 2 and 3' or 'sum of 10 and 20'.
-    """
-    numbers = re.findall(r'\b\d+\.?\d*\b', query)
-    extracted_context = {}
-    if len(numbers) >= 1:
-        extracted_context['num1'] = float(numbers[0])
-    if len(numbers) >= 2:
-        extracted_context['num2'] = float(numbers[1])
-    return extracted_context
 
 def generate_agent_response(db: Session, agent_id: int, session_id: str, company_id: int, user_message: str):
     """
@@ -73,19 +59,6 @@ def generate_agent_response(db: Session, agent_id: int, session_id: str, company
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
         return "Error: Agent not found."
-
-    # Extract numbers from the user message to potentially pass to workflows
-    extracted_numbers_context = extract_numbers_from_query(user_message)
-    print(f"DEBUG: Extracted numbers from query: {extracted_numbers_context}")
-
-    # Check for a relevant workflow and prioritize its execution
-    workflow = workflow_service.find_similar_workflow(db, company_id, user_message)
-    if workflow:
-        workflow_execution = workflow_execution_service.WorkflowExecutionService(db)
-        # Pass the extracted numbers as initial context for the workflow
-        result = workflow_execution.execute_workflow(workflow, initial_context=extracted_numbers_context)
-        # The workflow execution service should return a final_response key
-        return result.get('final_response', {}).get('output', 'Workflow executed, but no explicit final response was generated.')
 
     # If no workflow is triggered, proceed with LLM-based tool selection or response generation
     provider_module = PROVIDER_MAP.get(agent.llm_provider)

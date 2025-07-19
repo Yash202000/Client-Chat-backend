@@ -108,11 +108,11 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
             best_match = workflow
             
     # You might want to set a threshold for similarity
-    # The current threshold is 0.5, which might be too high for some cases.
+    # The current threshold is 0.2, which might be too high for some cases.
     # Consider adjusting this based on your data and desired behavior.
-    if highest_similarity > 0.4: # Lowered threshold to 0.4
+    if highest_similarity > 0.2: # Lowered threshold to 0.4
         print(f"DEBUG: Best match found: '{best_match.name}' with similarity: {highest_similarity}")
         return best_match
     else:
-        print(f"DEBUG: No workflow found above similarity threshold (0.5). Highest: {highest_similarity}")
+        print(f"DEBUG: No workflow found above similarity threshold (0.2). Highest: {highest_similarity}")
         return None
