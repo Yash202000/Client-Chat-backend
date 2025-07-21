@@ -6,6 +6,7 @@ from app.schemas.webhook import Webhook
 from app.schemas.credential import Credential
 from app.schemas.knowledge_base import KnowledgeBase
 from app.schemas.tool import Tool
+import datetime
 
 class AgentBase(BaseModel):
     name: str
@@ -38,6 +39,7 @@ class AgentUpdate(BaseModel):
     is_active: Optional[bool] = None
     knowledge_base_id: Optional[int] = None
     tool_ids: Optional[List[int]] = None
+    status: Optional[str] = None
 
 class Agent(AgentBase):
     id: int
@@ -46,6 +48,11 @@ class Agent(AgentBase):
     knowledge_base: Optional[KnowledgeBase] = None
     webhooks: List[Webhook] = []
     tools: List[Tool] = []
+    version_number: int
+    parent_version_id: Optional[int] = None
+    status: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
 
     class Config:
         orm_mode = True

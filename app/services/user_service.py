@@ -21,6 +21,9 @@ from app.schemas import user_settings as schemas_user_settings, company as schem
 def create_user(db: Session, user: schemas_user.UserCreate, company_id: int):
     hashed_password = get_password_hash(user.password)
 
+    # Check if this is the first user for the company
+    is_first_user = db.query(models_user.User).filter(models_user.User.company_id == company_id).first() is None
+
     db_user = models_user.User(
         email=user.email,
         hashed_password=hashed_password,
@@ -29,7 +32,9 @@ def create_user(db: Session, user: schemas_user.UserCreate, company_id: int):
         last_name=user.last_name,
         phone_number=user.phone_number,
         job_title=user.job_title,
-        profile_picture_url=user.profile_picture_url
+        profile_picture_url=user.profile_picture_url,
+        is_active=True, # New users are active by default
+        is_admin=is_first_user # First user is admin
     )
     db.add(db_user)
     db.commit()

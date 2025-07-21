@@ -1,8 +1,9 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.tool import agent_tools
+import datetime
 
 class Agent(Base):
     __tablename__ = "agents"
@@ -22,6 +23,11 @@ class Agent(Base):
     credential_id = Column(Integer, ForeignKey("credentials.id"), nullable=True)
     knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
+    version_number = Column(Integer, default=1)
+    parent_version_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    status = Column(String, default="active") # e.g., active, draft, archived
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     company = relationship("Company", back_populates="agents")
     messages = relationship("ChatMessage", back_populates="agent")
@@ -31,3 +37,4 @@ class Agent(Base):
     webhooks = relationship("Webhook", back_populates="agent")
     workflows = relationship("Workflow", back_populates="agent")
     widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")
+    parent_version = relationship("Agent", remote_side=[id])

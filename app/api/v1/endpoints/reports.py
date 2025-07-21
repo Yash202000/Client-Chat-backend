@@ -123,3 +123,49 @@ def get_top_issues(
         {"issue": "Product Information", "count": 21},
         {"issue": "Feature Requests", "count": 15}
     ]
+
+@router.get("/error-rates", response_model=Dict[str, Any])
+def get_error_rates(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    start_date: date = Query(date.today() - timedelta(days=30)),
+    end_date: date = Query(date.today())
+):
+    # Placeholder for error rates. 
+    # In a real scenario, this would involve parsing logs or specific error tracking.
+    return {
+        "overall_error_rate": "5%",
+        "llm_error_rate": "2%",
+        "tool_error_rate": "3%",
+        "agent_errors": [
+            {"agent_name": "Sales Bot", "errors": 10},
+            {"agent_name": "Support Bot", "errors": 5}
+        ]
+    }
+
+@router.get("/latency", response_model=Dict[str, Any])
+def get_latency(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    start_date: date = Query(date.today() - timedelta(days=30)),
+    end_date: date = Query(date.today())
+):
+    # Placeholder for latency metrics.
+    # In a real scenario, this would involve tracking message timestamps.
+    return {
+        "avg_response_time": "2.3s",
+        "p90_response_time": "5.1s",
+        "max_response_time": "10.5s"
+    }
+
+@router.get("/alerts", response_model=List[Dict[str, Any]])
+def get_alerts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Placeholder for alerts. 
+    # In a real scenario, alerts would be generated based on predefined rules (e.g., high error rate, low satisfaction).
+    return [
+        {"id": 1, "type": "critical", "message": "Sales Bot error rate exceeded 10%", "timestamp": "2025-07-20T10:00:00Z"},
+        {"id": 2, "type": "warning", "message": "Support Bot response time increasing", "timestamp": "2025-07-19T15:30:00Z"}
+    ]

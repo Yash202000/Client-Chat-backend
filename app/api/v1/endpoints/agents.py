@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -16,6 +16,7 @@ def create_agent(agent: schemas_agent.AgentCreate, db: Session = Depends(get_db)
 
 @router.get("/", response_model=List[schemas_agent.Agent])
 def read_agents(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+    # Only return active agents by default, or all if a query parameter is set
     agents = agent_service.get_agents(db, company_id=current_company_id, skip=skip, limit=limit)
     return agents
 
@@ -39,3 +40,29 @@ def delete_agent(agent_id: int, db: Session = Depends(get_db), current_company_i
     if db_agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     return {"message": "Agent deleted successfully"}
+
+@router.post("/{agent_id}/new-version", response_model=schemas_agent.Agent, status_code=status.HTTP_201_CREATED)
+def create_agent_new_version(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    try:
+        new_version = agent_service.create_agent_version(db, agent_id, current_company_id)
+        return new_version
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.put("/{agent_id}/activate-version", response_model=schemas_agent.Agent)
+def activate_agent_version(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    try:
+        activated_agent = agent_service.activate_agent_version(db, agent_id, current_company_id)
+        return activated_agent
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

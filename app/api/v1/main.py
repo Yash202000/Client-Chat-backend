@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports
+from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization
 
 api_router = APIRouter()
 websocket_router = APIRouter() # New router for WebSocket endpoints
@@ -50,3 +50,4 @@ api_router.include_router(calls.router, prefix="/calls", tags=["calls"])
 api_router.include_router(suggestions.router, prefix="/suggestions", tags=["suggestions"])
 api_router.include_router(subscription.router, prefix="/subscription", tags=["subscription"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
+api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
