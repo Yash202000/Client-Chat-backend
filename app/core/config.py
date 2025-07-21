@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:8080"
     
     SECRET_KEY: str = "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg="
+    ALGORITHM: str = "HS256"
 
     class Config:
         env_file = ".env"

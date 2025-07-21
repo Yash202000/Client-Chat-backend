@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions
+from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports
 
 api_router = APIRouter()
 websocket_router = APIRouter() # New router for WebSocket endpoints
@@ -13,7 +13,6 @@ websocket_router = APIRouter() # New router for WebSocket endpoints
 @api_router.get("/pre-built-connectors")
 def get_pre_built_connectors():
     return tool_service.get_pre_built_connectors()
-
 @api_router.post("/tools/{tool_id}/execute")
 def execute_tool(
     tool_id: int,
@@ -30,6 +29,7 @@ def execute_tool(
         parameters=parameters
     )
 
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 websocket_router.include_router(websocket_conversations.router, tags=["conversations"])
@@ -48,3 +48,5 @@ api_router.include_router(workflow.router, prefix="/workflows", tags=["workflows
 api_router.include_router(tools.router, prefix="/tools", tags=["tools"])
 api_router.include_router(calls.router, prefix="/calls", tags=["calls"])
 api_router.include_router(suggestions.router, prefix="/suggestions", tags=["suggestions"])
+api_router.include_router(subscription.router, prefix="/subscription", tags=["subscription"])
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"])

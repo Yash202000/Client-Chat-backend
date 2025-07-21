@@ -1,10 +1,15 @@
 from groq import Groq
 import json
+from sqlalchemy.orm import Session
+from app.services import credential_service
 
-def generate_response(api_key: str, model_name: str, system_prompt: str, chat_history: list, tools: list = None):
-    """
-    Generates a response from the Groq API, handling chat history and potential tool calls.
-    """
+def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list = None, api_key: str = None):
+    if api_key is None:
+        credential = credential_service.get_credential_by_provider_name(db, provider_name="groq", company_id=company_id)
+        if not credential:
+            raise ValueError("Groq API key not found for this company.")
+        api_key = credential.api_key
+
     client = Groq(api_key=api_key)
 
     messages = [{"role": "system", "content": system_prompt}]

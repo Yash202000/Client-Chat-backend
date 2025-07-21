@@ -13,19 +13,6 @@ PROVIDER_MAP = {
     "gemini": gemini_provider,
 }
 
-def get_api_key_for_agent(agent):
-    """
-    Gets the API key from the agent's credential, falling back to environment variables.
-    """
-    if agent.credential and agent.credential.api_key:
-        return agent.credential.api_key
-    
-    if agent.llm_provider == 'groq':
-        return settings.GROQ_API_KEY
-    elif agent.llm_provider == 'gemini':
-        return settings.GOOGLE_API_KEY
-    return None
-
 def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
     """
     Formats the chat history from various possible types (SQLAlchemy models, dicts)
@@ -65,10 +52,6 @@ def generate_agent_response(db: Session, agent_id: int, session_id: str, company
     if not provider_module:
         return f"Error: LLM provider '{agent.llm_provider}' not found."
 
-    api_key = get_api_key_for_agent(agent)
-    if not api_key:
-        return f"Error: API key for {agent.llm_provider} not found."
-
     # Correctly format tools, ensuring parameters is a dict
     generic_tools = [
         {
@@ -87,12 +70,18 @@ def generate_agent_response(db: Session, agent_id: int, session_id: str, company
     formatted_history.append({"role": "user", "content": user_message})
 
     try:
+        agent_api_key = None
+        if agent.credential and agent.credential.api_key:
+            agent_api_key = agent.credential.api_key
+
         llm_response = provider_module.generate_response(
-            api_key=api_key,
+            db=db,
+            company_id=company_id,
             model_name=agent.model_name,
             system_prompt=agent.prompt,
             chat_history=formatted_history,
-            tools=generic_tools
+            tools=generic_tools,
+            api_key=agent_api_key # Pass agent-specific API key if available
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")

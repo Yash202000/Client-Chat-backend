@@ -7,7 +7,7 @@ class Credential(Base):
     __tablename__ = "credentials"
 
     id = Column(Integer, primary_key=True, index=True)
-    platform = Column(String, unique=True, index=True) # e.g., 'groq', 'openai', 'gemini'
+    provider_name = Column(String, unique=True, index=True) # e.g., 'groq', 'openai', 'gemini'
     api_key = Column(String) # IMPORTANT: In a real application, this should be encrypted!
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

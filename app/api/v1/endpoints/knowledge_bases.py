@@ -5,7 +5,8 @@ from pydantic import BaseModel, HttpUrl
 
 from app.schemas import knowledge_base as schemas_knowledge_base
 from app.services import knowledge_base_service
-from app.core.dependencies import get_db, get_current_company
+from app.core.dependencies import get_db, get_current_company, get_current_active_user
+from app.models import user as models_user
 
 router = APIRouter()
 
@@ -19,7 +20,8 @@ class KnowledgeBaseCreateFromURL(BaseModel):
 def create_knowledge_base_from_url(
     kb_from_url: KnowledgeBaseCreateFromURL,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     try:
         content = knowledge_base_service.extract_text_from_url(str(kb_from_url.url))
@@ -52,7 +54,8 @@ def create_knowledge_base_from_url(
 def create_knowledge_base(
     knowledge_base: schemas_knowledge_base.KnowledgeBaseCreate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     return knowledge_base_service.create_knowledge_base(db, knowledge_base, current_company_id)
 
@@ -60,7 +63,8 @@ def create_knowledge_base(
 def get_knowledge_base(
     knowledge_base_id: int,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     db_knowledge_base = knowledge_base_service.get_knowledge_base(db, knowledge_base_id, current_company_id)
     if db_knowledge_base is None:
@@ -72,7 +76,8 @@ def get_knowledge_bases(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     return knowledge_base_service.get_knowledge_bases(db, current_company_id, skip=skip, limit=limit)
 
@@ -81,7 +86,8 @@ def update_knowledge_base(
     knowledge_base_id: int,
     knowledge_base: schemas_knowledge_base.KnowledgeBaseUpdate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     db_knowledge_base = knowledge_base_service.update_knowledge_base(db, knowledge_base_id, knowledge_base, current_company_id)
     if db_knowledge_base is None:
@@ -92,7 +98,8 @@ def update_knowledge_base(
 def delete_knowledge_base(
     knowledge_base_id: int,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     db_knowledge_base = knowledge_base_service.delete_knowledge_base(db, knowledge_base_id, current_company_id)
     if db_knowledge_base is None:
@@ -104,7 +111,8 @@ async def generate_qna_for_knowledge_base(
     knowledge_base_id: int,
     qna_generate: schemas_knowledge_base.KnowledgeBaseQnAGenerate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_company_id: int = Depends(get_current_company),
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     try:
         generated_content = await knowledge_base_service.generate_qna_from_knowledge_base(db, knowledge_base_id, current_company_id, qna_generate.prompt)

@@ -6,7 +6,7 @@ from app.core.database import Base
 class CompanySettings(Base):
     __tablename__ = "company_settings"
 
-    id = Column(Integer, primary_key=True, default=1)
+    id = Column(Integer, primary_key=True, index=True)
     company_name = Column(String, default="AgentConnect")
     support_email = Column(String, default="support@agentconnect.com")
     timezone = Column(String, default="UTC")
