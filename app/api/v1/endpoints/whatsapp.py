@@ -7,7 +7,7 @@ import json
 
 from app.core.dependencies import get_db
 from app.core.config import settings
-from app.services import contact_service, conversation_session_service, chat_service, workflow_execution_service, integration_service
+from app.services import contact_service, conversation_session_service, chat_service, workflow_execution_service, integration_service, agent_service, agent_execution_service, messaging_service
 from app.services.connection_manager import manager
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import session as schemas_session, websocket as schemas_websocket, chat_message as schemas_chat_message
@@ -97,6 +97,38 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     session.conversation_id, 
                     schemas_chat_message.ChatMessage.from_orm(created_message).json(), 
                     "user" # Assuming messages from webhooks are always from the user
+                )
+
+                # --- Agent Response Generation ---
+                # 6. Get the default agent for the company
+                agents = agent_service.get_agents(db, company_id=company_id, limit=1)
+                if not agents:
+                    print(f"Error: No agents found for company {company_id} to handle the response.")
+                    return Response(status_code=200)
+                
+                agent = agents[0]
+
+                # 7. Generate agent response
+                agent_response_text = agent_execution_service.generate_agent_response(
+                    db, agent.id, session.conversation_id, company_id, message_text
+                )
+
+                # 8. Save the agent's message
+                agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
+                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
+
+                # 9. Send the response back to WhatsApp
+                await messaging_service.send_whatsapp_message(
+                    recipient_phone_number=sender_phone,
+                    message_text=agent_response_text,
+                    integration=integration
+                )
+
+                # 10. Broadcast the agent's message to the dashboard
+                await session_ws_manager.broadcast_to_session(
+                    session.conversation_id,
+                    schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                    "agent"
                 )
                 
                 print(f"Processed message from {sender_phone} for company {company_id}")
