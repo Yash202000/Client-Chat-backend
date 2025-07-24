@@ -11,7 +11,7 @@ from app.api.v1.endpoints import ws_updates
 from app.core.dependencies import get_db
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
-from create_tool import create_calculate_sum_tool
+from create_tool import create_api_call_tool
 
 # Create all database tables
 Base.metadata.create_all(bind=engine)
@@ -79,11 +79,11 @@ def on_startup():
                 model_name="llama3-8b-8192"
             )
             agent = agent_service.create_agent(db, agent_create_data, company_id=company.id)
-            # Create the calculate_sum tool if it doesn't exist
-            calculate_sum_tool = tool_service.get_tool_by_name(db, "calculate_sum", company.id)
-            if not calculate_sum_tool:
-                print("Creating calculate_sum tool...")
-                create_calculate_sum_tool(db, company.id)
+            # Create the api_call tool if it doesn't exist
+            api_call_tool = tool_service.get_tool_by_name(db, "API Call", company.id)
+            if not api_call_tool:
+                print("Creating API Call tool...")
+                create_api_call_tool(db, company.id)
         else:
             agent = default_agent_list[0]
         
