@@ -12,10 +12,17 @@ def create_session(db: Session, session: ConversationSessionCreate) -> Conversat
     """
     Creates a new conversation session.
     """
+    print(f"Attempting to create session with data: {session.dict()}")
     db_session = ConversationSession(**session.dict())
-    db.add(db_session)
-    db.commit()
-    db.refresh(db_session)
+    try:
+        db.add(db_session)
+        db.commit()
+        db.refresh(db_session)
+        print(f"Session created and refreshed: {db_session.__dict__}")
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating session: {e}")
+        raise
     return db_session
 
 def update_session(db: Session, conversation_id: str, session_update: ConversationSessionUpdate) -> ConversationSession:
@@ -31,15 +38,28 @@ def update_session(db: Session, conversation_id: str, session_update: Conversati
         db.refresh(db_session)
     return db_session
 
-def get_or_create_session(db: Session, conversation_id: str, workflow_id: int) -> ConversationSession:
+def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int) -> ConversationSession:
     """
-    Gets a session if it exists, otherwise creates a new one.
+    Gets an active session for a contact on a specific channel, otherwise creates a new one.
+    This is key for omnichannel session management.
     """
-    db_session = get_session(db, conversation_id)
-    if not db_session:
-        session_create = ConversationSessionCreate(
-            conversation_id=conversation_id,
-            workflow_id=workflow_id
-        )
-        db_session = create_session(db, session_create)
-    return db_session
+    # Look for an existing active session for this contact on this channel
+    db_session = db.query(ConversationSession).filter(
+        ConversationSession.contact_id == contact_id,
+        ConversationSession.channel == channel,
+        ConversationSession.status == 'active'
+    ).first()
+
+    if db_session:
+        return db_session
+
+    # If no active session exists, create a new one
+    session_create = ConversationSessionCreate(
+        conversation_id=conversation_id,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        channel=channel,
+        status='active',
+        company_id=company_id
+    )
+    return create_session(db, session_create)

@@ -1,5 +1,5 @@
 from app.core.database import SessionLocal
-from fastapi import Header, HTTPException, Depends, status
+from fastapi import Header, HTTPException, Depends, status, WebSocket, WebSocketException
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -31,15 +31,38 @@ async def get_current_user(
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
+        print(f"[get_current_user] Decoded JWT payload: {payload}")
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
         token_data = schemas_token.TokenData(email=email)
     except JWTError:
+        print("[get_current_user] JWTError: Could not decode token")
         raise credentials_exception
     user = user_service.get_user_by_email(db, email=token_data.email)
     if user is None:
+        print(f"[get_current_user] User not found for email: {token_data.email}")
         raise credentials_exception
+    print(f"[get_current_user] User found: {user.email}")
+    return user
+
+async def get_current_user_from_ws(
+    websocket: WebSocket,
+    db: Session = Depends(get_db)
+) -> models_user.User:
+    """
+    Dependency to get the current user from a WebSocket connection,
+    expecting the token as a query parameter.
+    """
+    token = websocket.query_params.get("token")
+    if token is None:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
+    
+    try:
+        user = await get_current_user(db, token)
+    except HTTPException:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        
     return user
 
 async def get_current_active_user(

@@ -7,6 +7,7 @@ from app.core.database import Base, engine
 from app.models import role, permission, contact # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
+from app.api.v1.endpoints import ws_updates
 from app.core.dependencies import get_db
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
@@ -30,7 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
-app.include_router(websocket_router, prefix="/ws") # Include WebSocket router separately
+app.include_router(ws_updates.router, prefix="/ws") # New company-wide updates
+
 
 @app.get("/")
 async def read_root():

@@ -44,7 +44,10 @@ def get_contact_by_session(
     db: Session = Depends(get_db),
     x_company_id: int = Header(...)
 ):
-    contact = contact_service.get_or_create_contact_by_session(db, session_id=session_id, company_id=x_company_id)
-    if not contact:
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == x_company_id
+    ).first()
+    if not session or not session.contact:
         raise HTTPException(status_code=404, detail="Contact for this session not found")
-    return contact
+    return session.contact

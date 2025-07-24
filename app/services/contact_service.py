@@ -8,32 +8,6 @@ def get_contact(db: Session, contact_id: int, company_id: int):
 def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_contact.Contact).filter(models_contact.Contact.company_id == company_id).offset(skip).limit(limit).all()
 
-def get_or_create_contact_by_session(db: Session, session_id: str, company_id: int, contact_info: schemas_contact.ContactCreate = None):
-    # Check if a message in this session already has a contact
-    first_message = db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id,
-        models_chat_message.ChatMessage.contact_id != None
-    ).first()
-
-    if first_message and first_message.contact:
-        return first_message.contact
-
-    # If no contact is associated, create a new one
-    if contact_info and contact_info.email:
-        # Check if a contact with this email already exists
-        existing_contact = db.query(models_contact.Contact).filter(
-            models_contact.Contact.email == contact_info.email,
-            models_contact.Contact.company_id == company_id
-        ).first()
-        if existing_contact:
-            link_session_to_contact(db, session_id, existing_contact.id)
-            return existing_contact
-
-    # Create a new contact if none exists
-    new_contact = create_contact(db, contact_info if contact_info else schemas_contact.ContactCreate(), company_id)
-    link_session_to_contact(db, session_id, new_contact.id)
-    return new_contact
-
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int):
     db_contact = models_contact.Contact(
         **contact.dict(),
@@ -54,9 +28,45 @@ def update_contact(db: Session, contact_id: int, contact: schemas_contact.Contac
         db.refresh(db_contact)
     return db_contact
 
-def link_session_to_contact(db: Session, session_id: str, contact_id: int):
-    db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id
-    ).update({"contact_id": contact_id})
-    db.commit()
-    return True
+def get_or_create_contact_for_channel(db: Session, company_id: int, channel: str, channel_identifier: str, name: str = None):
+    """
+    Finds a contact by a channel-specific identifier, or creates one if it doesn't exist.
+    This is the central function for handling contacts from different platforms.
+
+    Args:
+        db: The database session.
+        company_id: The ID of the company.
+        channel: The name of the channel (e.g., 'whatsapp', 'messenger').
+        channel_identifier: The unique ID for the user on that channel (e.g., phone number, PSID).
+        name: The contact's name, if available.
+
+    Returns:
+        The existing or newly created contact object.
+    """
+    # Use a consistent key for the custom attribute
+    attribute_key = f"{channel}_id"
+
+    # Query for an existing contact using a JSON query that works across DBs
+    contact = db.query(models_contact.Contact).filter(
+        models_contact.Contact.company_id == company_id,
+        models_contact.Contact.custom_attributes[attribute_key].as_string() == channel_identifier
+    ).first()
+
+    if contact:
+        return contact
+
+    # If no contact is found, create a new one
+    contact_details = {
+        "custom_attributes": {attribute_key: channel_identifier},
+        "company_id": company_id
+    }
+    if name:
+        contact_details["name"] = name
+    
+    # For WhatsApp, the identifier is the phone number
+    if channel == 'whatsapp':
+        contact_details["phone_number"] = channel_identifier
+
+    new_contact_schema = schemas_contact.ContactCreate(**contact_details)
+    return create_contact(db, contact=new_contact_schema, company_id=company_id)
+

@@ -1,28 +1,41 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from app.models import chat_message as models_chat_message
+from app.models import chat_message as models_chat_message, conversation_session as models_conversation_session, contact as models_contact
 from app.schemas import chat_message as schemas_chat_message
 from app.services import contact_service
 
-def get_sessions_with_details(db: Session, agent_id: int, company_id: int):
+def get_sessions_with_details(db: Session, company_id: int, agent_id: int = None, status: str = None):
     """
-    Gets all unique sessions for an agent and includes details from the latest message
-    of each session, such as status and assignee.
+    Gets all unique sessions for a company, optionally filtered by agent or status.
+    It retrieves the latest message for ordering and context.
     """
-    latest_message_subquery = db.query(
-        models_chat_message.ChatMessage.session_id,
-        func.max(models_chat_message.ChatMessage.id).label("max_id")
-    ).filter(
-        models_chat_message.ChatMessage.agent_id == agent_id,
-        models_chat_message.ChatMessage.company_id == company_id
-    ).group_by(models_chat_message.ChatMessage.session_id).subquery()
+    query = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == company_id
+    )
 
-    latest_messages = db.query(models_chat_message.ChatMessage).join(
-        latest_message_subquery,
-        (models_chat_message.ChatMessage.id == latest_message_subquery.c.max_id)
-    ).order_by(desc(models_chat_message.ChatMessage.timestamp)).all()
+    if agent_id:
+        query = query.filter(models_conversation_session.ConversationSession.agent_id == agent_id)
+    
+    if status:
+        query = query.filter(models_conversation_session.ConversationSession.status == status)
 
-    return latest_messages
+    # Order by the most recently updated session
+    sessions = query.order_by(desc(models_conversation_session.ConversationSession.updated_at)).all()
+    return sessions
+
+def get_contact_for_session(db: Session, session_id: str, company_id: int):
+    """
+    Retrieves the contact associated with a given session.
+    """
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+    
+    if session:
+        return session.contact
+    return None
+
 
 def get_first_message_for_session(db: Session, session_id: str, company_id: int):
     return db.query(models_chat_message.ChatMessage).filter(
@@ -32,8 +45,14 @@ def get_first_message_for_session(db: Session, session_id: str, company_id: int)
 
 def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCreate, agent_id: int, session_id: str, company_id: int, sender: str):
     
-    # Get or create a contact for this session
-    contact = contact_service.get_or_create_contact_by_session(db, session_id, company_id)
+    # Get the session to retrieve the contact_id
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+
+    if not session or not session.contact_id:
+        raise ValueError(f"Session {session_id} not found or has no associated contact.")
     
     db_message = models_chat_message.ChatMessage(
         message=message.message, 
@@ -42,7 +61,7 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
         session_id=session_id, 
         company_id=company_id,
         message_type=message.message_type,
-        contact_id=contact.id
+        contact_id=session.contact_id
     )
     db.add(db_message)
     db.commit()

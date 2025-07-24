@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization
+from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates
 
 api_router = APIRouter()
 websocket_router = APIRouter() # New router for WebSocket endpoints
@@ -32,7 +32,7 @@ def execute_tool(
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
-websocket_router.include_router(websocket_conversations.router, tags=["conversations"])
+api_router.include_router(websocket_conversations.router, prefix="/ws", tags=["conversations"])
 api_router.include_router(credentials.router, prefix="/credentials", tags=["credentials"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(user_settings.router, prefix="/settings", tags=["settings"])
@@ -51,3 +51,6 @@ api_router.include_router(suggestions.router, prefix="/suggestions", tags=["sugg
 api_router.include_router(subscription.router, prefix="/subscription", tags=["subscription"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
+api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
+api_router.include_router(webhook_router.router, prefix="/webhooks", tags=["webhooks"])
+api_router.include_router(ws_updates.router, prefix="/ws/updates", tags=["ws_updates"])

@@ -1,15 +1,14 @@
 from sqlalchemy.orm import Session
 from app.models import tool as models_tool
 from app.schemas import tool as schemas_tool
-from .pre_built_connectors import PRE_BUILT_CONNECTORS
-from .tool_code import TOOL_CODE
+from .pre_built_connectors import load_pre_built_connectors
 from . import vault_service
 
 def get_pre_built_connectors():
-    return PRE_BUILT_CONNECTORS
+    return load_pre_built_connectors()
 
 def get_pre_built_connector_by_name(name: str):
-    return PRE_BUILT_CONNECTORS.get(name)
+    return get_pre_built_connectors().get(name)
 
 def get_tool(db: Session, tool_id: int, company_id: int):
     db_tool = db.query(models_tool.Tool).filter(
@@ -38,37 +37,26 @@ def get_tools(db: Session, company_id: int, skip: int = 0, limit: int = 100):
         if tool.configuration:
             tool.configuration = vault_service.decrypt_dict(tool.configuration)
 
-    pre_built_tools = []
-    for i, (name, connector) in enumerate(PRE_BUILT_CONNECTORS.items()):
-        pre_built_tools.append(
-            models_tool.Tool(
-                id=-(i + 1),
-                name=connector["name"],
-                description=connector["description"],
-                parameters=connector["parameters"],
-                code="",
-                company_id=company_id
-            )
-        )
-    
-    return custom_tools + pre_built_tools
+    # Pre-built tools are now dynamically loaded and not stored in the DB
+    # They are presented as templates that can be added to a company's toolset
+    return custom_tools
 
 def create_tool(db: Session, tool: schemas_tool.ToolCreate, company_id: int):
     if tool.pre_built_connector_name:
         pre_built_connector = get_pre_built_connector_by_name(tool.pre_built_connector_name)
-        if pre_built_connector:
-            tool_data = {
-                "name": pre_built_connector["name"],
-                "description": pre_built_connector["description"],
-                "parameters": pre_built_connector["parameters"],
-                "code": TOOL_CODE.get(tool.pre_built_connector_name, ""),
-            }
-            db_tool = models_tool.Tool(**tool_data, company_id=company_id)
-        else:
+        if not pre_built_connector:
             return None
+        
+        tool_data = {
+            "name": pre_built_connector["name"],
+            "description": pre_built_connector["description"],
+            "parameters": pre_built_connector["parameters"],
+            "is_pre_built": True,
+        }
+        db_tool = models_tool.Tool(**tool_data, company_id=company_id)
     else:
-        tool_data = tool.dict()
-        del tool_data["pre_built_connector_name"]
+        tool_data = tool.dict(exclude={"pre_built_connector_name"})
+        tool_data["is_pre_built"] = False
         if tool_data.get("configuration"):
             tool_data["configuration"] = vault_service.encrypt_dict(tool_data["configuration"])
         db_tool = models_tool.Tool(**tool_data, company_id=company_id)

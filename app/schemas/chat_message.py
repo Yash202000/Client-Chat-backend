@@ -14,7 +14,7 @@ class ChatMessage(ChatMessageBase):
     sender: str
     session_id: str
     timestamp: datetime
-    agent_id: int
+    agent_id: Optional[int]
     company_id: int
     contact_id: int
     status: Optional[str] = None

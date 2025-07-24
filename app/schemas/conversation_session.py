@@ -9,7 +9,10 @@ class ConversationSessionBase(BaseModel):
     status: str = 'active'
 
 class ConversationSessionCreate(ConversationSessionBase):
-    pass
+    contact_id: int
+    channel: str
+    company_id: int
+
 
 class ConversationSessionUpdate(BaseModel):
     next_step_id: Optional[str] = None
@@ -20,4 +23,4 @@ class ConversationSession(ConversationSessionBase):
     id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True

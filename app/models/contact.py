@@ -15,6 +15,7 @@ class Contact(Base):
     company = relationship("Company", back_populates="contacts")
     
     chat_messages = relationship("ChatMessage", back_populates="contact")
+    sessions = relationship("ConversationSession", back_populates="contact")
 
 # Add back-population to Company model
 from app.models.company import Company

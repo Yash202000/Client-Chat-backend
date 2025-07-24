@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, JSON, ForeignKey, Table
+from sqlalchemy import Boolean, Column, Integer, String, Text, JSON, ForeignKey, Table
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -16,7 +16,8 @@ class Tool(Base):
     name = Column(String, unique=True, index=True)
     description = Column(String, nullable=True)
     parameters = Column(JSON) # Stores JSON schema for parameters
-    code = Column(Text) # Stores the Python code for the tool
+    code = Column(Text, nullable=True) # Stores the Python code for the tool
+    is_pre_built = Column(Boolean, default=False)
     company_id = Column(Integer, ForeignKey("companies.id"))
     configuration = Column(JSON, nullable=True) # Stores tool configuration
 

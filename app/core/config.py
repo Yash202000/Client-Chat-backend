@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     LIVEKIT_API_SECRET: str = ""
     LIVEKIT_URL: str = ""
     FRONTEND_URL: str = "http://localhost:8080"
+    WHATSAPP_VERIFY_TOKEN: str = ""
+    MESSENGER_VERIFY_TOKEN: str = ""
     
     SECRET_KEY: str = "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg="
     ALGORITHM: str = "HS256"

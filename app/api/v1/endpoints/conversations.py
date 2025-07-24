@@ -23,18 +23,46 @@ class FeedbackUpdate(BaseModel):
     feedback_rating: int
     feedback_notes: Optional[str] = None
 
-@router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session])
-def get_sessions(agent_id: int, db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+@router.get("/sessions", response_model=List[schemas_session.Session])
+def get_all_sessions(db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+    """
+    Get all active sessions for the company, enriched with contact and channel info.
+    This is the primary endpoint for the omnichannel inbox.
+    """
+    sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_company_id, status="active")
+    print(f"Sessions from DB (raw): {sessions_from_db}")
+    
+    sessions = []
+    for s in sessions_from_db:
+        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_company_id)
+        contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_company_id)
+
+        sessions.append(schemas_session.Session(
+            session_id=s.conversation_id,
+            status=s.status,
+            assignee_id=s.agent_id,
+            last_message_timestamp=s.updated_at.isoformat(),
+            first_message_content=first_message.message if first_message else "",
+            channel=s.channel,
+            contact_name=contact_info.name if contact_info else "Unknown",
+            contact_phone=contact_info.phone_number if contact_info else None
+        ))
+    print(f"Sessions to be returned to frontend: {sessions}")
+    return sessions
+
+@router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True)
+def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+    # This endpoint is deprecated in favor of the company-wide /sessions endpoint
     sessions_from_db = chat_service.get_sessions_with_details(db, agent_id=agent_id, company_id=current_company_id)
     
     sessions = []
     for s in sessions_from_db:
-        first_message = chat_service.get_first_message_for_session(db, s.session_id, current_company_id)
+        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_company_id)
         sessions.append(schemas_session.Session(
-            session_id=s.session_id,
+            session_id=s.conversation_id,
             status=s.status,
-            assignee_id=s.assignee_id,
-            last_message_timestamp=s.timestamp.isoformat(),
+            assignee_id=s.agent_id,
+            last_message_timestamp=s.updated_at.isoformat(),
             first_message_content=first_message.message if first_message else ""
         ))
     return sessions
