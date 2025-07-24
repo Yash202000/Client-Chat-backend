@@ -7,6 +7,7 @@ class ConversationSessionBase(BaseModel):
     next_step_id: Optional[str] = None
     context: Dict[str, Any] = {}
     status: str = 'active'
+    is_ai_enabled: bool = True
 
 class ConversationSessionCreate(ConversationSessionBase):
     contact_id: int

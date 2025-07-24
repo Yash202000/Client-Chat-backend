@@ -63,3 +63,20 @@ def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, c
         company_id=company_id
     )
     return create_session(db, session_create)
+
+
+def toggle_ai_for_session(db: Session, conversation_id: str, company_id: int, is_enabled: bool) -> ConversationSession:
+    """
+    Updates the is_ai_enabled flag for a specific conversation session.
+    """
+    db_session = db.query(ConversationSession).filter(
+        ConversationSession.conversation_id == conversation_id,
+        ConversationSession.company_id == company_id
+    ).first()
+
+    if db_session:
+        db_session.is_ai_enabled = is_enabled
+        db.commit()
+        db.refresh(db_session)
+    
+    return db_session

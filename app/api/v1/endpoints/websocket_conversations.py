@@ -233,10 +233,10 @@ async def public_websocket_endpoint(
 
             # Ensure a session and contact exist for this interaction
             contact = contact_service.get_or_create_contact_for_channel(
-                db, company_id=company_id, channel="web", channel_identifier=session_id
+                db, company_id=company_id, channel="web_chat", channel_identifier=session_id
             )
-            conversation_session_service.get_or_create_session(
-                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web", company_id=company_id
+            session = conversation_session_service.get_or_create_session(
+                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id
             )
 
             # 1. Log user message
@@ -246,8 +246,13 @@ async def public_websocket_endpoint(
             await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
             print(f"[public_websocket] Broadcasted message to session: {session_id}")
 
-            # 2. If the message is from the user, execute the workflow
+            # 2. If the message is from the user, execute the workflow or generate a response
             if sender == 'user':
+                # Check if AI is enabled for this session
+                if not session.is_ai_enabled:
+                    print(f"AI is disabled for session {session_id}. No response will be generated.")
+                    continue
+
                 workflow = workflow_service.find_similar_workflow(
                     db,
                     company_id=company_id,

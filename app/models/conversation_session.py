@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, JSON, ForeignKey, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, JSON, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 import datetime
@@ -17,6 +17,7 @@ class ConversationSession(Base):
     channel = Column(String, nullable=False, default='web') # e.g., web, whatsapp, messenger
     context = Column(JSON, nullable=False, default={}) # Stores all collected variables
     status = Column(String, nullable=False, default='active') # e.g., active, paused, completed
+    is_ai_enabled = Column(Boolean, nullable=False, default=True) # Whether the AI should respond automatically
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

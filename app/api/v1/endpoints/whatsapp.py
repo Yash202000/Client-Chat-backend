@@ -100,7 +100,12 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 )
 
                 # --- Agent Response Generation ---
-                # 6. Get the default agent for the company
+                # 6. Check if AI is enabled for this session
+                if not session.is_ai_enabled:
+                    print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
+                    return Response(status_code=200)
+
+                # 7. Get the default agent for the company
                 agents = agent_service.get_agents(db, company_id=company_id, limit=1)
                 if not agents:
                     print(f"Error: No agents found for company {company_id} to handle the response.")
@@ -108,23 +113,23 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 
                 agent = agents[0]
 
-                # 7. Generate agent response
+                # 8. Generate agent response
                 agent_response_text = agent_execution_service.generate_agent_response(
                     db, agent.id, session.conversation_id, company_id, message_text
                 )
 
-                # 8. Save the agent's message
+                # 9. Save the agent's message
                 agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
                 db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
 
-                # 9. Send the response back to WhatsApp
+                # 10. Send the response back to WhatsApp
                 await messaging_service.send_whatsapp_message(
                     recipient_phone_number=sender_phone,
                     message_text=agent_response_text,
                     integration=integration
                 )
 
-                # 10. Broadcast the agent's message to the dashboard
+                # 11. Broadcast the agent's message to the dashboard
                 await session_ws_manager.broadcast_to_session(
                     session.conversation_id,
                     schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),

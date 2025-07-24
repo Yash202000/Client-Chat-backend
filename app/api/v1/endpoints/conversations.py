@@ -4,8 +4,8 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 from app.core.dependencies import get_db, get_current_active_user, get_current_company
-from app.services import chat_service, agent_service
-from app.schemas import chat_message as schemas_chat_message, session as schemas_session
+from app.services import chat_service, agent_service, conversation_session_service
+from app.schemas import chat_message as schemas_chat_message, session as schemas_session, conversation_session as schemas_conversation_session
 from app.models import user as models_user
 
 router = APIRouter()
@@ -117,6 +117,30 @@ def update_assignee(
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or assignee update failed")
     return {"message": "Assignee updated successfully"}
+
+class AIToggleUpdate(BaseModel):
+    is_ai_enabled: bool
+
+@router.put("/{session_id}/toggle-ai", response_model=schemas_conversation_session.ConversationSession)
+def toggle_ai(
+    session_id: str,
+    update: AIToggleUpdate,
+    db: Session = Depends(get_db),
+    current_company_id: int = Depends(get_current_company)
+):
+    """
+    Toggles the AI automated response for a specific conversation session.
+    """
+    session = conversation_session_service.toggle_ai_for_session(
+        db, 
+        conversation_id=session_id, 
+        company_id=current_company_id, 
+        is_enabled=update.is_ai_enabled
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Conversation session not found")
+    return session
+
 
 @router.put("/{session_id}/feedback")
 def update_feedback(
