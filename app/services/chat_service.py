@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from app.models import chat_message as models_chat_message, conversation_session as models_conversation_session, contact as models_contact
 from app.schemas import chat_message as schemas_chat_message
 from app.services import contact_service
@@ -70,7 +70,7 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
 
 def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.agent_id == agent_id,
+        or_(models_chat_message.ChatMessage.agent_id == agent_id, models_chat_message.ChatMessage.agent_id == None),
         models_chat_message.ChatMessage.session_id == session_id,
         models_chat_message.ChatMessage.company_id == company_id
     ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()

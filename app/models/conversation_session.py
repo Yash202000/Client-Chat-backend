@@ -10,7 +10,7 @@ class ConversationSession(Base):
     conversation_id = Column(String, unique=True, index=True, nullable=False)
     company_id = Column(Integer, ForeignKey("companies.id"))
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
-    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=False)
+    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=True)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     next_step_id = Column(String, nullable=True) # The ID of the node to execute upon resumption
     

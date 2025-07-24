@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message
 import json
@@ -184,6 +184,113 @@ async def websocket_endpoint(
                     print(f"[websocket_conversations] Broadcasted prompt to session: {session_id}")
 
                 # If the status is "paused_for_input", we do nothing and just wait for the next user message.
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, session_id)
+        print(f"Client in session #{session_id} disconnected")
+
+
+@router.websocket("/public/{company_id}/{agent_id}/{session_id}")
+async def public_websocket_endpoint(
+    websocket: WebSocket,
+    company_id: int,
+    agent_id: int,
+    session_id: str,
+    user_type: str = Query(...),  # 'user' or 'agent'
+    db: Session = Depends(get_db)
+):
+    # For public endpoint, company_id needs to be derived from the agent
+    agent = agent_service.get_agent(db, agent_id,company_id)
+    if not agent:
+        print(f"[public_websocket] Agent with id {agent_id} not found.")
+        await websocket.close(code=1008)
+        return
+    company_id = agent.company_id
+    print(f"[public_websocket] Attempting WebSocket connection for session: {session_id}, agent_id: {agent_id}, company_id: {company_id}")
+
+    await manager.connect(websocket, session_id, user_type)
+    print(f"[public_websocket] WebSocket connection established for session: {session_id}")
+    workflow_exec_service = WorkflowExecutionService(db)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"[public_websocket] Received data from frontend: {data}")
+            if not data:
+                continue
+
+            try:
+                message_data = json.loads(data)
+                user_message = message_data.get('message')
+                sender = message_data.get('sender')
+            except (json.JSONDecodeError, AttributeError):
+                print(f"[public_websocket] Received invalid data from session #{session_id}: {data}")
+                continue
+
+            if not user_message or not sender:
+                print(f"[public_websocket] Missing user_message or sender: user_message={user_message}, sender={sender}")
+                continue
+
+            # Ensure a session and contact exist for this interaction
+            contact = contact_service.get_or_create_contact_for_channel(
+                db, company_id=company_id, channel="web", channel_identifier=session_id
+            )
+            conversation_session_service.get_or_create_session(
+                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web", company_id=company_id
+            )
+
+            # 1. Log user message
+            chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
+            db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
+            print(f"[public_websocket] Created chat message: {db_message.id}")
+            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
+            print(f"[public_websocket] Broadcasted message to session: {session_id}")
+
+            # 2. If the message is from the user, execute the workflow
+            if sender == 'user':
+                workflow = workflow_service.find_similar_workflow(
+                    db,
+                    company_id=company_id,
+                    query=user_message
+                )
+
+                if not workflow:
+                    print(f"[public_websocket] No specific workflow found for message: '{user_message}'")
+                    agent_response_text = agent_execution_service.generate_agent_response(
+                        db, agent_id, session_id, company_id, message_data['message']
+                    )
+                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    print(f"[public_websocket] Broadcasted agent response to session: {session_id}")
+                    continue
+
+                execution_result = workflow_exec_service.execute_workflow(
+                    workflow=workflow,
+                    user_message=user_message,
+                    conversation_id=session_id
+                )
+
+                if execution_result.get("status") == "completed":
+                    agent_response_text = execution_result.get("response", "Workflow finished.")
+                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    print(f"[public_websocket] Broadcasted workflow completion to session: {session_id}")
+
+                elif execution_result.get("status") == "paused_for_prompt":
+                    prompt_data = execution_result.get("prompt", {})
+                    prompt_message = {
+                        "message": prompt_data.get("text"),
+                        "message_type": "prompt",
+                        "options": prompt_data.get("options", []),
+                        "sender": "agent",
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "company_id": company_id,
+                    }
+                    await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
+                    print(f"[public_websocket] Broadcasted prompt to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

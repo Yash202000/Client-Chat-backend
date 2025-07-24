@@ -83,7 +83,7 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                 # 3. Save the incoming message
                 chat_message = ChatMessageCreate(message=message_text, message_type="text")
-                created_message = chat_service.create_chat_message(db, message=chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+                created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
 
                 # 4. Broadcast the update to all connected clients for the company
                 session_update_schema = schemas_websocket.WebSocketSessionUpdate.from_orm(session)

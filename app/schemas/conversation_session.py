@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class ConversationSessionBase(BaseModel):
     conversation_id: str
-    workflow_id: int
+    workflow_id: Optional[int] = None
     next_step_id: Optional[str] = None
     context: Dict[str, Any] = {}
     status: str = 'active'
