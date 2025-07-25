@@ -1,9 +1,10 @@
 from sqlalchemy.orm import Session
-from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service
+from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service
 from app.core.config import settings
 from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema
 import json
+from app.api.v1.endpoints.websocket_conversations import manager
 
 # Import provider modules directly and create a provider map
 from app.llm_providers import groq_provider, gemini_provider
@@ -38,7 +39,7 @@ def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
     return history
 
 
-def generate_agent_response(db: Session, agent_id: int, session_id: str, company_id: int, user_message: str):
+async def generate_agent_response(db: Session, agent_id: int, session_id: str, company_id: int, user_message: str):
     """
     Orchestrates the agent's response by dynamically loading the correct LLM provider,
     handling tool use, and generating a final reply.
@@ -69,6 +70,13 @@ def generate_agent_response(db: Session, agent_id: int, session_id: str, company
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})
 
+    # Check if typing indicator is enabled for this agent's widget
+    widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+    typing_indicator_enabled = widget_settings.typing_indicator_enabled if widget_settings else False
+
+    if typing_indicator_enabled:
+        await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_on", "sender": "agent"}), "agent")
+
     try:
         agent_api_key = None
         if agent.credential and agent.credential.api_key:
@@ -85,7 +93,12 @@ def generate_agent_response(db: Session, agent_id: int, session_id: str, company
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
+        if typing_indicator_enabled:
+            await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
         return f"Error from LLM provider: {e}"
+
+    if typing_indicator_enabled:
+        await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
 
     if llm_response.get('type') == 'tool_call':
         tool_name = llm_response.get('tool_name')

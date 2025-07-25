@@ -23,6 +23,8 @@ class WidgetSettingsBase(BaseModel):
     proactive_message: Optional[str] = None
     proactive_message_delay: Optional[int] = None
     suggestions_enabled: Optional[bool] = None
+    dark_mode: Optional[bool] = None
+    typing_indicator_enabled: Optional[bool] = None
     agent_id: int
 
 class WidgetSettingsCreate(WidgetSettingsBase):

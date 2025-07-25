@@ -142,7 +142,7 @@ async def websocket_endpoint(
                 if not workflow:
                     # If no specific workflow matches, provide a generic response
                     print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
-                    agent_response_text = agent_execution_service.generate_agent_response(
+                    agent_response_text = await agent_execution_service.generate_agent_response(
                         db, agent_id, session_id, company_id, message_data['message']
                     )
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
@@ -261,7 +261,7 @@ async def public_websocket_endpoint(
 
                 if not workflow:
                     print(f"[public_websocket] No specific workflow found for message: '{user_message}'")
-                    agent_response_text = agent_execution_service.generate_agent_response(
+                    agent_response_text = await agent_execution_service.generate_agent_response(
                         db, agent_id, session_id, company_id, message_data['message']
                     )
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")

@@ -27,6 +27,8 @@ class WidgetSettings(Base):
     proactive_message = Column(String, default="Hello! Do you have any questions?")
     proactive_message_delay = Column(Integer, default=5)
     suggestions_enabled = Column(Boolean, default=False)
+    dark_mode = Column(Boolean, default=False)
+    typing_indicator_enabled = Column(Boolean, default=False)
     agent_id = Column(Integer, ForeignKey("agents.id"))
 
     agent = relationship("Agent", back_populates="widget_settings")
