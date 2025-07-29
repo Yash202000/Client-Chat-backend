@@ -26,19 +26,47 @@ class GraphExecutionEngine:
         return start_nodes[0] if start_nodes else None
 
     def get_next_node(self, current_node_id, result):
-        if result and "error" in result:
-            error_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'error'), None)
-            return error_edge['target'] if error_edge else None
+        print(f"DEBUG: [GraphEngine] get_next_node called for node '{current_node_id}'.")
+        
+        current_node = self.nodes.get(current_node_id)
+        if not current_node:
+            print(f"ERROR: [GraphEngine] Node '{current_node_id}' not found in graph.")
+            return None
 
-        if self.nodes[current_node_id].get('type') == 'conditional':
-            conditional_result = result.get('output')
-            if conditional_result:
-                true_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'true'), None)
-                return true_edge['target'] if true_edge else None
+        node_type = current_node.get('type')
+        print(f"DEBUG: [GraphEngine] Node type is '{node_type}'.")
+
+        if node_type == 'condition':
+            if result and 'output' in result and isinstance(result['output'], bool):
+                conditional_result = result['output']
+                print(f"DEBUG: [GraphEngine] Conditional result is: {conditional_result}")
+                
+                handle_to_find = 'true' if conditional_result else 'false'
+                print(f"DEBUG: [GraphEngine] Looking for edge with handle: '{handle_to_find}'")
+
+                edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == handle_to_find), None)
+                
+                if edge:
+                    print(f"DEBUG: [GraphEngine] Found edge to '{edge['target']}' via handle '{handle_to_find}'.")
+                    return edge['target']
+                else:
+                    print(f"WARNING: [GraphEngine] No edge found for handle '{handle_to_find}' from node '{current_node_id}'.")
+                    return None
             else:
-                false_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'false'), None)
-                return false_edge['target'] if false_edge else None
+                print(f"WARNING: [GraphEngine] Conditional node '{current_node_id}' did not produce a valid boolean result: {result}")
+                return None
+
+        elif result and "error" in result:
+            print(f"DEBUG: [GraphEngine] Node '{current_node_id}' produced an error. Looking for error path.")
+            error_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'error'), None)
+            if error_edge:
+                return error_edge['target']
+            return None
+            
         else:
-            # For non-conditional, non-error cases, there is only one output
+            # Default path for non-conditional, non-error nodes
             edge = next((edge for edge in self.edges if edge['source'] == current_node_id), None)
-            return edge['target'] if edge else None
+            if edge:
+                print(f"DEBUG: [GraphEngine] Found default edge to '{edge['target']}'.")
+                return edge['target']
+            return None

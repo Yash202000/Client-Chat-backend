@@ -56,19 +56,43 @@ class WorkflowExecutionService:
 
     def _resolve_placeholders(self, value: str, context: dict, results: dict):
         """Resolves placeholders like {{context.variable}} or {{step_id.output}}."""
+        if not isinstance(value, str) or '{{' not in value:
+            return value
+
+        print(f"DEBUG: Resolving placeholders in: '{value}'")
+
         def replace_func(match):
-            path = match.group(1).strip().split(".")
+            placeholder = match.group(1).strip()
+            print(f"  - Found placeholder: {placeholder}")
+            path = placeholder.split(".")
             source = path[0]
-            key = path[1]
+            
+            resolved_value = ''
             if source == "context":
-                return str(context.get(key, ''))
-            elif key == "output":
-                return str(results.get(source, {}).get("output", ''))
-            return match.group(0)
-        
-        if isinstance(value, str):
-            return re.sub(r"\{\{(.*?)\}\}", replace_func, value)
-        return value
+                key = path[1]
+                resolved_value = context.get(key, '')
+                print(f"    - Source: context, Key: {key}, Value: '{resolved_value}'")
+            else:
+                # Handle results from previous nodes
+                step_result = results.get(source)
+                print(f"    - Source: results, Step: {source}, Result: {step_result}")
+                if step_result:
+                    # Drill down to find the actual output value
+                    output_value = step_result.get("output")
+                    if isinstance(output_value, dict):
+                        # Handle nested results like from an LLM call
+                        resolved_value = output_value.get("content", '')
+                    elif output_value is None:
+                        resolved_value = ''
+                    else:
+                        resolved_value = output_value
+                print(f"    - Resolved value: '{resolved_value}'")
+
+            return str(resolved_value)
+
+        resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
+        print(f"DEBUG: Final resolved string: '{resolved_string}'")
+        return resolved_string
 
     def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
         expression = node_data.get("expression", "")
@@ -126,31 +150,51 @@ class WorkflowExecutionService:
             return {"error": f"Error retrieving knowledge: {e}"}
 
     def _execute_conditional_node(self, node_data: dict, context: dict, results: dict):
-        condition = node_data.get("condition", "")
-        resolved_condition = self._resolve_placeholders(condition, context, results)
+        variable_placeholder = node_data.get("variable", "")
+        operator = node_data.get("operator", "equals")
+        comparison_value = node_data.get("value", "")
 
-        # Prepare variables for numexpr evaluation
-        # numexpr requires variables to be directly in the scope or passed as a dictionary
-        # We will flatten context and results into a single dict for numexpr
-        eval_vars = {}
-        for k, v in context.items():
-            eval_vars[f"context_{k}"] = v
-        for k, v in results.items():
-            eval_vars[f"results_{k}"] = v
+        # Resolve the variable placeholder to get the actual value from the context or results
+        actual_value = self._resolve_placeholders(variable_placeholder, context, results)
 
-        # Replace {{context.var}} with context_var for numexpr
-        # Replace {{step_id.output}} with results_step_id for numexpr
-        numexpr_condition = resolved_condition
-        numexpr_condition = re.sub(r"\{\{context\.(.*?)\}\}", r"context_\1", numexpr_condition)
-        numexpr_condition = re.sub(r"\{\{(.*?)\.output\}\}", r"results_\1", numexpr_condition)
+        print(f"DEBUG: Executing conditional node:")
+        print(f"  - Variable '{variable_placeholder}' resolved to: '{actual_value}' (type: {type(actual_value)})")
+        print(f"  - Operator: '{operator}'")
+        print(f"  - Comparison Value: '{comparison_value}' (type: {type(comparison_value)})")
 
+        # Coerce types for comparison where possible
         try:
-            # Use numexpr for safer evaluation
-            result = numexpr.evaluate(numexpr_condition, local_dict=eval_vars).item()
-        except Exception as e:
-            return {"error": f"Error evaluating condition with numexpr: {e}"}
+            # Try to convert comparison_value to the type of actual_value if it's a number
+            if isinstance(actual_value, (int, float)):
+                comparison_value = type(actual_value)(comparison_value)
+        except (ValueError, TypeError):
+            # If conversion fails, proceed with string comparison
+            pass
 
-        return {"output": bool(result)}
+        result = False
+        if operator == "equals":
+            result = actual_value == comparison_value
+        elif operator == "not_equals":
+            result = actual_value != comparison_value
+        elif operator == "contains":
+            result = str(comparison_value) in str(actual_value)
+        elif operator == "greater_than":
+            try:
+                result = float(actual_value) > float(comparison_value)
+            except (ValueError, TypeError):
+                result = False # Cannot compare non-numeric values
+        elif operator == "less_than":
+            try:
+                result = float(actual_value) < float(comparison_value)
+            except (ValueError, TypeError):
+                result = False # Cannot compare non-numeric values
+        elif operator == "is_set":
+            result = actual_value is not None and actual_value != ''
+        elif operator == "is_not_set":
+            result = actual_value is None or actual_value == ''
+        
+        print(f"  - Condition evaluated to: {result}")
+        return {"output": result}
 
     def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
         url = node_data.get("url", "")
@@ -353,7 +397,9 @@ class WorkflowExecutionService:
                 # The get_next_node method will handle routing to the error path if it exists
                 pass
 
+            print(f"DEBUG: About to call get_next_node for node '{current_node_id}' with result: {result}")
             current_node_id = graph_engine.get_next_node(current_node_id, result)
+            print(f"DEBUG: get_next_node returned: {current_node_id}")
 
         # Finalizing the workflow
         session_update = ConversationSessionUpdate(status='completed', context=context)
