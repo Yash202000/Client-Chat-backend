@@ -2,11 +2,16 @@ import json
 import re
 import uuid
 from sqlalchemy.orm import Session
+from app.models import workflow
 from app.models.workflow import Workflow
 from app.models.tool import Tool
-from app.services import tool_service, conversation_session_service
+from app.services import tool_service, conversation_session_service, knowledge_base_service, workflow_service
 from app.schemas.conversation_session import ConversationSessionUpdate
+from app.services.graph_execution_engine import GraphExecutionEngine
 from app.services.llm_tool_service import LLMToolService
+
+import requests
+import numexpr
 
 class WorkflowExecutionService:
     def __init__(self, db: Session):
@@ -65,86 +70,294 @@ class WorkflowExecutionService:
             return re.sub(r"\{\{(.*?)\}\}", replace_func, value)
         return value
 
-    def execute_workflow(self, workflow: Workflow, user_message: str, conversation_id: str = None):
+    def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
+        expression = node_data.get("expression", "")
+        output_variable = node_data.get("output_variable", "output")
+
+        # Create a safe execution environment for eval
+        safe_globals = {"__builtins__": None}
+        safe_locals = {"context": context, "results": results}
+
+        try:
+            # Resolve placeholders in the expression before evaluation
+            resolved_expression = self._resolve_placeholders(expression, context, results)
+            
+            # Evaluate the expression
+            manipulated_data = eval(resolved_expression, safe_globals, safe_locals)
+            
+            # Store the result in the context
+            context[output_variable] = manipulated_data
+            
+            return {"output": manipulated_data}
+        except Exception as e:
+            return {"error": f"Error manipulating data: {e}"}
+
+    def _execute_code_node(self, node_data: dict, context: dict, results: dict):
+        code = node_data.get("code", "")
+        resolved_code = self._resolve_placeholders(code, context, results)
+
+        execution_scope = {
+            "context": context,
+            "results": results,
+            "db": self.db,
+            "output": None # To capture the output of the code
+        }
+        try:
+            exec(resolved_code, execution_scope)
+            return {"output": execution_scope.get("output", "Code executed successfully.")}
+        except Exception as e:
+            return {"error": f"Error executing code: {e}"}
+
+    def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict):
+        knowledge_base_id = node_data.get("knowledge_base_id")
+        query = node_data.get("query", "")
+        resolved_query = self._resolve_placeholders(query, context, results)
+
+        if not knowledge_base_id:
+            return {"error": "Knowledge Base ID is required for knowledge retrieval node."}
+
+        try:
+            # Assuming knowledge_base_service.query_knowledge_base exists and returns relevant documents
+            retrieved_docs = knowledge_base_service.query_knowledge_base(self.db, knowledge_base_id, resolved_query)
+            # Format the retrieved documents as a string or a list of strings
+            formatted_docs = "\n\n".join([doc.content for doc in retrieved_docs]) # Adjust based on actual doc structure
+            return {"output": formatted_docs}
+        except Exception as e:
+            return {"error": f"Error retrieving knowledge: {e}"}
+
+    def _execute_conditional_node(self, node_data: dict, context: dict, results: dict):
+        condition = node_data.get("condition", "")
+        resolved_condition = self._resolve_placeholders(condition, context, results)
+
+        # Prepare variables for numexpr evaluation
+        # numexpr requires variables to be directly in the scope or passed as a dictionary
+        # We will flatten context and results into a single dict for numexpr
+        eval_vars = {}
+        for k, v in context.items():
+            eval_vars[f"context_{k}"] = v
+        for k, v in results.items():
+            eval_vars[f"results_{k}"] = v
+
+        # Replace {{context.var}} with context_var for numexpr
+        # Replace {{step_id.output}} with results_step_id for numexpr
+        numexpr_condition = resolved_condition
+        numexpr_condition = re.sub(r"\{\{context\.(.*?)\}\}", r"context_\1", numexpr_condition)
+        numexpr_condition = re.sub(r"\{\{(.*?)\.output\}\}", r"results_\1", numexpr_condition)
+
+        try:
+            # Use numexpr for safer evaluation
+            result = numexpr.evaluate(numexpr_condition, local_dict=eval_vars).item()
+        except Exception as e:
+            return {"error": f"Error evaluating condition with numexpr: {e}"}
+
+        return {"output": bool(result)}
+
+    def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
+        url = node_data.get("url", "")
+        method = node_data.get("method", "GET").upper()
+        headers_str = node_data.get("headers", "{}")
+        body_str = node_data.get("body", "{}")
+
+        resolved_url = self._resolve_placeholders(url, context, results)
+        resolved_headers_str = self._resolve_placeholders(headers_str, context, results)
+        resolved_body_str = self._resolve_placeholders(body_str, context, results)
+
+        try:
+            headers = json.loads(resolved_headers_str)
+        except json.JSONDecodeError:
+            return {"error": f"Invalid JSON in headers: {resolved_headers_str}"}
+
+        try:
+            body = json.loads(resolved_body_str) if method in ["POST", "PUT"] else None
+        except json.JSONDecodeError:
+            return {"error": f"Invalid JSON in body: {resolved_body_str}"}
+
+        try:
+            response = None
+            if method == "GET":
+                response = requests.get(resolved_url, headers=headers)
+            elif method == "POST":
+                response = requests.post(resolved_url, headers=headers, json=body)
+            elif method == "PUT":
+                response = requests.put(resolved_url, headers=headers, json=body)
+            elif method == "DELETE":
+                response = requests.delete(resolved_url, headers=headers)
+            else:
+                return {"error": f"Unsupported HTTP method: {method}"}
+
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            return {"output": response.json() if response.headers.get('Content-Type') == 'application/json' else response.text}
+        except requests.exceptions.RequestException as e:
+            return {"error": f"HTTP request failed: {e}"}
+        except Exception as e:
+            return {"error": f"Error executing HTTP request node: {e}"}
+
+    def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
+        prompt = node_data.get("prompt", "")
+        resolved_prompt = self._resolve_placeholders(prompt, context, results)
+
+        # 1. Get the system prompt from the agent associated with the workflow
+        system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
+
+        # 2. Get the chat history
+        chat_history = []
+        if conversation_id:
+            # Assuming a function exists to get chat messages by conversation_id
+            # This might need to be created in chat_service.py
+            history_messages = conversation_session_service.get_chat_history(self.db, conversation_id)
+            for msg in history_messages:
+                role = "assistant" if msg.sender == "agent" else msg.sender
+                chat_history.append({"role": role, "content": msg.message})
+
+        # 3. Get the tools associated with the agent
+        agent_tools = workflow.agent.tools if workflow.agent else []
+
+        llm_response = self.llm_tool_service.execute(
+            model=node_data.get("model"),
+            system_prompt=system_prompt,
+            chat_history=chat_history,
+            user_prompt=resolved_prompt,
+            tools=agent_tools,
+            knowledge_base_id=node_data.get("knowledge_base_id"),
+            company_id=company_id
+        )
+
+        return {"output": llm_response}
+
+    def execute_workflow(self, workflow_id: int, user_message: str, conversation_id: str = None):
+        workflow = workflow_service.get_workflow(self.db, workflow_id)
+        if not workflow:
+            print(f"DEBUG: Workflow with ID {workflow_id} not found.")
+            return {"error": f"Workflow with ID {workflow_id} not found."}
+
+        print(f"DEBUG: Fetched workflow: {workflow.name} (ID: {workflow.id})")
+        if hasattr(workflow, 'agent') and workflow.agent:
+            print(f"DEBUG: Workflow agent: {workflow.agent.name} (ID: {workflow.agent.id})")
+            print(f"DEBUG: Workflow agent company_id: {workflow.agent.company_id}")
+        else:
+            print("DEBUG: Workflow agent is None or not loaded.")
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
 
         session = conversation_session_service.get_or_create_session(
-            self.db, conversation_id, workflow.id
+            self.db, conversation_id, workflow.id, contact_id=1, channel="test", company_id=workflow.agent.company_id
         )
 
         context = session.context or {}
         results = {}
+
+        graph_engine = GraphExecutionEngine(workflow.visual_steps)
         
-        # If resuming, the user's message might need to be saved to a variable
         if session.status == 'paused' and session.next_step_id:
-            # The 'listen' node should have defined where to save the input
-            # We find the listen node that pointed to this next_step_id
-            workflow_steps = workflow.steps.get("steps", {})
-            listen_step_id = None
-            listen_step_config = None
-            for step_id, step_config in workflow_steps.items():
-                if step_config.get("next_step_on_success") == session.next_step_id:
-                    listen_step_id = step_id
-                    listen_step_config = step_config
+            current_node_id = session.next_step_id
+            # The user_message is the result of the paused step
+            result_from_pause = {"output": user_message}
+            
+            # Find the node that caused the pause to get the variable name
+            previous_node_id = None
+            for node_id, node_info in graph_engine.nodes.items():
+                # Check if this node's next step on success is the paused step
+                # This is a simplification; a more robust way might be needed for complex graphs
+                next_node_in_graph = graph_engine.get_next_node(node_id, result_from_pause)
+                if next_node_in_graph == session.next_step_id:
+                    previous_node_id = node_id
                     break
             
-            if listen_step_config:
-                output_variable = listen_step_config.get("params", {}).get("save_to_variable")
-                if output_variable:
-                    context[output_variable] = user_message
+            if previous_node_id:
+                previous_node = graph_engine.nodes[previous_node_id]
+                if previous_node.get('type') in ['listen', 'prompt']:
+                    output_variable = previous_node.get('data', {}).get('params', {}).get('save_to_variable')
+                    if output_variable:
+                        context[output_variable] = user_message
+        else:
+            current_node_id = graph_engine.find_start_node()
 
-        current_step_name = session.next_step_id or workflow.steps.get("first_step")
-        if not current_step_name:
-            # Fallback for older workflows or if first_step is missing
-            workflow_steps = workflow.steps.get("steps", {})
-            if workflow_steps:
-                current_step_name = next(iter(workflow_steps))
-            else:
-                return {"error": "Workflow has no steps."}
+        last_executed_node_id = None
+        while current_node_id:
+            node = graph_engine.nodes[current_node_id]
+            node_type = node.get("type")
+            node_data = node.get("data", {})
 
-        while current_step_name:
-            workflow_steps = workflow.steps.get("steps", {})
-            step = workflow_steps.get(current_step_name)
-            if not step:
-                break
+            result = None
+            if node_type == "start":
+                initial_input_variable = node_data.get("initial_input_variable", "user_message")
+                context[initial_input_variable] = user_message
+                result = {"output": "Start node processed"} # Indicate success, no real output
+            elif node_type == "tool":
+                tool_name = node_data.get("tool_name")
+                raw_params = node_data.get("parameters", {})
+                resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
+                result = self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id)
 
-            tool_name = step.get("tool")
-            raw_params = step.get("params", {})
+            elif node_type == "http_request":
+                result = self._execute_http_request_node(node_data, context, results)
 
-            # Resolve parameters using context and previous step results
-            resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
+            elif node_type == "llm":
+                result = self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
 
-            tool_result = self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id)
-            results[current_step_name] = tool_result
+            elif node_type == "data_manipulation":
+                result = self._execute_data_manipulation_node(node_data, context, results)
 
-            if tool_result.get("status") in ["paused_for_input", "paused_for_prompt"]:
-                # Workflow is pausing, save state and exit
+            elif node_type == "code":
+                result = self._execute_code_node(node_data, context, results)
+
+            elif node_type == "knowledge":
+                result = self._execute_knowledge_retrieval_node(node_data, context, results)
+
+            elif node_type == "condition":
+                result = self._execute_conditional_node(node_data, context, results)
+
+            elif node_type == "listen":
+                result = {"status": "paused_for_input"}
+
+            elif node_type == "prompt":
+                params = node_data.get("params", {})
+                options_str = params.get("options", "")
+                options_list = [opt.strip() for opt in options_str.split(',')] if options_str else []
+                result = {
+                    "status": "paused_for_prompt",
+                    "prompt": {
+                        "text": params.get("prompt_text", "Please provide input."),
+                        "options": options_list
+                    }
+                }
+            
+            elif node_type == "output":
+                output_value = node_data.get("output_value", "")
+                resolved_output = self._resolve_placeholders(output_value, context, results)
+                result = {"output": resolved_output}
+
+            results[current_node_id] = result
+            last_executed_node_id = current_node_id
+
+            if result and result.get("status") in ["paused_for_input", "paused_for_prompt"]:
+                next_node_id = graph_engine.get_next_node(current_node_id, result)
                 session_update = ConversationSessionUpdate(
-                    next_step_id=step.get("next_step_on_success"),
+                    next_step_id=next_node_id,
                     context=context,
                     status='paused'
                 )
                 conversation_session_service.update_session(self.db, conversation_id, session_update)
                 
-                # Return a rich object to the caller
                 response_payload = {
-                    "status": tool_result.get("status"),
-                    "conversation_id": conversation_id
+                    "status": result.get("status"),
+                    "conversation_id": conversation_id,
+                    "next_node_id": next_node_id
                 }
-                if "prompt" in tool_result:
-                    response_payload["prompt"] = tool_result["prompt"]
+                if "prompt" in result:
+                    response_payload["prompt"] = result["prompt"]
                 
                 return response_payload
 
-            if "error" in tool_result:
-                current_step_name = step.get("next_step_on_failure")
-            else:
-                current_step_name = step.get("next_step_on_success")
+            if result and "error" in result:
+                # The get_next_node method will handle routing to the error path if it exists
+                pass
 
-        # Workflow finished, update session to completed
+            current_node_id = graph_engine.get_next_node(current_node_id, result)
+
+        # Finalizing the workflow
         session_update = ConversationSessionUpdate(status='completed', context=context)
         conversation_session_service.update_session(self.db, conversation_id, session_update)
 
-        final_output = results.get(list(results.keys())[-1], {}).get("output", "Workflow completed.")
+        final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

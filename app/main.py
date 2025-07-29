@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.core.database import Base, engine
+from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
@@ -39,7 +39,6 @@ async def read_root():
     return {"message": "AgentConnect backend is running"}
 
 
-from app.core.database import SessionLocal
 from app.services import company_service, user_service, agent_service
 from app.schemas import company as schemas_company, user as schemas_user, agent as schemas_agent
 

@@ -114,7 +114,7 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 agent = agents[0]
 
                 # 8. Generate agent response
-                agent_response_text = agent_execution_service.generate_agent_response(
+                agent_response_text = await agent_execution_service.generate_agent_response(
                     db, agent.id, session.conversation_id, company_id, message_text
                 )
 

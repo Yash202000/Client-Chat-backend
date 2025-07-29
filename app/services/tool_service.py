@@ -86,3 +86,5 @@ def delete_tool(db: Session, tool_id: int, company_id: int):
         db.delete(db_tool)
         db.commit()
     return db_tool
+
+

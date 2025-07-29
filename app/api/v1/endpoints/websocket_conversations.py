@@ -271,7 +271,7 @@ async def public_websocket_endpoint(
                     continue
 
                 execution_result = workflow_exec_service.execute_workflow(
-                    workflow=workflow,
+                    workflow_id=workflow.id,
                     user_message=user_message,
                     conversation_id=session_id
                 )

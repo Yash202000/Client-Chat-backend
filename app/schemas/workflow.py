@@ -6,7 +6,7 @@ class WorkflowBase(BaseModel):
     description: Optional[str] = None
     agent_id: int
     steps: Dict[str, Any] # Stores the executable workflow logic
-    visual_steps: Optional[str] = None # Stores the React Flow JSON for visual representation
+    visual_steps: Optional[Dict[str, Any]] = None # Stores the React Flow JSON for visual representation
 
 class WorkflowCreate(WorkflowBase):
     pass
@@ -15,7 +15,7 @@ class WorkflowUpdate(WorkflowBase):
     name: Optional[str] = None
     agent_id: Optional[int] = None
     steps: Optional[Dict[str, Any]] = None
-    visual_steps: Optional[str] = None
+    visual_steps: Optional[Dict[str, Any]] = None
 
 class Workflow(WorkflowBase):
     id: int

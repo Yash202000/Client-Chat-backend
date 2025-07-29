@@ -1,5 +1,5 @@
 import json
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models import workflow as models_workflow, agent as models_agent
 from app.schemas import workflow as schemas_workflow
 from app.services import vectorization_service
@@ -16,15 +16,19 @@ def _db_workflow_to_schema(db_workflow: models_workflow.Workflow) -> models_work
             except json.JSONDecodeError:
                 # If parsing fails, return an empty dict or handle as an error
                 db_workflow.steps = {}
-        # visual_steps is expected to be a string in the schema, so no parsing is needed.
+        if isinstance(db_workflow.visual_steps, str):
+            try:
+                db_workflow.visual_steps = json.loads(db_workflow.visual_steps)
+            except json.JSONDecodeError:
+                db_workflow.visual_steps = {}
     return db_workflow
 
 def get_workflow(db: Session, workflow_id: int):
-    db_workflow = db.query(models_workflow.Workflow).filter(models_workflow.Workflow.id == workflow_id).first()
+    db_workflow = db.query(models_workflow.Workflow).options(joinedload(models_workflow.Workflow.agent)).filter(models_workflow.Workflow.id == workflow_id).first()
     return _db_workflow_to_schema(db_workflow)
 
 def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    db_workflows = db.query(models_workflow.Workflow).join(models_agent.Agent).filter(
+    db_workflows = db.query(models_workflow.Workflow).options(joinedload(models_workflow.Workflow.agent)).join(models_agent.Agent).filter(
         models_agent.Agent.company_id == company_id
     ).offset(skip).limit(limit).all()
     return [_db_workflow_to_schema(wf) for wf in db_workflows]
@@ -53,8 +57,8 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
             if key == 'steps' and isinstance(value, dict):
                 setattr(db_workflow, key, json.dumps(value))
             # 'visual_steps' is sent as a string, so it can be set directly
-            elif key == 'visual_steps':
-                 setattr(db_workflow, key, value)
+            elif key == 'visual_steps' and isinstance(value, dict):
+                 setattr(db_workflow, key, json.dumps(value))
             else:
                 setattr(db_workflow, key, value)
         db.commit()
@@ -110,9 +114,10 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
     # You might want to set a threshold for similarity
     # The current threshold is 0.2, which might be too high for some cases.
     # Consider adjusting this based on your data and desired behavior.
-    if highest_similarity > 0.2: # Lowered threshold to 0.4
+    if highest_similarity > 0.2:
         print(f"DEBUG: Best match found: '{best_match.name}' with similarity: {highest_similarity}")
-        return best_match
+        # Re-fetch the best match to ensure agent is eagerly loaded
+        return get_workflow(db, best_match.id)
     else:
         print(f"DEBUG: No workflow found above similarity threshold (0.2). Highest: {highest_similarity}")
         return None

@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from app.models.conversation_session import ConversationSession
+from app.models.chat_message import ChatMessage
 from app.schemas.conversation_session import ConversationSessionCreate, ConversationSessionUpdate
 
 def get_session(db: Session, conversation_id: str) -> ConversationSession:
@@ -7,6 +8,12 @@ def get_session(db: Session, conversation_id: str) -> ConversationSession:
     Retrieves a conversation session by its conversation_id.
     """
     return db.query(ConversationSession).filter(ConversationSession.conversation_id == conversation_id).first()
+
+def get_chat_history(db: Session, conversation_id: str, limit: int = 20) -> list[ChatMessage]:
+    """
+    Retrieves the chat history for a given conversation_id.
+    """
+    return db.query(ChatMessage).filter(ChatMessage.session_id == conversation_id).order_by(ChatMessage.timestamp.asc()).limit(limit).all()
 
 def create_session(db: Session, session: ConversationSessionCreate) -> ConversationSession:
     """
@@ -40,20 +47,17 @@ def update_session(db: Session, conversation_id: str, session_update: Conversati
 
 def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int) -> ConversationSession:
     """
-    Gets an active session for a contact on a specific channel, otherwise creates a new one.
-    This is key for omnichannel session management.
+    Gets a session by conversation_id. If not found, creates a new one.
     """
-    # Look for an existing active session for this contact on this channel
+    # 1. Try to get the session by its unique conversation_id
     db_session = db.query(ConversationSession).filter(
-        ConversationSession.contact_id == contact_id,
-        ConversationSession.channel == channel,
-        ConversationSession.status == 'active'
+        ConversationSession.conversation_id == conversation_id
     ).first()
 
     if db_session:
         return db_session
 
-    # If no active session exists, create a new one
+    # 2. If no session found with that conversation_id, create a new one
     session_create = ConversationSessionCreate(
         conversation_id=conversation_id,
         workflow_id=workflow_id,
