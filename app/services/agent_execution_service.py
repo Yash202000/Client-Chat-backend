@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema
 import json
-from app.api.v1.endpoints.websocket_conversations import manager
+from app.core.websockets import manager
 
 # Import provider modules directly and create a provider map
 from app.llm_providers import groq_provider, gemini_provider

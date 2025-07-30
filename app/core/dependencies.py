@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.core import security
 from app.core.config import settings
 from app.schemas import token as schemas_token
-from app.services import user_service
-from app.models import user as models_user
+from app.services import user_service, api_key_service
+from app.models import user as models_user, company as models_company
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -18,6 +18,23 @@ def get_db():
         yield db
     finally:
         db.close()
+
+async def get_current_company_from_api_key(
+    x_api_key: str = Header(...), db: Session = Depends(get_db)
+) -> models_company.Company:
+    if not x_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key is missing",
+        )
+    api_key = api_key_service.get_api_key_by_key(db, key=x_api_key)
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+    return api_key.company
+
 
 async def get_current_user(
     db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)

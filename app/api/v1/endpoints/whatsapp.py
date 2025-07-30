@@ -87,9 +87,10 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                 # 4. Broadcast the update to all connected clients for the company
                 session_update_schema = schemas_websocket.WebSocketSessionUpdate.from_orm(session)
-                await manager.broadcast_to_company(
+                await manager.broadcast_to_session(
                     company_id, 
-                    json.dumps({"type": "new_message", "session": session_update_schema.dict(by_alias=True)})
+                    json.dumps({"type": "new_message", "session": session_update_schema.dict(by_alias=True)}),
+                    "agent"
                 )
 
                 # 5. Broadcast the new message to the session-specific WebSocket

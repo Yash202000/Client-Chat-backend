@@ -91,10 +91,18 @@ def update_conversation_assignee(db: Session, session_id: str, user_id: int, com
     db.commit()
     return True
 
-def update_conversation_feedback(db: Session, session_id: str, feedback_rating: int, feedback_notes: str, company_id: int):
-    db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id,
-        models_chat_message.ChatMessage.company_id == company_id
-    ).update({"feedback_rating": feedback_rating, "feedback_notes": feedback_notes})
-    db.commit()
-    return True
+from app.core.websockets import manager
+import json
+
+async def send_proactive_message(db: Session, session_id: str, message_text: str):
+    """
+    Sends a proactive message to a user in a specific session.
+    """
+    # Note: Proactive messages are sent from the "agent"
+    # We can enhance this later to allow specifying the sender.
+    message_data = {
+        "type": "chat_message",
+        "sender": "agent",
+        "message": message_text,
+    }
+    await manager.broadcast_to_session(session_id, json.dumps(message_data),sender_type='agent')

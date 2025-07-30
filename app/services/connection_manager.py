@@ -1,24 +1,46 @@
-from typing import Dict, List
+import json
+from typing import Any, Dict, List
 from fastapi import WebSocket
+
 
 class ConnectionManager:
     def __init__(self):
-        # Structure: {company_id: [WebSocket, WebSocket, ...]}
-        self.active_connections: Dict[int, List[WebSocket]] = {}
+        self.active_connections: Dict[str, List[Dict[str, Any]]] = {}
 
-    async def connect(self, websocket: WebSocket, company_id: int):
+    async def connect(self, websocket: WebSocket, session_id: str, user_type: str):
         await websocket.accept()
-        if company_id not in self.active_connections:
-            self.active_connections[company_id] = []
-        self.active_connections[company_id].append(websocket)
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = []
+        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type})
 
-    def disconnect(self, websocket: WebSocket, company_id: int):
-        if company_id in self.active_connections:
-            self.active_connections[company_id].remove(websocket)
+    def disconnect(self, websocket: WebSocket, session_id: str):
+        if session_id in self.active_connections:
+            connection_to_remove = next((c for c in self.active_connections[session_id] if c["websocket"] == websocket), None)
+            if connection_to_remove:
+                self.active_connections[session_id].remove(connection_to_remove)
+                if not self.active_connections[session_id]:
+                    del self.active_connections[session_id]
 
-    async def broadcast_to_company(self, company_id: int, message: str):
-        if company_id in self.active_connections:
-            for connection in self.active_connections[company_id]:
-                await connection.send_text(message)
+    async def broadcast_to_session(self, session_id: str, message: str, sender_type: str):
+        print(f"[ConnectionManager] Broadcasting to session {session_id}. Message: {message[:50]}...")
+        if session_id in self.active_connections:
+            message_data = json.loads(message)
+            if message_data.get('message_type') == 'note':
+                connections_to_send = [c for c in self.active_connections[session_id] if c["user_type"] == "agent"]
+                print(f"[ConnectionManager] Sending note to {len(connections_to_send)} agent connections in session {session_id}")
+            else:
+                connections_to_send = self.active_connections[session_id]
+                print(f"[ConnectionManager] Sending message to {len(connections_to_send)} connections in session {session_id}")
+            
+            for connection in connections_to_send:
+                try:
+                    await connection["websocket"].send_text(message)
+                    print(f"[ConnectionManager] Sent message to websocket: {connection["websocket"]}")
+                except Exception as e:
+                    print(f"[ConnectionManager] Error sending message to websocket: {e}")
+                    # Optionally remove broken connection
+                    # self.active_connections[session_id].remove(connection)
+        else:
+            print(f"[ConnectionManager] No active connections for session {session_id}")
 
 manager = ConnectionManager()
