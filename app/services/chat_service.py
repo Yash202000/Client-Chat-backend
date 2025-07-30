@@ -100,9 +100,5 @@ async def send_proactive_message(db: Session, session_id: str, message_text: str
     """
     # Note: Proactive messages are sent from the "agent"
     # We can enhance this later to allow specifying the sender.
-    message_data = {
-        "type": "chat_message",
-        "sender": "agent",
-        "message": message_text,
-    }
-    await manager.broadcast_to_session(session_id, json.dumps(message_data),sender_type='agent')
+    message_data = {"message": message_text, "message_type": "message", "sender": "agent"}
+    await manager.broadcast_to_session(session_id, json.dumps(message_data), sender_type='agent')
