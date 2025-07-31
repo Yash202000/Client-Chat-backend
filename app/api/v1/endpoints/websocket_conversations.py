@@ -142,6 +142,20 @@ async def websocket_endpoint(
                     await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
                     print(f"[websocket_conversations] Broadcasted prompt to session: {session_id}")
 
+                elif execution_result.get("status") == "paused_for_form":
+                    form_data = execution_result.get("form", {})
+                    form_message = {
+                        "message": form_data.get("title"),
+                        "message_type": "form",
+                        "fields": form_data.get("fields", []),
+                        "sender": "agent",
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "company_id": company_id,
+                    }
+                    await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
+                    print(f"[websocket_conversations] Broadcasted form to session: {session_id}")
+
                 # If the status is "paused_for_input", we do nothing and just wait for the next user message.
 
     except WebSocketDisconnect:
@@ -182,6 +196,10 @@ async def public_websocket_endpoint(
                 message_data = json.loads(data)
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
+
+                # 👇 Sanitize user_message
+                if not isinstance(user_message, str):
+                    user_message = json.dumps(user_message)
             except (json.JSONDecodeError, AttributeError):
                 print(f"[public_websocket] Received invalid data from session #{session_id}: {data}")
                 continue
@@ -219,9 +237,16 @@ async def public_websocket_endpoint(
                 )
 
                 if not workflow:
+                    # If no specific workflow matches, provide a generic response
                     print(f"[public_websocket] No specific workflow found for message: '{user_message}'")
+                    
+                    # Ensure the message passed to the agent is a string.
+                    message_for_agent = message_data['message']
+                    if not isinstance(message_for_agent, str):
+                        message_for_agent = json.dumps(message_for_agent)
+
                     agent_response_text = await agent_execution_service.generate_agent_response(
-                        db, agent_id, session_id, company_id, message_data['message']
+                        db, agent_id, session_id, company_id, message_for_agent
                     )
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
@@ -237,6 +262,9 @@ async def public_websocket_endpoint(
 
                 if execution_result.get("status") == "completed":
                     agent_response_text = execution_result.get("response", "Workflow finished.")
+                                    # 👇 Sanitize user_message
+                    if not isinstance(agent_response_text, str):
+                        agent_response_text = json.dumps(agent_response_text)
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
@@ -255,6 +283,20 @@ async def public_websocket_endpoint(
                     }
                     await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
                     print(f"[public_websocket] Broadcasted prompt to session: {session_id}")
+
+                elif execution_result.get("status") == "paused_for_form":
+                    form_data = execution_result.get("form", {})
+                    form_message = {
+                        "message": form_data.get("title"),
+                        "message_type": "form",
+                        "fields": form_data.get("fields", []),
+                        "sender": "agent",
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "company_id": company_id,
+                    }
+                    await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
+                    print(f"[public_websocket] Broadcasted form to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

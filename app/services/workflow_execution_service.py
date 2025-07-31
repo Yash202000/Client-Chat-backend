@@ -309,7 +309,7 @@ class WorkflowExecutionService:
             
             if previous_node_id:
                 previous_node = graph_engine.nodes[previous_node_id]
-                if previous_node.get('type') in ['listen', 'prompt']:
+                if previous_node.get('type') in ['listen', 'prompt', 'form']:
                     output_variable = previous_node.get('data', {}).get('params', {}).get('save_to_variable')
                     if output_variable:
                         context[output_variable] = user_message
@@ -366,6 +366,16 @@ class WorkflowExecutionService:
                     }
                 }
             
+            elif node_type == "form":
+                params = node_data.get("params", {})
+                result = {
+                    "status": "paused_for_form",
+                    "form": {
+                        "title": params.get("title", "Please fill out this form."),
+                        "fields": params.get("fields", [])
+                    }
+                }
+
             elif node_type == "output":
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
@@ -374,7 +384,7 @@ class WorkflowExecutionService:
             results[current_node_id] = result
             last_executed_node_id = current_node_id
 
-            if result and result.get("status") in ["paused_for_input", "paused_for_prompt"]:
+            if result and result.get("status") in ["paused_for_input", "paused_for_prompt", "paused_for_form"]:
                 next_node_id = graph_engine.get_next_node(current_node_id, result)
                 session_update = ConversationSessionUpdate(
                     next_step_id=next_node_id,
@@ -390,6 +400,8 @@ class WorkflowExecutionService:
                 }
                 if "prompt" in result:
                     response_payload["prompt"] = result["prompt"]
+                if "form" in result:
+                    response_payload["form"] = result["form"]
                 
                 return response_payload
 
