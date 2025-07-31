@@ -9,7 +9,6 @@ router = APIRouter()
 
 @router.post("/", response_model=schemas_workflow.Workflow)
 def create_workflow(workflow: schemas_workflow.WorkflowCreate, db: Session = Depends(get_db)):
-    print("create workflow post requst called")
     return workflow_service.create_workflow(db=db, workflow=workflow)
 
 @router.get("/", response_model=List[schemas_workflow.Workflow])
@@ -37,3 +36,25 @@ def delete_workflow(workflow_id: int, db: Session = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return {"message": "Workflow deleted successfully"}
+
+# --- Versioning Endpoints ---
+
+@router.post("/{workflow_id}/versions", response_model=schemas_workflow.Workflow)
+def create_workflow_version(workflow_id: int, db: Session = Depends(get_db)):
+    """
+    Creates a new, inactive version of an existing workflow.
+    """
+    new_version = workflow_service.create_new_version(db=db, parent_workflow_id=workflow_id)
+    if new_version is None:
+        raise HTTPException(status_code=404, detail="Workflow to version not found")
+    return new_version
+
+@router.put("/versions/{version_id}/activate", response_model=schemas_workflow.Workflow)
+def activate_workflow_version(version_id: int, db: Session = Depends(get_db)):
+    """
+    Activates a specific workflow version, deactivating all others in its family.
+    """
+    activated_version = workflow_service.set_active_version(db=db, version_id=version_id)
+    if activated_version is None:
+        raise HTTPException(status_code=404, detail="Workflow version not found")
+    return activated_version

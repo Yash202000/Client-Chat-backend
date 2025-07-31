@@ -269,28 +269,36 @@ class WorkflowExecutionService:
         return {"output": llm_response}
 
     def execute_workflow(self, workflow_id: int, user_message: str, conversation_id: str = None):
-        workflow = workflow_service.get_workflow(self.db, workflow_id)
-        if not workflow:
+        workflow_obj = workflow_service.get_workflow(self.db, workflow_id)
+        if not workflow_obj:
             print(f"DEBUG: Workflow with ID {workflow_id} not found.")
             return {"error": f"Workflow with ID {workflow_id} not found."}
 
-        print(f"DEBUG: Fetched workflow: {workflow.name} (ID: {workflow.id})")
-        if hasattr(workflow, 'agent') and workflow.agent:
-            print(f"DEBUG: Workflow agent: {workflow.agent.name} (ID: {workflow.agent.id})")
-            print(f"DEBUG: Workflow agent company_id: {workflow.agent.company_id}")
+        print(f"DEBUG: Fetched workflow: {workflow_obj.name} (ID: {workflow_obj.id})")
+        if hasattr(workflow_obj, 'agent') and workflow_obj.agent:
+            print(f"DEBUG: Workflow agent: {workflow_obj.agent.name} (ID: {workflow_obj.agent.id})")
+            print(f"DEBUG: Workflow agent company_id: {workflow_obj.agent.company_id}")
         else:
             print("DEBUG: Workflow agent is None or not loaded.")
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
 
         session = conversation_session_service.get_or_create_session(
-            self.db, conversation_id, workflow.id, contact_id=1, channel="test", company_id=workflow.agent.company_id
+            self.db, conversation_id, workflow_obj.id, contact_id=1, channel="test", company_id=workflow_obj.agent.company_id
         )
 
         context = session.context or {}
         results = {}
 
-        graph_engine = GraphExecutionEngine(workflow.visual_steps)
+        # Ensure visual_steps is a dictionary
+        visual_steps_data = workflow_obj.visual_steps
+        if isinstance(visual_steps_data, str):
+            try:
+                visual_steps_data = json.loads(visual_steps_data)
+            except json.JSONDecodeError:
+                return {"error": "Failed to parse workflow visual steps."}
+        
+        graph_engine = GraphExecutionEngine(visual_steps_data)
         
         if session.status == 'paused' and session.next_step_id:
             current_node_id = session.next_step_id
