@@ -1,37 +1,35 @@
+import os
 from cryptography.fernet import Fernet
 from app.core.config import settings
 
-# This is a simple implementation for demonstration purposes. 
-# In a production environment, use a more robust key management system.
+class VaultService:
+    def __init__(self):
+        # In a real production environment, the key should be loaded from a secure
+        # location (like a secret manager) and not hardcoded or stored in a .env file.
+        # For this project, we'll use the SECRET_KEY from the settings.
+        key = settings.SECRET_KEY.encode()
+        if len(key) < 32:
+            key = key.ljust(32, b'\0')
+        elif len(key) > 32:
+            key = key[:32]
+        
+        # Fernet keys must be 32 url-safe base64-encoded bytes.
+        # We'll use the SECRET_KEY and ensure it's the correct length.
+        # A more robust solution would generate a dedicated encryption key.
+        from base64 import urlsafe_b64encode
+        self.key = urlsafe_b64encode(key)
+        self.fernet = Fernet(self.key)
 
-# Ensure you have a secret key in your environment or config.
-# For example, you can generate one using: Fernet.generate_key().decode()
-SECRET_KEY = settings.SECRET_KEY
-if not SECRET_KEY:
-    raise ValueError("SECRET_KEY is not set in the environment variables.")
+    def encrypt(self, data: str) -> bytes:
+        """Encrypts a string and returns bytes."""
+        if not data:
+            return None
+        return self.fernet.encrypt(data.encode())
 
-cipher_suite = Fernet(SECRET_KEY.encode())
+    def decrypt(self, encrypted_data: bytes) -> str:
+        """Decrypts bytes and returns a string."""
+        if not encrypted_data:
+            return None
+        return self.fernet.decrypt(encrypted_data).decode()
 
-def encrypt_data(data: str) -> str:
-    """Encrypts a string."""
-    if not data:
-        return data
-    return cipher_suite.encrypt(data.encode()).decode()
-
-def decrypt_data(encrypted_data: str) -> str:
-    """Decrypts a string."""
-    if not encrypted_data:
-        return encrypted_data
-    return cipher_suite.decrypt(encrypted_data.encode()).decode()
-
-def encrypt_dict(data_dict: dict) -> dict:
-    """Encrypts all values in a dictionary."""
-    if not data_dict:
-        return {}
-    return {key: encrypt_data(value) for key, value in data_dict.items()}
-
-def decrypt_dict(encrypted_dict: dict) -> dict:
-    """Decrypts all values in a dictionary."""
-    if not encrypted_dict:
-        return {}
-    return {key: decrypt_data(value) for key, value in encrypted_dict.items()}
+vault_service = VaultService()

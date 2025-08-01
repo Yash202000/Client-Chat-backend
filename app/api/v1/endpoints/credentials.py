@@ -16,11 +16,12 @@ def create_credential(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_credential = credential_service.get_credential_by_provider_name(
-        db, provider_name=credential.provider_name, company_id=current_user.company_id
+    # Optional: Check if a credential with the same name already exists for the company
+    db_credential = credential_service.get_credential_by_service_name(
+        db, service_name=credential.service, company_id=current_user.company_id
     )
     if db_credential:
-        raise HTTPException(status_code=400, detail="Credential for this provider already exists")
+        raise HTTPException(status_code=400, detail="A credential for this service already exists.")
     return credential_service.create_credential(db=db, credential=credential, company_id=current_user.company_id)
 
 @router.get("/", response_model=List[schemas_credential.Credential])
@@ -62,7 +63,7 @@ def delete_credential(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_credential = credential_service.delete_credential(db, credential_id=credential_id, company_id=current_user.company_id)
-    if db_credential is None:
+    success = credential_service.delete_credential(db, credential_id=credential_id, company_id=current_user.company_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Credential not found")
     return None

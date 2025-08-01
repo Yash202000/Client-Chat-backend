@@ -5,6 +5,7 @@ from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema
 import json
 from app.core.websockets import manager
+from app.services.vault_service import vault_service
 
 # Import provider modules directly and create a provider map
 from app.llm_providers import groq_provider, gemini_provider
@@ -79,8 +80,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
 
     try:
         agent_api_key = None
-        if agent.credential and agent.credential.api_key:
-            agent_api_key = agent.credential.api_key
+        if agent.credential and agent.credential.encrypted_credentials:
+            agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials)
 
         llm_response = provider_module.generate_response(
             db=db,

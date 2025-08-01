@@ -12,7 +12,6 @@ from app.services.chat_service import (
 from app.services.credential_service import (
     create_credential,
     get_credential,
-    get_credential_by_provider_name,
     get_credentials,
     update_credential,
     delete_credential

@@ -3,22 +3,25 @@ from typing import Optional
 import datetime
 
 class CredentialBase(BaseModel):
-    provider_name: str
-    api_key: str # This will be excluded from the response model for security
+    name: str
+    service: str
 
 class CredentialCreate(CredentialBase):
-    pass
+    # This field is for receiving the secret from the user.
+    # It will be encrypted by the service and never stored in plain text.
+    credentials: str 
 
 class CredentialUpdate(BaseModel):
-    provider_name: Optional[str] = None
-    api_key: Optional[str] = None
+    name: Optional[str] = None
+    service: Optional[str] = None
+    # Optionally update the credentials
+    credentials: Optional[str] = None
 
-class Credential(BaseModel):
+class Credential(CredentialBase):
     id: int
-    provider_name: str
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
     class Config:
         orm_mode = True
-        exclude = {"api_key"} # Exclude api_key from the response
+        # Note: `encrypted_credentials` is not included here, so it's never exposed.
