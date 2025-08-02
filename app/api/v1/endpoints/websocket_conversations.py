@@ -8,8 +8,304 @@ from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
 from app.core.websockets import manager
+from app.services.stt_service import STTService
+from app.services.tts_service import TTSService
 
 router = APIRouter()
+
+import asyncio
+
+# (other imports)
+from app.services.stt_service import STTService
+from app.services.tts_service import TTSService
+
+# (router definition)
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from sqlalchemy.orm import Session
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service
+from app.services.workflow_execution_service import WorkflowExecutionService
+from app.schemas import chat_message as schemas_chat_message
+import json
+from typing import List, Dict, Any
+from app.core.dependencies import get_current_user_from_ws, get_db
+from app.models import user as models_user, conversation_session as models_conversation_session
+from app.core.websockets import manager
+from app.services.stt_service import STTService, GroqSTTService
+from app.services.tts_service import TTSService
+from fastapi import UploadFile
+import io
+
+router = APIRouter()
+
+import asyncio
+
+# (other imports)
+from app.services.stt_service import STTService
+from app.services.tts_service import TTSService
+
+# (router definition)
+
+@router.websocket("/voice/{company_id}/{agent_id}/{session_id}")
+async def voice_websocket_endpoint(
+    websocket: WebSocket,
+    company_id: int,
+    agent_id: int,
+    session_id: str,
+    user_type: str = Query(...),
+    voice_id: str = Query("21m00Tcm4TlvDq8ikWAM"), # Default voice
+    db: Session = Depends(get_db)
+):
+    # Fetch agent details to get the configured voice
+    agent = agent_service.get_agent(db, agent_id, company_id)
+    final_voice_id = voice_id
+    tts_provider = 'voice_engine' # Default provider
+    stt_provider = 'deepgram' # Default provider
+    if agent:
+        if agent.voice_id:
+            final_voice_id = agent.voice_id
+        if agent.tts_provider:
+            tts_provider = agent.tts_provider
+        if agent.stt_provider:
+            stt_provider = agent.stt_provider
+
+    await manager.connect(websocket, session_id, user_type)
+    
+    stt_service = None
+    if stt_provider == "deepgram":
+        stt_service = STTService(websocket)
+    else:
+        stt_service = GroqSTTService()
+
+    tts_service = TTSService()
+    
+    transcript_queue = asyncio.Queue()
+    audio_buffer = bytearray()
+    last_audio_time = None
+
+    async def handle_transcription():
+        if stt_provider == "deepgram":
+            if await stt_service.connect():
+                while True:
+                    try:
+                        message = await stt_service.deepgram_ws.receive_json()
+                        if message.get("type") == "Results":
+                            transcript = message["channel"]["alternatives"][0]["transcript"]
+                            if transcript and message.get("is_final", False):
+                                await transcript_queue.put(transcript)
+                    except Exception as e:
+                        print(f"Error receiving from STT service: {e}")
+                        break
+            await stt_service.close()
+        # Groq does not use a persistent connection for transcription
+
+    async def handle_audio_from_client():
+        nonlocal audio_buffer, last_audio_time
+        try:
+            while True:
+                audio_chunk = await websocket.receive_bytes()
+                last_audio_time = asyncio.get_event_loop().time()
+                if stt_provider == "deepgram":
+                    if stt_service.deepgram_ws and not stt_service.deepgram_ws.closed:
+                        await stt_service.deepgram_ws.send_bytes(audio_chunk)
+                    else:
+                        break
+                elif stt_provider == "groq":
+                    audio_buffer.extend(audio_chunk)
+
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            print(f"Error receiving audio from client: {e}")
+
+    async def process_groq_buffer():
+        nonlocal audio_buffer, last_audio_time
+        while True:
+            await asyncio.sleep(0.5) # Check every 500ms
+            if audio_buffer and last_audio_time and (asyncio.get_event_loop().time() - last_audio_time > 1.0): # 1 second pause
+                try:
+                    # Create an UploadFile-like object from the buffer
+                    audio_file = UploadFile(filename="audio.wav", file=io.BytesIO(audio_buffer), content_type="audio/wav")
+                    transcript_result = await stt_service.transcribe(audio_file)
+                    transcript = transcript_result.get("text")
+                    if transcript:
+                        await transcript_queue.put(transcript)
+                except Exception as e:
+                    print(f"Error during Groq transcription: {e}")
+                finally:
+                    audio_buffer.clear()
+                    last_audio_time = None
+
+
+    transcription_task = asyncio.create_task(handle_transcription())
+    client_audio_task = asyncio.create_task(handle_audio_from_client())
+    
+    groq_buffer_task = None
+    if stt_provider == "groq":
+        groq_buffer_task = asyncio.create_task(process_groq_buffer())
+
+
+    try:
+        while True:
+            transcript = await transcript_queue.get()
+            
+            if transcript:
+                # 1. Save and broadcast the user's transcribed message
+                user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
+                db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_user_message).json(), "user")
+
+                # 2. Generate the agent's response
+                agent_response_text = await agent_execution_service.generate_agent_response(
+                    db, agent_id, session_id, company_id, transcript
+                )
+
+                # 3. Save and broadcast the agent's text message
+                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
+                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+
+                # 4. Convert the agent's response to speech and stream it
+                audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
+                async for audio_chunk in audio_stream:
+                    await websocket.send_bytes(audio_chunk)
+                
+                transcript_queue.task_done()
+
+    except WebSocketDisconnect:
+        print(f"Client in voice session #{session_id} disconnected")
+    except Exception as e:
+        print(f"Error in main voice processing loop: {e}")
+    finally:
+        transcription_task.cancel()
+        client_audio_task.cancel()
+        if groq_buffer_task:
+            groq_buffer_task.cancel()
+        await tts_service.close()
+        manager.disconnect(websocket, session_id)
+        print(f"Cleaned up resources for voice session #{session_id}")
+
+
+
+@router.websocket("/internal/voice/{agent_id}/{session_id}")
+async def internal_voice_websocket_endpoint(
+    websocket: WebSocket,
+    agent_id: int,
+    session_id: str,
+    user_type: str = Query(...),
+    voice_id: str = Query("default_voice_id"),
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_user_from_ws)
+):
+    company_id = current_user.company_id
+    agent = agent_service.get_agent(db, agent_id, company_id)
+    stt_provider = 'deepgram' # Default provider
+    if agent and agent.stt_provider:
+        stt_provider = agent.stt_provider
+    await manager.connect(websocket, session_id, user_type)
+    
+    stt_service = None
+    if stt_provider == "deepgram":
+        stt_service = STTService(websocket)
+    else:
+        stt_service = GroqSTTService()
+
+    tts_service = TTSService()
+    
+    transcript_queue = asyncio.Queue()
+    audio_buffer = bytearray()
+    last_audio_time = None
+
+    async def handle_transcription():
+        if stt_provider == "deepgram":
+            if await stt_service.connect():
+                while True:
+                    try:
+                        message = await stt_service.deepgram_ws.receive_json()
+                        if message.get("type") == "Results":
+                            transcript = message["channel"]["alternatives"][0]["transcript"]
+                            if transcript and message.get("is_final", False):
+                                await transcript_queue.put(transcript)
+                    except Exception as e:
+                        print(f"Error receiving from STT service: {e}")
+                        break
+            await stt_service.close()
+        # Groq does not use a persistent connection for transcription
+
+    async def handle_audio_from_client():
+        nonlocal audio_buffer, last_audio_time
+        try:
+            while True:
+                audio_chunk = await websocket.receive_bytes()
+                last_audio_time = asyncio.get_event_loop().time()
+                if stt_provider == "deepgram":
+                    if stt_service.deepgram_ws and not stt_service.deepgram_ws.closed:
+                        await stt_service.deepgram_ws.send_bytes(audio_chunk)
+                    else:
+                        break
+                elif stt_provider == "groq":
+                    audio_buffer.extend(audio_chunk)
+
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            print(f"Error receiving audio from client: {e}")
+
+    async def process_groq_buffer():
+        nonlocal audio_buffer, last_audio_time
+        while True:
+            await asyncio.sleep(0.5) # Check every 500ms
+            if audio_buffer and last_audio_time and (asyncio.get_event_loop().time() - last_audio_time > 1.0): # 1 second pause
+                try:
+                    # Create an UploadFile-like object from the buffer
+                    audio_file = UploadFile(filename="audio.wav", file=io.BytesIO(audio_buffer), content_type="audio/wav")
+                    transcript_result = await stt_service.transcribe(audio_file)
+                    transcript = transcript_result.get("text")
+                    if transcript:
+                        await transcript_queue.put(transcript)
+                except Exception as e:
+                    print(f"Error during Groq transcription: {e}")
+                finally:
+                    audio_buffer.clear()
+                    last_audio_time = None
+
+    transcription_task = asyncio.create_task(handle_transcription())
+    client_audio_task = asyncio.create_task(handle_audio_from_client())
+
+    groq_buffer_task = None
+    if stt_provider == "groq":
+        groq_buffer_task = asyncio.create_task(process_groq_buffer())
+
+    try:
+        while True:
+            transcript = await transcript_queue.get()
+            
+            if transcript:
+                # When an agent speaks, we treat it as a message from the agent
+                # and send it to the user.
+                # For now, we'll just log it and send it back as text.
+                # A full implementation would route this to the correct user.
+                chat_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
+                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, "agent")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), "agent")
+
+                transcript_queue.task_done()
+
+    except WebSocketDisconnect:
+        print(f"Agent in voice session #{session_id} disconnected")
+    except Exception as e:
+        print(f"Error in internal voice processing loop: {e}")
+    finally:
+        transcription_task.cancel()
+        client_audio_task.cancel()
+        if groq_buffer_task:
+            groq_buffer_task.cancel()
+        await tts_service.close()
+        manager.disconnect(websocket, session_id)
+        print(f"Cleaned up resources for internal voice session #{session_id}")
+
+
+
 
 @router.websocket("/{agent_id}/{session_id}")
 async def websocket_endpoint(

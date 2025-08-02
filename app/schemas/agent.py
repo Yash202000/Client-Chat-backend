@@ -22,6 +22,9 @@ class AgentBase(BaseModel):
     credential_id: Optional[int] = None
     knowledge_base_id: Optional[int] = None
     tool_ids: Optional[List[int]] = []
+    voice_id: Optional[str] = 'default'
+    tts_provider: Optional[str] = 'voice_engine'
+    stt_provider: Optional[str] = 'deepgram'
 
 class AgentCreate(AgentBase):
     pass
@@ -40,6 +43,9 @@ class AgentUpdate(BaseModel):
     knowledge_base_id: Optional[int] = None
     tool_ids: Optional[List[int]] = None
     status: Optional[str] = None
+    voice_id: Optional[str] = None
+    tts_provider: Optional[str] = None
+    stt_provider: Optional[str] = None
 
 class Agent(AgentBase):
     id: int
@@ -55,4 +61,5 @@ class Agent(AgentBase):
     updated_at: datetime.datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+

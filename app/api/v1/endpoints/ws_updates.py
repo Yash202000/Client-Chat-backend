@@ -17,7 +17,7 @@ async def websocket_endpoint(
         await websocket.close(code=403)
         return
 
-    await manager.connect(websocket, company_id)
+    await manager.connect(websocket, company_id,"user")
     print(f"[ws_updates] WebSocket connection established for company_id: {company_id}")
     try:
         while True:

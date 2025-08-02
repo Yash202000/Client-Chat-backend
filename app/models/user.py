@@ -26,6 +26,7 @@ class User(Base):
     subscription_end_date = Column(DateTime, nullable=True)
 
     company = relationship("Company", back_populates="users")
+    voice_profiles = relationship("VoiceProfile", back_populates="user")
     settings = relationship("UserSettings", back_populates="owner", uselist=False)
     team_memberships = relationship("TeamMembership", back_populates="user")
     subscription_plan = relationship("SubscriptionPlan", back_populates="users")

@@ -27,6 +27,9 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         instructions=agent.instructions,
         credential_id=agent.credential_id,
         knowledge_base_id=agent.knowledge_base_id,
+        voice_id=agent.voice_id,
+        tts_provider=agent.tts_provider,
+        stt_provider=agent.stt_provider,
         company_id=company_id,
         version_number=1, # Initial version
         status="active", # New agents are active by default
@@ -95,6 +98,9 @@ def create_agent_version(db: Session, agent_id: int, company_id: int):
         instructions=original_agent.instructions,
         credential_id=original_agent.credential_id,
         knowledge_base_id=original_agent.knowledge_base_id,
+        voice_id=original_agent.voice_id,
+        tts_provider=original_agent.tts_provider,
+        stt_provider=original_agent.stt_provider,
         company_id=company_id,
         version_number=original_agent.version_number + 1, # Increment version
         parent_version_id=original_agent.id, # Link to parent
