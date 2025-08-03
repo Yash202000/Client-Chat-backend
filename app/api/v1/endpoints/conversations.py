@@ -24,18 +24,18 @@ class FeedbackUpdate(BaseModel):
     feedback_notes: Optional[str] = None
 
 @router.get("/sessions", response_model=List[schemas_session.Session])
-def get_all_sessions(db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+def get_all_sessions(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     """
     Get all active sessions for the company, enriched with contact and channel info.
     This is the primary endpoint for the omnichannel inbox.
     """
-    sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_company_id, status="active")
+    sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
     print(f"Sessions from DB (raw): {sessions_from_db}")
     
     sessions = []
     for s in sessions_from_db:
-        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_company_id)
-        contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_company_id)
+        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_user.company_id)
+        contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_user.company_id)
 
         sessions.append(schemas_session.Session(
             session_id=s.conversation_id,
@@ -51,13 +51,13 @@ def get_all_sessions(db: Session = Depends(get_db), current_company_id: int = De
     return sessions
 
 @router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True)
-def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
+def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     # This endpoint is deprecated in favor of the company-wide /sessions endpoint
-    sessions_from_db = chat_service.get_sessions_with_details(db, agent_id=agent_id, company_id=current_company_id)
+    sessions_from_db = chat_service.get_sessions_with_details(db, agent_id=agent_id, company_id=current_user.company_id)
     
     sessions = []
     for s in sessions_from_db:
-        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_company_id)
+        first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_user.company_id)
         sessions.append(schemas_session.Session(
             session_id=s.conversation_id,
             status=s.status,
@@ -68,8 +68,8 @@ def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_
     return sessions
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage])
-def get_messages(agent_id: int, session_id: str, db: Session = Depends(get_db), current_company_id: int = Depends(get_current_company), current_user: models_user.User = Depends(get_current_active_user)):
-    return chat_service.get_chat_messages(db, agent_id=agent_id, session_id=session_id, company_id=current_company_id)
+def get_messages(agent_id: int, session_id: str, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    return chat_service.get_chat_messages(db, agent_id=agent_id, session_id=session_id, company_id=current_user.company_id)
 
 @router.post("/{agent_id}/{session_id}/notes", response_model=schemas_chat_message.ChatMessage)
 def create_note(
@@ -77,7 +77,7 @@ def create_note(
     session_id: str,
     note: NoteCreate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company),
+
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     # We can consider adding author_id to notes in the future
@@ -88,7 +88,7 @@ def create_note(
         message=message_schema,
         agent_id=agent_id,
         session_id=session_id,
-        company_id=current_company_id,
+        company_id=current_user.company_id,
         sender="agent" 
     )
 
@@ -97,10 +97,10 @@ def update_status(
     session_id: str,
     status_update: StatusUpdate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company),
+
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    success = chat_service.update_conversation_status(db, session_id=session_id, status=status_update.status, company_id=current_company_id)
+    success = chat_service.update_conversation_status(db, session_id=session_id, status=status_update.status, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"message": "Status updated successfully"}
@@ -110,10 +110,9 @@ def update_assignee(
     session_id: str,
     assignee_update: AssigneeUpdate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    success = chat_service.update_conversation_assignee(db, session_id=session_id, user_id=assignee_update.user_id, company_id=current_company_id)
+    success = chat_service.update_conversation_assignee(db, session_id=session_id, user_id=assignee_update.user_id, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or assignee update failed")
     return {"message": "Assignee updated successfully"}
@@ -126,7 +125,7 @@ def toggle_ai(
     session_id: str,
     update: AIToggleUpdate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company)
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     """
     Toggles the AI automated response for a specific conversation session.
@@ -134,7 +133,7 @@ def toggle_ai(
     session = conversation_session_service.toggle_ai_for_session(
         db, 
         conversation_id=session_id, 
-        company_id=current_company_id, 
+        company_id=current_user.company_id, 
         is_enabled=update.is_ai_enabled
     )
     if not session:
@@ -147,7 +146,6 @@ def update_feedback(
     session_id: str,
     feedback_update: FeedbackUpdate,
     db: Session = Depends(get_db),
-    current_company_id: int = Depends(get_current_company),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     success = chat_service.update_conversation_feedback(
@@ -155,7 +153,7 @@ def update_feedback(
         session_id=session_id,
         feedback_rating=feedback_update.feedback_rating,
         feedback_notes=feedback_update.feedback_notes,
-        company_id=current_company_id
+        company_id=current_user.company_id
     )
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or feedback update failed")

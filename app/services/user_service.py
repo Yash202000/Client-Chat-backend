@@ -1,28 +1,25 @@
 
-from sqlalchemy.orm import Session
-from app.models import user as models_user
+from sqlalchemy.orm import Session, joinedload
+from app.models import user as models_user, role as models_role, permission as models_permission
 from app.schemas import user as schemas_user
 from app.core.security import get_password_hash
 from app.services import user_settings_service
 from app.schemas import user_settings as schemas_user_settings
 
 def get_user(db: Session, user_id: int):
-    return db.query(models_user.User).filter(models_user.User.id == user_id).first()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.id == user_id).first()
 
 def get_user_by_email(db: Session, email: str):
-    return db.query(models_user.User).filter(models_user.User.email == email).first()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.email == email).first()
 
 def get_users(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_user.User).filter(models_user.User.company_id == company_id).offset(skip).limit(limit).all()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.company_id == company_id).offset(skip).limit(limit).all()
 
 from app.services import user_settings_service, company_service
 from app.schemas import user_settings as schemas_user_settings, company as schemas_company
 
-def create_user(db: Session, user: schemas_user.UserCreate, company_id: int):
+def create_user(db: Session, user: schemas_user.UserCreate, company_id: int, role_id: int = None, is_super_admin: bool = False):
     hashed_password = get_password_hash(user.password)
-
-    # Check if this is the first user for the company
-    is_first_user = db.query(models_user.User).filter(models_user.User.company_id == company_id).first() is None
 
     db_user = models_user.User(
         email=user.email,
@@ -34,7 +31,8 @@ def create_user(db: Session, user: schemas_user.UserCreate, company_id: int):
         job_title=user.job_title,
         profile_picture_url=user.profile_picture_url,
         is_active=True, # New users are active by default
-        is_admin=is_first_user # First user is admin
+        role_id=role_id,
+        is_super_admin=is_super_admin
     )
     db.add(db_user)
     db.commit()

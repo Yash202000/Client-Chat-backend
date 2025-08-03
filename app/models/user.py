@@ -24,8 +24,11 @@ class User(Base):
     subscription_status = Column(String, nullable=True)
     subscription_start_date = Column(DateTime, nullable=True)
     subscription_end_date = Column(DateTime, nullable=True)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
+    is_super_admin = Column(Boolean, default=False)
 
     company = relationship("Company", back_populates="users")
+    role = relationship("Role")
     voice_profiles = relationship("VoiceProfile", back_populates="user")
     settings = relationship("UserSettings", back_populates="owner", uselist=False)
     team_memberships = relationship("TeamMembership", back_populates="user")

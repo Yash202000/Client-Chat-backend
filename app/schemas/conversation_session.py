@@ -9,10 +9,14 @@ class ConversationSessionBase(BaseModel):
     status: str = 'active'
     is_ai_enabled: bool = True
 
-class ConversationSessionCreate(ConversationSessionBase):
-    contact_id: int
+class ConversationSessionCreate(BaseModel):
+    conversation_id: str
+    workflow_id: Optional[int] = None
+    contact_id: Optional[int] = None
     channel: str
+    status: str
     company_id: int
+    agent_id: Optional[int] = None
 
 
 class ConversationSessionUpdate(BaseModel):

@@ -45,7 +45,7 @@ def update_session(db: Session, conversation_id: str, session_update: Conversati
         db.refresh(db_session)
     return db_session
 
-def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int) -> ConversationSession:
+def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int, agent_id: int = None) -> ConversationSession:
     """
     Gets a session by conversation_id. If not found, creates a new one.
     """
@@ -64,7 +64,8 @@ def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, c
         contact_id=contact_id,
         channel=channel,
         status='active',
-        company_id=company_id
+        company_id=company_id,
+        agent_id=agent_id
     )
     return create_session(db, session_create)
 

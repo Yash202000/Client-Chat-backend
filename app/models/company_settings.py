@@ -12,6 +12,10 @@ class CompanySettings(Base):
     timezone = Column(String, default="UTC")
     language = Column(String, default="en")
     business_hours = Column(Boolean, default=True)
+    logo_url = Column(String, nullable=True)
+    primary_color = Column(String, nullable=True)
+    secondary_color = Column(String, nullable=True)
+    custom_domain = Column(String, nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
 
     company = relationship("Company")

@@ -13,6 +13,7 @@ class Permission(PermissionBase):
 
     class Config:
         orm_mode = True
+        from_attributes = True
 
 class RoleBase(BaseModel):
     name: str
@@ -30,3 +31,4 @@ class Role(RoleBase):
 
     class Config:
         orm_mode = True
+        from_attributes = True

@@ -4,10 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.core.database import Base, engine, SessionLocal
-from app.models import role, permission, contact # Import new models
+from app.models import role, permission, contact, comment # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
-from app.api.v1.endpoints import ws_updates
+from app.api.v1.endpoints import ws_updates, comments
 from app.core.dependencies import get_db
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
@@ -32,6 +32,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_updates.router, prefix="/ws") # New company-wide updates
+app.include_router(comments.router, prefix="/api/v1/comments")
 
 
 @app.get("/")
@@ -39,13 +40,18 @@ async def read_root():
     return {"message": "AgentConnect backend is running"}
 
 
-from app.services import company_service, user_service, agent_service
+from app.services import company_service, user_service, agent_service, role_service
 from app.schemas import company as schemas_company, user as schemas_user, agent as schemas_agent
+from app.core.websockets import manager as websocket_manager
 
 @app.on_event("startup")
 def on_startup():
     db = SessionLocal()
     try:
+        # Create global permissions and Super Admin role
+        print("Creating global permissions and Super Admin role...")
+        role_service.create_global_permissions_and_super_admin(db)
+
         # Check if a default company exists, if not, create one
         default_company = company_service.get_companies(db, limit=1)
         if not default_company:
@@ -54,11 +60,26 @@ def on_startup():
         else:
             company = default_company[0]
 
+        # Create roles for the company
+        print("Creating default roles for the company...")
+        role_service.create_initial_roles_for_company(db, company.id)
+        
+        # Get the Super Admin role
+        super_admin_role = role_service.get_role_by_name(db, "Super Admin")
+
         # Check if a default user exists, if not, create one
-        default_user = user_service.get_users(db, company.id, limit=1)
+        default_user = user_service.get_user_by_email(db, "admin@example.com")
         if not default_user:
-            print("Creating default user...")
-            user_service.create_user(db, schemas_user.UserCreate(email="user@example.com", password="password123"), company_id=company.id)
+            print("Creating default admin user...")
+            user_service.create_user(db, schemas_user.UserCreate(email="admin@example.com", password="password123"), company_id=company.id, role_id=super_admin_role.id, is_super_admin=True)
+        else:
+            # If user exists but has no role, assign super admin role
+            user = default_user
+            if not user.role_id:
+                user.role_id = super_admin_role.id
+            if not user.is_super_admin:
+                user.is_super_admin = True
+            db.commit()
 
         # Check if a default agent exists, if not, create one
         default_agent_list = agent_service.get_agents(db, company.id, limit=1)
@@ -92,9 +113,13 @@ def on_startup():
             print("Creating default widget settings...")
             widget_settings_service.create_widget_settings(db, schemas_widget_settings.WidgetSettingsCreate(agent_id=agent.id))
 
-
     finally:
         db.close()
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    print("Server is shutting down. Disconnecting all websocket clients...")
+    await websocket_manager.disconnect_all()
 
 @app.get("/api/v1/agents/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
 def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):

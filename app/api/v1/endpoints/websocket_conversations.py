@@ -509,7 +509,7 @@ async def public_websocket_endpoint(
                 db, company_id=company_id, channel="web_chat", channel_identifier=session_id
             )
             session = conversation_session_service.get_or_create_session(
-                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id
+                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id
             )
 
             # 1. Log user message

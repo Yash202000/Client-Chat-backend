@@ -23,3 +23,9 @@ class Workflow(Base):
     agent = relationship("Agent", back_populates="workflows")
     parent_workflow = relationship("Workflow", remote_side=[id], back_populates="versions")
     versions = relationship("Workflow", back_populates="parent_workflow")
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    company = relationship("Company", back_populates="workflows")
+
+# Add back-population to Company model
+from app.models.company import Company
+Company.workflows = relationship("Workflow", order_by=Workflow.id, back_populates="company")

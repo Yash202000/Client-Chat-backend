@@ -43,4 +43,15 @@ class ConnectionManager:
         else:
             print(f"[ConnectionManager] No active connections for session {session_id}")
 
+    async def disconnect_all(self):
+        print("[ConnectionManager] Disconnecting all clients...")
+        for session_id in list(self.active_connections.keys()):
+            for connection in self.active_connections[session_id]:
+                try:
+                    await connection["websocket"].close(code=1000)
+                except Exception as e:
+                    print(f"Error closing websocket for session {session_id}: {e}")
+        self.active_connections.clear()
+        print("[ConnectionManager] All clients disconnected.")
+
 manager = ConnectionManager()
