@@ -11,6 +11,7 @@ class ChatMessage(Base):
     message = Column(String)
     sender = Column(String) # 'user' or 'agent'
     message_type = Column(String, default="message") # 'message' or 'note'
+    token = Column(String, nullable=True) # For video call tokens, etc.
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     agent_id = Column(Integer, ForeignKey("agents.id"))

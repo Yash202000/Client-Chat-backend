@@ -268,11 +268,16 @@ class WorkflowExecutionService:
 
         return {"output": llm_response}
 
-    def execute_workflow(self, workflow_id: int, user_message: str, conversation_id: str = None):
-        workflow_obj = workflow_service.get_workflow(self.db, workflow_id)
+    def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
+        if workflow_id:
+            workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
+        elif workflow:
+            workflow_obj = workflow
+        else:
+            return {"error": "Either workflow_id or workflow object must be provided."}
+
         if not workflow_obj:
-            print(f"DEBUG: Workflow with ID {workflow_id} not found.")
-            return {"error": f"Workflow with ID {workflow_id} not found."}
+            return {"error": f"Workflow not found."}
 
         print(f"DEBUG: Fetched workflow: {workflow_obj.name} (ID: {workflow_obj.id})")
         if hasattr(workflow_obj, 'agent') and workflow_obj.agent:

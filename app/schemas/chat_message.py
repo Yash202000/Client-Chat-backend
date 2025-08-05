@@ -7,7 +7,7 @@ class ChatMessageBase(BaseModel):
     message_type: str = "message"
 
 class ChatMessageCreate(ChatMessageBase):
-    pass
+    token: Optional[str] = None
 
 class ChatMessage(ChatMessageBase):
     id: int
@@ -17,6 +17,7 @@ class ChatMessage(ChatMessageBase):
     agent_id: Optional[int]
     company_id: int
     contact_id: int
+    token: Optional[str] = None
     status: Optional[str] = None
     assignee_id: Optional[int] = None
     feedback_rating: Optional[int] = None

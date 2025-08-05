@@ -344,7 +344,11 @@ async def websocket_endpoint(
                 continue
 
             # 1. Log user message
-            chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
+            chat_message = schemas_chat_message.ChatMessageCreate(
+                message=user_message,
+                message_type=message_data.get('message_type', 'message'),
+                token=message_data.get('token')
+            )
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             print(f"[websocket_conversations] Created chat message: {db_message.id}")
             await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
@@ -408,9 +412,10 @@ async def websocket_endpoint(
 
                 # 3. Execute the matched workflow with the current state (conversation_id)
                 execution_result = workflow_exec_service.execute_workflow(
-                    workflow=workflow,
                     user_message=user_message,
-                    conversation_id=session_id # Use the session_id from the URL as the conversation_id
+                    conversation_id=session_id,
+                    company_id=company_id,
+                    workflow=workflow
                 )
 
                 # 4. Handle the execution result
@@ -513,7 +518,11 @@ async def public_websocket_endpoint(
             )
 
             # 1. Log user message
-            chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
+            chat_message = schemas_chat_message.ChatMessageCreate(
+                message=user_message,
+                message_type=message_data.get('message_type', 'message'),
+                token=message_data.get('token')
+            )
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             print(f"[public_websocket] Created chat message: {db_message.id}")
             await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
@@ -553,7 +562,8 @@ async def public_websocket_endpoint(
                 execution_result = workflow_exec_service.execute_workflow(
                     workflow_id=workflow.id,
                     user_message=user_message,
-                    conversation_id=session_id
+                    conversation_id=session_id,
+                    company_id=company_id
                 )
 
                 if execution_result.get("status") == "completed":
