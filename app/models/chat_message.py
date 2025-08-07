@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 import datetime
@@ -7,12 +7,23 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"))
     session_id = Column(String, index=True)
     message = Column(String)
     sender = Column(String) # 'user' or 'agent'
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    message_type = Column(String, default="message") # 'message' or 'note'
+    token = Column(String, nullable=True) # For video call tokens, etc.
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    
+    agent_id = Column(Integer, ForeignKey("agents.id"))
     company_id = Column(Integer, ForeignKey("companies.id"))
+    assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    
+    status = Column(String, default="bot") # bot, pending, assigned, resolved
+    feedback_rating = Column(Integer, nullable=True)
+    feedback_notes = Column(String, nullable=True)
 
-    company = relationship("Company") # No back_populates needed here as Company already has messages relationship
     agent = relationship("Agent", back_populates="messages")
+    company = relationship("Company")
+    assignee = relationship("User")
+    contact = relationship("Contact", back_populates="chat_messages")

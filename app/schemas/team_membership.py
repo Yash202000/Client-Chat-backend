@@ -7,11 +7,12 @@ class TeamMembershipBase(BaseModel):
     team_id: int
     role: str = "member"
 
-class TeamMembershipCreate(TeamMembershipBase):
-    pass
+class TeamMembershipCreate(BaseModel):
+    user_id: int
+    role: str = "member"
 
 class TeamMembershipUpdate(BaseModel):
-    role: Optional[str] = None
+    role: str
 
 class TeamMembership(TeamMembershipBase):
     id: int

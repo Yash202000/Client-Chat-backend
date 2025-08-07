@@ -12,8 +12,14 @@ from app.services.chat_service import (
 from app.services.credential_service import (
     create_credential,
     get_credential,
-    get_credential_by_platform,
     get_credentials,
     update_credential,
     delete_credential
+)
+from app.services.workflow_service import (
+    create_workflow,
+    get_workflow,
+    get_workflows,
+    update_workflow,
+    delete_workflow
 )
