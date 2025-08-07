@@ -15,7 +15,7 @@ def get_widget_settings(db: Session, agent_id: int):
     return None
 
 def create_widget_settings(db: Session, widget_settings: WidgetSettingsCreate):
-    widget_settings_data = widget_settings.dict()
+    widget_settings_data = widget_settings.model_dump()
     widget_settings_data["livekit_url"] = settings.LIVEKIT_URL
     widget_settings_data["frontend_url"] = settings.FRONTEND_URL
     db_widget_settings = WidgetSettings(**widget_settings_data)
@@ -27,7 +27,7 @@ def create_widget_settings(db: Session, widget_settings: WidgetSettingsCreate):
 def update_widget_settings(db: Session, agent_id: int, widget_settings: WidgetSettingsUpdate):
     db_widget_settings = get_widget_settings(db, agent_id)
     if db_widget_settings:
-        update_data = widget_settings.dict(exclude_unset=True)
+        update_data = widget_settings.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(db_widget_settings, key, value)
         db.commit()

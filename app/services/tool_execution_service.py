@@ -1,52 +1,26 @@
 import traceback
+import asyncio
+import anyio
 from sqlalchemy.orm import Session
-from app.services import tool_service, workflow_service, workflow_execution_service, contact_service
-from app.schemas import contact as schemas_contact
+from app.models.tool import Tool
+from app.services import workflow_service
+from fastmcp.client import Client
 
-def _execute_update_contact_details(db: Session, company_id: int, session_id: str, parameters: dict):
-    """Directly executes the logic for updating contact details."""
-    contact = contact_service.get_or_create_contact_by_session(db, session_id=session_id, company_id=company_id)
-    if not contact:
-        return {"error": "Could not find or create a contact for this session."}
-    
-    contact_update = schemas_contact.ContactUpdate(**parameters)
-    contact_service.update_contact(db, contact_id=contact.id, contact=contact_update, company_id=company_id)
-    return {"result": f"Contact {contact.id} updated successfully with new details."}
-
-def _execute_calculate_sum(parameters: dict):
-    """Directly executes the logic for calculating a sum."""
-    numbers = parameters.get("numbers", [])
-    if not isinstance(numbers, list):
-        return {"error": "Invalid input. 'numbers' must be a list."}
-    return {"result": sum(numbers)}
-
-
-def execute_tool(db: Session, tool_id: int, company_id: int, session_id: str, parameters: dict):
+def execute_custom_tool(db: Session, tool: Tool, company_id: int, session_id: str, parameters: dict):
     """
-    Executes a tool, prioritizing direct execution for built-in tools.
+    Executes a custom tool by running its stored Python code.
     """
-    db_tool = tool_service.get_tool(db, tool_id, company_id)
-    if not db_tool:
-        return {"error": "Tool not found"}
+    if not tool.code:
+        return {"error": "Tool has no code to execute."}
 
-    # --- Direct execution for built-in tools ---
-    if db_tool.name == "update_contact_details":
-        return _execute_update_contact_details(db, company_id, session_id, parameters)
-    
-    if db_tool.name == "calculate_sum":
-        return _execute_calculate_sum(parameters)
-    # --- End of direct execution ---
-
-
-    # Fallback to dynamic execution for custom tools
     local_scope = {}
     execution_globals = {
         "workflow_service": workflow_service,
-        "workflow_execution_service": workflow_execution_service
+        "workflow_execution_service": "workflow_execution_service" # Placeholder
     }
     
     try:
-        exec(db_tool.code, execution_globals, local_scope)
+        exec(tool.code, execution_globals, local_scope)
         tool_function = local_scope.get("run")
         
         if not callable(tool_function):
@@ -63,7 +37,48 @@ def execute_tool(db: Session, tool_id: int, company_id: int, session_id: str, pa
 
     except Exception as e:
         return {
-            "error": "An error occurred during tool execution.",
+            "error": "An error occurred during custom tool execution.",
             "details": str(e),
             "traceback": traceback.format_exc()
         }
+
+async def execute_mcp_tool(mcp_server_url: str, tool_name: str, parameters: dict):
+    """
+    Executes a specific tool on a remote MCP server using the high-level .run() method.
+    Includes a retry mechanism for connection errors.
+    """
+    max_retries = 3
+    backoff_delay = 0.5  # seconds
+
+    # The LLM can return parameters in several ways. We need to find the actual arguments.
+    # Sometimes they are nested under 'params', sometimes not.
+    # If no params are provided, default to an empty dict.
+    actual_params = parameters.get('params', parameters)
+
+    for attempt in range(max_retries):
+        print(f"DEBUG: MCP tool execution attempt {attempt + 1} for '{tool_name}' with params: {actual_params}")
+        try:
+            async with Client(mcp_server_url) as client:
+                # Pass parameters in a dictionary under the 'params' key
+                result = await client.call_tool(tool_name, arguments={"params": actual_params})
+            return {"result": result}
+
+        except anyio.ClosedResourceError as e:
+            print(f"WARNING: Attempt {attempt + 1} failed with ClosedResourceError: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(backoff_delay * (2 ** attempt))
+                print(f"INFO: Retrying MCP tool execution...")
+            else:
+                print(f"ERROR: MCP tool execution failed after {max_retries} attempts due to connection issues.")
+                return {
+                    "error": f"MCP connection failed after multiple retries on server {mcp_server_url}.",
+                    "details": str(e)
+                }
+        except Exception as e:
+            # This will catch tool execution errors raised by client.run(), like validation errors.
+            print(f"ERROR: An unexpected error occurred during MCP tool execution: {e}")
+            print(traceback.format_exc())
+            return {
+                "error": f"An error occurred on MCP server {mcp_server_url} while running tool '{tool_name}'.",
+                "details": str(e)
+            }

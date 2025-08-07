@@ -42,7 +42,10 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
     # Handle tool_ids for initial creation
     if agent.tool_ids:
         for tool_id in agent.tool_ids:
-            tool = db.query(models_tool.Tool).filter(models_tool.Tool.id == tool_id, models_tool.Tool.company_id == company_id).first()
+            tool = db.query(models_tool.Tool).filter(
+                models_tool.Tool.id == tool_id,
+                models_tool.Tool.company_id == company_id
+            ).first()
             if tool:
                 db_agent.tools.append(tool)
         db.commit()
@@ -60,7 +63,10 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
         if tool_ids is not None:
             db_agent.tools.clear() # Clear existing tools
             for tool_id in tool_ids:
-                tool = db.query(models_tool.Tool).filter(models_tool.Tool.id == tool_id, models_tool.Tool.company_id == company_id).first()
+                tool = db.query(models_tool.Tool).filter(
+                    models_tool.Tool.id == tool_id,
+                    models_tool.Tool.company_id == company_id
+                ).first()
                 if tool:
                     db_agent.tools.append(tool)
 

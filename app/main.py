@@ -87,9 +87,6 @@ def on_startup():
             print("Creating default agent...")
             prompt = (
                 "You are a helpful assistant. You have access to a set of tools. "
-                "Use them when necessary to answer the user's questions. "
-                "When asked to perform multi-step tasks like adding numbers, I will use a predefined workflow. "
-                "If the user provides their name, email, or phone number, you MUST use the 'update_contact_details' tool to save this information."
             )
             agent_create_data = schemas_agent.AgentCreate(
                 name="Default Agent",

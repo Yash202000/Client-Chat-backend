@@ -56,6 +56,6 @@ def create_api_call_tool(db: Session, company_id: int):
         description=tool_description,
         parameters=parameter_schema,
         code=tool_code,
-        company_id=company_id
+        tool_type="custom"  # Explicitly set the tool type
     )
     return tool_service.create_tool(db=db, tool=tool_create, company_id=company_id)

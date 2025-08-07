@@ -23,5 +23,6 @@ class ChatMessage(ChatMessageBase):
     feedback_rating: Optional[int] = None
     feedback_notes: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }

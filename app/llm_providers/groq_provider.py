@@ -29,6 +29,7 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
             tool_call = response_message.tool_calls[0]
             return {
                 "type": "tool_call",
+                "tool_call_id": tool_call.id,
                 "tool_name": tool_call.function.name,
                 "parameters": json.loads(tool_call.function.arguments)
             }

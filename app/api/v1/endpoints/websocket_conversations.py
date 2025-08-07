@@ -153,7 +153,7 @@ async def voice_websocket_endpoint(
                 # 1. Save and broadcast the user's transcribed message
                 user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
                 db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_user_message).json(), "user")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_user_message).model_dump_json(), "user")
 
                 # 2. Generate the agent's response
                 agent_response_text = await agent_execution_service.generate_agent_response(
@@ -163,7 +163,7 @@ async def voice_websocket_endpoint(
                 # 3. Save and broadcast the agent's text message
                 agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
                 db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
                 # 4. Convert the agent's response to speech and stream it
                 audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
@@ -287,7 +287,7 @@ async def internal_voice_websocket_endpoint(
                 # A full implementation would route this to the correct user.
                 chat_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
                 db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, "agent")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), "agent")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), "agent")
 
                 transcript_queue.task_done()
 
@@ -351,7 +351,7 @@ async def websocket_endpoint(
             )
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             print(f"[websocket_conversations] Created chat message: {db_message.id}")
-            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
+            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
             print(f"[websocket_conversations] Broadcasted message to session: {session_id}")
 
             # If agent sends message, check session channel and send to external platform
@@ -406,7 +406,7 @@ async def websocket_endpoint(
                     )
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
                     print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
                     continue
 
@@ -423,7 +423,7 @@ async def websocket_endpoint(
                     agent_response_text = execution_result.get("response", "Workflow finished.")
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
                     print(f"[websocket_conversations] Broadcasted workflow completion to session: {session_id}")
                 
                 elif execution_result.get("status") == "paused_for_prompt":
@@ -525,7 +525,7 @@ async def public_websocket_endpoint(
             )
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             print(f"[public_websocket] Created chat message: {db_message.id}")
-            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_message).json(), sender)
+            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
             print(f"[public_websocket] Broadcasted message to session: {session_id}")
 
             # 2. If the message is from the user, execute the workflow or generate a response
@@ -550,13 +550,10 @@ async def public_websocket_endpoint(
                     if not isinstance(message_for_agent, str):
                         message_for_agent = json.dumps(message_for_agent)
 
-                    agent_response_text = await agent_execution_service.generate_agent_response(
+                    # The agent execution service now handles all broadcasting and saving.
+                    await agent_execution_service.generate_agent_response(
                         db, agent_id, session_id, company_id, message_for_agent
                     )
-                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
-                    print(f"[public_websocket] Broadcasted agent response to session: {session_id}")
                     continue
 
                 execution_result = workflow_exec_service.execute_workflow(
@@ -573,7 +570,7 @@ async def public_websocket_endpoint(
                         agent_response_text = json.dumps(agent_response_text)
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
                     print(f"[public_websocket] Broadcasted workflow completion to session: {session_id}")
 
                 elif execution_result.get("status") == "paused_for_prompt":

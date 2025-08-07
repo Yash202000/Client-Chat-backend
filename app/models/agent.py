@@ -1,9 +1,8 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.tool import agent_tools
-import datetime
 
 class Agent(Base):
     __tablename__ = "agents"
@@ -26,8 +25,8 @@ class Agent(Base):
     version_number = Column(Integer, default=1)
     parent_version_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     status = Column(String, default="active") # e.g., active, draft, archived
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     company = relationship("Company", back_populates="agents")
     messages = relationship("ChatMessage", back_populates="agent")

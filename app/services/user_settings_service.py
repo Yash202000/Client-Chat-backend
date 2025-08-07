@@ -7,7 +7,7 @@ def get_user_settings(db: Session, user_id: int, company_id: int):
     return db.query(models_user_settings.UserSettings).filter(models_user_settings.UserSettings.user_id == user_id, models_user_settings.UserSettings.company_id == company_id).first()
 
 def create_user_settings(db: Session, user_id: int, company_id: int, settings: schemas_user_settings.UserSettingsCreate):
-    db_settings = models_user_settings.UserSettings(**settings.dict(), user_id=user_id, company_id=company_id)
+    db_settings = models_user_settings.UserSettings(**settings.model_dump(), user_id=user_id, company_id=company_id)
     db.add(db_settings)
     db.commit()
     db.refresh(db_settings)
@@ -16,7 +16,7 @@ def create_user_settings(db: Session, user_id: int, company_id: int, settings: s
 def update_user_settings(db: Session, user_id: int, company_id: int, settings: schemas_user_settings.UserSettingsUpdate):
     db_settings = get_user_settings(db, user_id, company_id)
     if db_settings:
-        for key, value in settings.dict().items():
+        for key, value in settings.model_dump().items():
             setattr(db_settings, key, value)
         db.commit()
         db.refresh(db_settings)
