@@ -205,3 +205,5 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
         print(f"[AgentResponse] Broadcasted final agent response to session: {session_id}")
     else:
         print(f"[AgentResponse] Final agent response was empty. Nothing to broadcast.")
+        
+    return final_agent_response_text

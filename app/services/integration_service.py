@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 
 from app.models import integration as models_integration
 from app.schemas import integration as schemas_integration
-from app.services import vault_service
+from app.services.vault_service import vault_service
 
 def get_integration(db: Session, integration_id: int, company_id: int) -> models_integration.Integration:
     """
@@ -27,7 +27,7 @@ def create_integration(db: Session, integration: schemas_integration.Integration
     """
     # Convert credentials dict to a JSON string and encrypt it
     credentials_json = json.dumps(integration.credentials)
-    encrypted_credentials = vault_service.encrypt_data(credentials_json)
+    encrypted_credentials = vault_service.encrypt(credentials_json)
 
     db_integration = models_integration.Integration(
         name=integration.name,
@@ -49,7 +49,7 @@ def update_integration(db: Session, db_integration: models_integration.Integrati
     
     if "credentials" in update_data and update_data["credentials"]:
         credentials_json = json.dumps(update_data["credentials"])
-        update_data["credentials"] = vault_service.encrypt_data(credentials_json)
+        update_data["credentials"] = vault_service.encrypt(credentials_json)
 
     for field, value in update_data.items():
         setattr(db_integration, field, value)
@@ -73,7 +73,7 @@ def get_decrypted_credentials(integration: models_integration.Integration) -> Di
     """
     Safely decrypts and parses the credentials JSON for an integration.
     """
-    decrypted_json = vault_service.decrypt_data(integration.credentials)
+    decrypted_json = vault_service.decrypt(integration.credentials)
     return json.loads(decrypted_json)
 
 def get_integration_by_phone_number_id(db: Session, phone_number_id: str) -> models_integration.Integration:
@@ -95,16 +95,32 @@ def get_integration_by_phone_number_id(db: Session, phone_number_id: str) -> mod
 
 def get_integration_by_page_id(db: Session, page_id: str) -> models_integration.Integration:
     """
-    Finds an active Messenger integration by the Facebook Page ID.
+    Finds an active Messenger or Instagram integration by the Facebook Page ID.
     """
     integrations = db.query(models_integration.Integration).filter(
-        models_integration.Integration.type == "messenger",
+        models_integration.Integration.type.in_(["messenger", "instagram"]),
         models_integration.Integration.enabled == True
     ).all()
 
     for integration in integrations:
         credentials = get_decrypted_credentials(integration)
         if credentials.get("page_id") == page_id:
+            return integration
+            
+    return None
+
+def get_integration_by_telegram_bot_token(db: Session, bot_token: str) -> models_integration.Integration:
+    """
+    Finds an active Telegram integration by the bot token.
+    """
+    integrations = db.query(models_integration.Integration).filter(
+        models_integration.Integration.type == "telegram",
+        models_integration.Integration.enabled == True
+    ).all()
+
+    for integration in integrations:
+        credentials = get_decrypted_credentials(integration)
+        if credentials.get("bot_token") == bot_token:
             return integration
             
     return None

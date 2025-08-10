@@ -16,7 +16,7 @@ async def send_whatsapp_message(
     Sends a text message to a WhatsApp user via the Meta Cloud API.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    api_token = credentials.get("api_token")
+    api_token = credentials.get("api_token") or credentials.get("access_token")
     phone_number_id = credentials.get("phone_number_id")
 
     if not api_token or not phone_number_id:
@@ -63,7 +63,7 @@ async def send_whatsapp_interactive_message(
     Sends an interactive message with buttons to a WhatsApp user.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    api_token = credentials.get("api_token")
+    api_token = credentials.get("api_token") or credentials.get("access_token")
     phone_number_id = credentials.get("phone_number_id")
 
     if not api_token or not phone_number_id:
@@ -115,19 +115,20 @@ async def send_whatsapp_interactive_message(
             print(f"An unexpected error occurred: {e}")
             raise e
 
-async def send_messenger_message(
-    recipient_psid: str,
+async def send_instagram_or_messenger_message(
+    recipient_id: str,
     message_text: str,
-    integration: Integration
+    integration: Integration,
+    platform: str
 ) -> Dict[str, Any]:
     """
-    Sends a text message to a Messenger user via the Meta Graph API.
+    Sends a text message to an Instagram or Messenger user via the Meta Graph API.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    page_access_token = credentials.get("page_access_token")
+    page_access_token = credentials.get("page_access_token") or credentials.get("access_token")
 
     if not page_access_token:
-        raise ValueError("Messenger credentials (page_access_token) are not configured for this integration.")
+        raise ValueError(f"{platform.capitalize()} credentials (page_access_token) are not configured for this integration.")
 
     url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/me/messages"
     
@@ -137,7 +138,7 @@ async def send_messenger_message(
     }
     
     payload = {
-        "recipient": {"id": recipient_psid},
+        "recipient": {"id": recipient_id},
         "message": {"text": message_text},
         "messaging_type": "RESPONSE"
     }
@@ -146,10 +147,80 @@ async def send_messenger_message(
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            print(f"Successfully sent Messenger message to {recipient_psid}. Response: {response.json()}")
+            print(f"Successfully sent {platform} message to {recipient_id}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
-            print(f"Error sending Messenger message: {e.response.text}")
+            print(f"Error sending {platform} message: {e.response.text}")
+            raise e
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            raise e
+
+async def send_instagram_message(
+    recipient_psid: str,
+    message_text: str,
+    integration: Integration
+) -> Dict[str, Any]:
+    """
+    Sends a text message to an Instagram user.
+    """
+    return await send_instagram_or_messenger_message(recipient_psid, message_text, integration, "instagram")
+
+async def send_messenger_message(
+    recipient_psid: str,
+    message_text: str,
+    integration: Integration
+) -> Dict[str, Any]:
+    """
+    Sends a text message to a Messenger user via the Meta Graph API.
+    """
+    return await send_instagram_or_messenger_message(recipient_psid, message_text, integration, "messenger")
+
+async def send_gmail_message(
+    recipient_email: str,
+    subject: str,
+    message_text: str,
+    integration: Integration
+) -> Dict[str, Any]:
+    """
+    Sends an email to a user via the Gmail API.
+    NOTE: This is a placeholder and needs to be implemented with the Google API client library.
+    """
+    credentials = integration_service.get_decrypted_credentials(integration)
+    # Actual implementation will require OAuth2 flow and Google API client
+    print(f"Simulating sending email to {recipient_email} with subject '{subject}'")
+    print(f"Message: {message_text}")
+    return {"status": "simulated_success"}
+
+async def send_telegram_message(
+    chat_id: int,
+    message_text: str,
+    integration: Integration
+) -> Dict[str, Any]:
+    """
+    Sends a message to a Telegram user via the Telegram Bot API.
+    """
+    credentials = integration_service.get_decrypted_credentials(integration)
+    bot_token = credentials.get("bot_token")
+
+    if not bot_token:
+        raise ValueError("Telegram credentials (bot_token) are not configured for this integration.")
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    payload = {
+        "chat_id": chat_id,
+        "text": message_text
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            print(f"Successfully sent Telegram message to {chat_id}. Response: {response.json()}")
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            print(f"Error sending Telegram message: {e.response.text}")
             raise e
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
