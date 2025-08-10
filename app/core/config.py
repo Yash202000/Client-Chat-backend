@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     LINKEDIN_CLIENT_ID: str = ""
     LINKEDIN_CLIENT_SECRET: str = ""
     LINKEDIN_REDIRECT_URI: str = ""
+    LINKEDIN_COMPANY_ID: str = ""
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"

@@ -125,6 +125,22 @@ def get_integration_by_telegram_bot_token(db: Session, bot_token: str) -> models
             
     return None
 
+def get_integration_by_linkedin_company_id(db: Session, linkedin_company_id: str) -> models_integration.Integration:
+    """
+    Finds an active LinkedIn integration by the LinkedIn Company ID.
+    """
+    integrations = db.query(models_integration.Integration).filter(
+        models_integration.Integration.type == "linkedin",
+        models_integration.Integration.enabled == True
+    ).all()
+
+    for integration in integrations:
+        credentials = get_decrypted_credentials(integration)
+        if credentials.get("linkedin_company_id") == linkedin_company_id:
+            return integration
+            
+    return None
+
 def get_integration_by_type_and_company(db: Session, integration_type: str, company_id: int) -> models_integration.Integration:
     """
     Finds an active integration by type and company ID.
