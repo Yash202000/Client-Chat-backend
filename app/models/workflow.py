@@ -11,6 +11,7 @@ class Workflow(Base):
     agent_id = Column(Integer, ForeignKey("agents.id"))
     steps = Column(JSON, nullable=False)
     visual_steps = Column(JSON, nullable=True)
+    trigger_phrases = Column(JSON, nullable=True)
     
     # Versioning fields
     version = Column(Integer, default=1, nullable=False)

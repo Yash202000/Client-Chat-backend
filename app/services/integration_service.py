@@ -150,3 +150,20 @@ def get_integration_by_type_and_company(db: Session, integration_type: str, comp
         models_integration.Integration.company_id == company_id,
         models_integration.Integration.enabled == True
     ).first()
+
+def get_integration_by_google_account(db: Session, email: str, company_id: int) -> models_integration.Integration:
+    """
+    Finds an active Google Calendar integration by the user's email and company.
+    """
+    integrations = db.query(models_integration.Integration).filter(
+        models_integration.Integration.type == "google_calendar",
+        models_integration.Integration.company_id == company_id,
+        models_integration.Integration.enabled == True
+    ).all()
+
+    for integration in integrations:
+        credentials = get_decrypted_credentials(integration)
+        if credentials.get("user_email") == email:
+            return integration
+            
+    return None

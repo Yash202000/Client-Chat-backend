@@ -127,9 +127,14 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
     try:
         agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
         system_prompt = (
-            "You are a helpful assistant. Prioritize responding directly to the user. "
-            "Only use the available tools if the user's query cannot be answered without them. "
-            f"Current system prompt: {agent.prompt}"
+            "You are a helpful and precise assistant. Your primary goal is to assist users by using the tools provided. "
+            "Follow these rules strictly:\n"
+            "1. Examine the user's request to determine the appropriate tool.\n"
+            "2. Look at the tool's schema to understand its required parameters.\n"
+            "3. If the user has provided all the necessary parameters, call the tool.\n"
+            "4. **Crucially, if the user has NOT provided all required parameters, you MUST ask the user for the missing information. Do NOT guess, do NOT use placeholders, and do NOT call the tool without the required information.**\n"
+            "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
+            f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
         llm_response = provider_module.generate_response(
             db=db, company_id=company_id, model_name=agent.model_name,
@@ -167,7 +172,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
                 print(f"Error: MCP connection '{original_connection_name}' not found.")
                 return
             tool_result = await tool_execution_service.execute_mcp_tool(
-                mcp_server_url=db_tool.mcp_server_url, tool_name=mcp_tool_name, parameters=parameters
+                db_tool=db_tool, mcp_tool_name=mcp_tool_name, parameters=parameters
             )
         else:
             db_tool = tool_service.get_tool_by_name(db, tool_name, company_id)
@@ -187,9 +192,18 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
         formatted_history.append(assistant_message)
         formatted_history.append(tool_response_message)
 
+        # This is the new, specific prompt for summarizing the tool's output.
+        final_response_prompt = (
+            "You have just successfully used a tool to retrieve information for the user. "
+            "The user's original query and the data from the tool are in the chat history. "
+            "Your task is to synthesize this information into a concise, natural, and helpful response. "
+            "Do NOT mention the tool name, tool IDs, or the fact that you are processing a tool result. "
+            "Simply provide a direct and clear answer to the user's question based on the data."
+        )
+
         final_response = provider_module.generate_response(
             db=db, company_id=company_id, model_name=agent.model_name,
-            system_prompt=agent.prompt, chat_history=formatted_history,
+            system_prompt=final_response_prompt, chat_history=formatted_history,
             tools=[], api_key=agent_api_key
         )
         final_agent_response_text = final_response.get('content', 'No response content.')

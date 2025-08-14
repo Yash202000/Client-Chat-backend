@@ -473,106 +473,65 @@ async def public_websocket_endpoint(
     user_type: str = Query(...),  # 'user' or 'agent'
     db: Session = Depends(get_db)
 ):
-    # For public endpoint, company_id needs to be derived from the agent
-    agent = agent_service.get_agent(db, agent_id,company_id)
+    agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
-        print(f"[public_websocket] Agent with id {agent_id} not found.")
         await websocket.close(code=1008)
         return
-    company_id = agent.company_id
-    print(f"[public_websocket] Attempting WebSocket connection for session: {session_id}, agent_id: {agent_id}, company_id: {company_id}")
-
+    
     await manager.connect(websocket, session_id, user_type)
-    print(f"[public_websocket] WebSocket connection established for session: {session_id}")
     workflow_exec_service = WorkflowExecutionService(db)
 
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"[public_websocket] Received data from frontend: {data}")
-            if not data:
-                continue
-
-            try:
-                message_data = json.loads(data)
-                user_message = message_data.get('message')
-                sender = message_data.get('sender')
-
-                # 👇 Sanitize user_message
-                if not isinstance(user_message, str):
-                    user_message = json.dumps(user_message)
-            except (json.JSONDecodeError, AttributeError):
-                print(f"[public_websocket] Received invalid data from session #{session_id}: {data}")
-                continue
+            message_data = json.loads(data)
+            user_message = message_data.get('message')
+            sender = message_data.get('sender')
 
             if not user_message or not sender:
-                print(f"[public_websocket] Missing user_message or sender: user_message={user_message}, sender={sender}")
                 continue
 
-            # Ensure a session and contact exist for this interaction
-            contact = contact_service.get_or_create_contact_for_channel(
-                db, company_id=company_id, channel="web_chat", channel_identifier=session_id
-            )
-            session = conversation_session_service.get_or_create_session(
-                db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id
-            )
+            # Ensure contact and session exist before creating a message
+            contact = contact_service.get_or_create_contact_for_channel(db, company_id=company_id, channel="web_chat", channel_identifier=session_id)
+            session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id)
 
-            # 1. Log user message
-            chat_message = schemas_chat_message.ChatMessageCreate(
-                message=user_message,
-                message_type=message_data.get('message_type', 'message'),
-                token=message_data.get('token')
-            )
+            # Now, create and broadcast the chat message
+            chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
-            print(f"[public_websocket] Created chat message: {db_message.id}")
             await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
-            print(f"[public_websocket] Broadcasted message to session: {session_id}")
 
-            # 2. If the message is from the user, execute the workflow or generate a response
             if sender == 'user':
-                # Check if AI is enabled for this session
-                if not session.is_ai_enabled:
-                    print(f"AI is disabled for session {session_id}. No response will be generated.")
+                # The session is already guaranteed to exist, so we can proceed
+                print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
+                
+                execution_result = None
+                if session.status == 'paused' and session.workflow_id:
+                    # A workflow is already in progress, so we resume it.
+                    workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                    if workflow:
+                         execution_result = await asyncio.to_thread(
+                            workflow_exec_service.execute_workflow, user_message=user_message, company_id=company_id, workflow=workflow, conversation_id=session_id
+                        )
+                else:
+                    # No workflow is in progress, so we find a new one.
+                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=user_message)
+                    if workflow:
+                        execution_result = await asyncio.to_thread(
+                            workflow_exec_service.execute_workflow, user_message=user_message, company_id=company_id, workflow=workflow, conversation_id=session_id
+                        )
+
+                # If no workflow was found or resumed, fallback to the default agent response
+                if not execution_result:
+                    await agent_execution_service.generate_agent_response(db, agent_id, session_id, company_id, user_message)
                     continue
-
-                workflow = workflow_service.find_similar_workflow(
-                    db,
-                    company_id=company_id,
-                    query=user_message
-                )
-
-                if not workflow:
-                    # If no specific workflow matches, provide a generic response
-                    print(f"[public_websocket] No specific workflow found for message: '{user_message}'")
-                    
-                    # Ensure the message passed to the agent is a string.
-                    message_for_agent = message_data['message']
-                    if not isinstance(message_for_agent, str):
-                        message_for_agent = json.dumps(message_for_agent)
-
-                    # The agent execution service now handles all broadcasting and saving.
-                    await agent_execution_service.generate_agent_response(
-                        db, agent_id, session_id, company_id, message_for_agent
-                    )
-                    continue
-
-                execution_result = workflow_exec_service.execute_workflow(
-                    workflow_id=workflow.id,
-                    user_message=user_message,
-                    conversation_id=session_id,
-                    company_id=company_id
-                )
-
+                
+                # Handle execution result
                 if execution_result.get("status") == "completed":
                     agent_response_text = execution_result.get("response", "Workflow finished.")
-                                    # 👇 Sanitize user_message
-                    if not isinstance(agent_response_text, str):
-                        agent_response_text = json.dumps(agent_response_text)
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                    print(f"[public_websocket] Broadcasted workflow completion to session: {session_id}")
-
+                
                 elif execution_result.get("status") == "paused_for_prompt":
                     prompt_data = execution_result.get("prompt", {})
                     prompt_message = {
@@ -580,12 +539,8 @@ async def public_websocket_endpoint(
                         "message_type": "prompt",
                         "options": prompt_data.get("options", []),
                         "sender": "agent",
-                        "session_id": session_id,
-                        "agent_id": agent_id,
-                        "company_id": company_id,
                     }
                     await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
-                    print(f"[public_websocket] Broadcasted prompt to session: {session_id}")
 
                 elif execution_result.get("status") == "paused_for_form":
                     form_data = execution_result.get("form", {})
@@ -594,12 +549,12 @@ async def public_websocket_endpoint(
                         "message_type": "form",
                         "fields": form_data.get("fields", []),
                         "sender": "agent",
-                        "session_id": session_id,
-                        "agent_id": agent_id,
-                        "company_id": company_id,
                     }
                     await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
-                    print(f"[public_websocket] Broadcasted form to session: {session_id}")
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, session_id)
+        print(f"Client in session #{session_id} disconnected")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

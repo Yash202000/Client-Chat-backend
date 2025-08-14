@@ -46,12 +46,13 @@ def get_tool(
 
 @router.get("/", response_model=List[schemas_tool.Tool], dependencies=[Depends(require_permission("tool:read"))])
 def get_tools(
+    tool_type: str = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    return tool_service.get_tools(db, current_user.company_id, skip=skip, limit=limit)
+    return tool_service.get_tools(db, current_user.company_id, tool_type=tool_type, skip=skip, limit=limit)
 
 @router.put("/{tool_id}", response_model=schemas_tool.Tool, dependencies=[Depends(require_permission("tool:update"))])
 def update_tool(

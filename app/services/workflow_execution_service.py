@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from app.models import workflow
 from app.models.workflow import Workflow
 from app.models.tool import Tool
-from app.services import tool_service, conversation_session_service, knowledge_base_service, workflow_service
+from app.services import tool_service, conversation_session_service, knowledge_base_service, workflow_service, memory_service
 from app.schemas.conversation_session import ConversationSessionUpdate
+from app.schemas.memory import MemoryCreate
 from app.services.graph_execution_engine import GraphExecutionEngine
 from app.services.llm_tool_service import LLMToolService
 
@@ -59,7 +60,7 @@ class WorkflowExecutionService:
         if not isinstance(value, str) or '{{' not in value:
             return value
 
-        print(f"DEBUG: Resolving placeholders in: '{value}'")
+        print(f"DEBUG: Resolving placeholders in: '{value}' with context: {context}")
 
         def replace_func(match):
             placeholder = match.group(1).strip()
@@ -292,7 +293,8 @@ class WorkflowExecutionService:
             self.db, conversation_id, workflow_obj.id, contact_id=1, channel="test", company_id=workflow_obj.agent.company_id
         )
 
-        context = session.context or {}
+        # Load all memories for this session into the context
+        context = {memory.key: memory.value for memory in memory_service.get_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)}
         results = {}
 
         # Ensure visual_steps is a dictionary
@@ -305,29 +307,29 @@ class WorkflowExecutionService:
         
         graph_engine = GraphExecutionEngine(visual_steps_data)
         
+        print(f"DEBUG: Workflow resumed with user_message: '{user_message}'")
         if session.status == 'paused' and session.next_step_id:
             current_node_id = session.next_step_id
-            # The user_message is the result of the paused step
-            result_from_pause = {"output": user_message}
-            
-            # Find the node that caused the pause to get the variable name
-            previous_node_id = None
-            for node_id, node_info in graph_engine.nodes.items():
-                # Check if this node's next step on success is the paused step
-                # This is a simplification; a more robust way might be needed for complex graphs
-                next_node_in_graph = graph_engine.get_next_node(node_id, result_from_pause)
-                if next_node_in_graph == session.next_step_id:
-                    previous_node_id = node_id
-                    break
-            
-            if previous_node_id:
-                previous_node = graph_engine.nodes[previous_node_id]
-                if previous_node.get('type') in ['listen', 'prompt', 'form']:
-                    output_variable = previous_node.get('data', {}).get('params', {}).get('save_to_variable')
-                    if output_variable:
-                        context[output_variable] = user_message
+            print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
+            # The variable to save was stored in the context before pausing.
+            variable_to_save = context.get("variable_to_save")
+            print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
+            if variable_to_save:
+                # Check if the incoming message is a JSON string (from a form submission)
+                try:
+                    form_data = json.loads(user_message)
+                    context[variable_to_save] = form_data
+                except (json.JSONDecodeError, TypeError):
+                     # It's a plain text response (e.g., from a prompt)
+                    context[variable_to_save] = user_message
+                print(f"DEBUG: Context after updating with user message: {context}")
+                # Save the updated context back to memory
+                memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
         else:
             current_node_id = graph_engine.find_start_node()
+            # For the very first message in a workflow
+            context["initial_user_message"] = user_message
+            memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
         last_executed_node_id = None
         while current_node_id:
@@ -399,6 +401,20 @@ class WorkflowExecutionService:
 
             if result and result.get("status") in ["paused_for_input", "paused_for_prompt", "paused_for_form"]:
                 next_node_id = graph_engine.get_next_node(current_node_id, result)
+                
+                # Before pausing, save the variable name that should receive the input.
+                # This information should be part of the node's data.
+                variable_to_save = node_data.get("output_variable")
+                if not variable_to_save:
+                    params = node_data.get("params", {})
+                    variable_to_save = params.get("output_variable")
+                
+                print(f"DEBUG: Pausing node data: {node_data}")
+                print(f"DEBUG: 'output_variable' from node data is: '{variable_to_save}'")
+                if variable_to_save:
+                    context["variable_to_save"] = variable_to_save
+                    memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+
                 session_update = ConversationSessionUpdate(
                     next_step_id=next_node_id,
                     context=context,

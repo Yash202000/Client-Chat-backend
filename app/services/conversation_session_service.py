@@ -45,29 +45,33 @@ def update_session(db: Session, conversation_id: str, session_update: Conversati
         db.refresh(db_session)
     return db_session
 
-def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int, agent_id: int = None) -> ConversationSession:
-    """
-    Gets a session by conversation_id. If not found, creates a new one.
-    """
-    # 1. Try to get the session by its unique conversation_id
-    db_session = db.query(ConversationSession).filter(
-        ConversationSession.conversation_id == conversation_id
+def get_or_create_session(db: Session, conversation_id: str, workflow_id: int, contact_id: int, channel: str, company_id: int, agent_id: int = None):
+    session = db.query(ConversationSession).filter(
+        ConversationSession.conversation_id == conversation_id,
+        ConversationSession.company_id == company_id
     ).first()
 
-    if db_session:
-        return db_session
-
-    # 2. If no session found with that conversation_id, create a new one
-    session_create = ConversationSessionCreate(
-        conversation_id=conversation_id,
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-        channel=channel,
-        status='active',
-        company_id=company_id,
-        agent_id=agent_id
-    )
-    return create_session(db, session_create)
+    if session:
+        # If the session exists but has no workflow_id, update it.
+        if session.workflow_id is None and workflow_id is not None:
+            session.workflow_id = workflow_id
+            db.commit()
+            db.refresh(session)
+        return session
+    else:
+        new_session = ConversationSession(
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
+            contact_id=contact_id,
+            channel=channel,
+            company_id=company_id,
+            agent_id=agent_id,
+            status='active'
+        )
+        db.add(new_session)
+        db.commit()
+        db.refresh(new_session)
+        return new_session
 
 
 def toggle_ai_for_session(db: Session, conversation_id: str, company_id: int, is_enabled: bool) -> ConversationSession:
@@ -85,3 +89,10 @@ def toggle_ai_for_session(db: Session, conversation_id: str, company_id: int, is
         db.refresh(db_session)
     
     return db_session
+
+def get_session_by_conversation_id(db: Session, conversation_id: str, company_id: int):
+    return db.query(ConversationSession).filter(
+        ConversationSession.conversation_id == conversation_id,
+        ConversationSession.company_id == company_id
+    ).first()
+

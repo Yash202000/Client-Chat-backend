@@ -6,6 +6,7 @@ class WorkflowBase(BaseModel):
     name: str
     description: Optional[str] = None
     agent_id: int
+    trigger_phrases: Optional[List[str]] = None
     version: int = 1
     is_active: bool = True
     parent_workflow_id: Optional[int] = None
@@ -20,6 +21,7 @@ class WorkflowUpdate(BaseModel):
     agent_id: Optional[int] = None
     steps: Optional[Dict[str, Any]] = None
     visual_steps: Optional[Dict[str, Any]] = None
+    trigger_phrases: Optional[List[str]] = None
 
 class Workflow(WorkflowBase):
     id: int

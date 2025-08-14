@@ -113,7 +113,9 @@ def delete_workflow(db: Session, workflow_id: int, company_id: int):
 
 def find_similar_workflow(db: Session, company_id: int, query: str):
     """
-    Finds the most similar ACTIVE workflow based on a query string.
+    Finds the most similar ACTIVE workflow.
+    First, it checks for an exact match in the trigger_phrases.
+    If no exact match is found, it falls back to a semantic similarity search.
     """
     active_workflows = db.query(models_workflow.Workflow).options(
         joinedload(models_workflow.Workflow.agent)
@@ -126,6 +128,16 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
         print("DEBUG: No active workflows found for company_id:", company_id)
         return None
 
+    # 1. Check for an exact match in trigger phrases (case-insensitive)
+    for workflow in active_workflows:
+        if workflow.trigger_phrases:
+            # Ensure trigger_phrases is a list
+            phrases = workflow.trigger_phrases if isinstance(workflow.trigger_phrases, list) else []
+            if any(phrase.lower() == query.lower() for phrase in phrases):
+                print(f"DEBUG: Found direct match for query '{query}' in workflow '{workflow.name}'")
+                return get_workflow(db, workflow.id, company_id)
+
+    # 2. If no direct match, fall back to similarity search
     query_embedding = vectorization_service.get_embedding(query)
     
     best_match = None
@@ -141,9 +153,11 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
             highest_similarity = similarity
             best_match = workflow
             
-    if highest_similarity > 0.2:
+    # Adjust the threshold as needed
+    SIMILARITY_THRESHOLD = 0.2 
+    if highest_similarity > SIMILARITY_THRESHOLD:
         print(f"DEBUG: Best match found: '{best_match.name}' (Version: {best_match.version}) with similarity: {highest_similarity}")
         return get_workflow(db, best_match.id, company_id)
     else:
-        print(f"DEBUG: No workflow found above similarity threshold (0.2). Highest: {highest_similarity}")
+        print(f"DEBUG: No workflow found above similarity threshold ({SIMILARITY_THRESHOLD}). Highest: {highest_similarity}")
         return None

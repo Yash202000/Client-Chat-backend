@@ -21,10 +21,15 @@ def get_tool_by_name(db: Session, name: str, company_id: int):
         db_tool.configuration = vault_service.decrypt_dict(db_tool.configuration)
     return db_tool
 
-def get_tools(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    tools = db.query(models_tool.Tool).filter(
+def get_tools(db: Session, company_id: int, tool_type: str = None, skip: int = 0, limit: int = 100):
+    query = db.query(models_tool.Tool).filter(
         models_tool.Tool.company_id == company_id
-    ).offset(skip).limit(limit).all()
+    )
+    
+    if tool_type:
+        query = query.filter(models_tool.Tool.tool_type == tool_type)
+        
+    tools = query.offset(skip).limit(limit).all()
     
     for tool in tools:
         if tool.configuration:
