@@ -54,7 +54,7 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
     return db_agent
 
 def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, company_id: int):
-    db_agent = db.query(models_agent.Agent).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
+    db_agent = db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
     if db_agent:
         update_data = agent.dict(exclude_unset=True)
         

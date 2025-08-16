@@ -1,5 +1,4 @@
-
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import List, Optional
 from app.schemas.chat_message import ChatMessage
 from app.schemas.webhook import Webhook
@@ -60,6 +59,11 @@ class Agent(AgentBase):
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
+    @validator('tool_ids', always=True)
+    def populate_tool_ids_from_tools(cls, v, values):
+        if 'tools' in values and values['tools']:
+            return [tool.id for tool in values['tools']]
+        return v
+
     class Config:
         from_attributes = True
-

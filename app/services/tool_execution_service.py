@@ -49,12 +49,12 @@ async def execute_mcp_tool(db_tool: Tool, mcp_tool_name: str, parameters: dict):
     mcp_server_url = db_tool.mcp_server_url
     actual_params = parameters or {}
 
-    print(f"DEBUG: MCP tool execution for '{mcp_tool_name}' with params: {actual_params}")
+    print(f"DEBUG: Attempting to connect to MCP server at {mcp_server_url}")
     try:
         async with Client(mcp_server_url) as client:
-            # The fastmcp server expects arguments to be passed in a 'params' dictionary
-            # that matches the Pydantic model in the tool's function signature.
+            print(f"DEBUG: Connected to MCP server. Calling tool '{mcp_tool_name}' with params: {actual_params}")
             result = await client.call_tool(mcp_tool_name, arguments={'params': actual_params})
+            print(f"DEBUG: MCP tool call returned: {result}")
         return {"result": result}
     except Exception as e:
         print(f"ERROR: An unexpected error occurred during MCP tool execution: {e}")
