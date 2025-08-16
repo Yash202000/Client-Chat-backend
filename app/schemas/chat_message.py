@@ -22,6 +22,7 @@ class ChatMessage(ChatMessageBase):
     assignee_id: Optional[int] = None
     feedback_rating: Optional[int] = None
     feedback_notes: Optional[str] = None
+    issue: Optional[str] = None
 
     model_config = {
         "from_attributes": True

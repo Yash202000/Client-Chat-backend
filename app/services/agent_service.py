@@ -1,7 +1,8 @@
 
 from sqlalchemy.orm import Session, joinedload
-from app.models import agent as models_agent, tool as models_tool
+from app.models import agent as models_agent, tool as models_tool, credential as models_credential
 from app.schemas import agent as schemas_agent
+from fastapi import HTTPException
 
 def get_agent(db: Session, agent_id: int, company_id: int):
     return db.query(models_agent.Agent).options(
@@ -70,6 +71,19 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
                 if tool:
                     db_agent.tools.append(tool)
 
+        # Handle credential_id separately for "One API Key per Agent per Service" constraint
+        if "credential_id" in update_data and update_data["credential_id"] is not None:
+            new_credential_id = update_data["credential_id"]
+            new_credential = db.query(models_credential.Credential).filter(models_credential.Credential.id == new_credential_id).first()
+            
+            if new_credential:
+                # Check if agent already has a credential for this service
+                existing_credential = db.query(models_credential.Credential).join(models_agent.Agent, models_agent.Agent.credential_id == models_credential.Credential.id).filter(models_agent.Agent.id == agent_id,
+                        models_credential.Credential.service == new_credential.service).first()
+                
+                if existing_credential and existing_credential.id != new_credential_id:
+                    raise HTTPException(status_code=400, detail=f"Agent already has a credential for service '{new_credential.service}'.")
+        
         for key, value in update_data.items():
             setattr(db_agent, key, value)
             

@@ -22,6 +22,7 @@ class ChatMessage(Base):
     status = Column(String, default="bot") # bot, pending, assigned, resolved
     feedback_rating = Column(Integer, nullable=True)
     feedback_notes = Column(String, nullable=True)
+    issue = Column(String, nullable=True, index=True)
 
     agent = relationship("Agent", back_populates="messages")
     company = relationship("Company")

@@ -1,171 +1,186 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
-from datetime import date, timedelta
-
+from sqlalchemy import func
 from app.core.dependencies import get_db
-from app.core.auth import get_current_user
-from app.models.user import User
-from app.models.chat_message import ChatMessage
-from app.models.conversation_session import ConversationSession
-from app.models.agent import Agent
+from app.models import conversation_session as models_conversation_session
+from app.models import agent as models_agent
+from app.models import chat_message as models_chat_message
+from typing import Dict, Any, List
+import datetime
 
 router = APIRouter()
 
-@router.get("/metrics", response_model=Dict[str, Any])
+@router.get("/metrics")
 def get_overall_metrics(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    company_id = current_user.company_id
-
-    # Total Conversations
-    total_conversations = db.query(ConversationSession).filter(
-        ConversationSession.company_id == company_id,
-        ConversationSession.created_at >= start_date,
-        ConversationSession.created_at <= end_date
-    ).count()
-
-    # Total Messages
-    total_messages = db.query(ChatMessage).filter(
-        ChatMessage.company_id == company_id,
-        ChatMessage.timestamp >= start_date,
-        ChatMessage.timestamp <= end_date
-    ).count()
-
-    # Active Agents
-    active_agents = db.query(Agent).filter(
-        Agent.company_id == company_id,
-        Agent.is_active == True
-    ).count()
-
-    # Placeholder for Avg Response Time and Customer Satisfaction
-    # These would require more complex logic and data points (e.g., message timestamps, satisfaction ratings)
-    avg_response_time = "N/A" # Implement logic to calculate this
-    customer_satisfaction = "N/A" # Implement logic to calculate this
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> Dict[str, Any]:
+    
+    query = db.query(models_conversation_session.ConversationSession)
+    if start_date:
+        query = query.filter(models_conversation_session.ConversationSession.created_at >= start_date)
+    if end_date:
+        query = query.filter(models_conversation_session.ConversationSession.created_at <= end_date)
+        
+    total_conversations = query.count()
+    
+    avg_satisfaction_query = db.query(func.avg(models_chat_message.ChatMessage.feedback_rating))
+    if start_date:
+        avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.timestamp >= start_date)
+    if end_date:
+        avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.timestamp <= end_date)
+    avg_satisfaction = avg_satisfaction_query.scalar() or 0
+    
+    active_agents = db.query(models_agent.Agent).filter(models_agent.Agent.is_active == True).count()
 
     return {
-        "total_conversations": total_conversations,
-        "total_messages": total_messages,
+        "total_sessions": total_conversations,
+        "customer_satisfaction": round(avg_satisfaction, 2),
         "active_agents": active_agents,
-        "avg_response_time": avg_response_time,
-        "customer_satisfaction": customer_satisfaction
     }
 
-@router.get("/agent-performance", response_model=List[Dict[str, Any]])
+@router.get("/agent-performance")
 def get_agent_performance(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    company_id = current_user.company_id
-
-    # This is a simplified example. A real implementation would involve:
-    # 1. Joining ChatMessage and Agent tables.
-    # 2. Grouping by agent_id and agent name.
-    # 3. Counting conversations/messages per agent.
-    # 4. Calculating average response times (requires message timestamps).
-    # 5. Aggregating satisfaction scores (requires a satisfaction rating mechanism).
-
-    agents_data = db.query(Agent).filter(Agent.company_id == company_id).all()
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> List[Dict[str, Any]]:
+    query = db.query(
+        models_agent.Agent.name,
+        func.count(models_conversation_session.ConversationSession.id).label('conversations'),
+        func.avg(models_chat_message.ChatMessage.feedback_rating).label('satisfaction')
+    ).join(
+        models_conversation_session.ConversationSession,
+        models_agent.Agent.id == models_conversation_session.ConversationSession.agent_id
+    ).join(
+        models_chat_message.ChatMessage,
+        models_conversation_session.ConversationSession.id == models_chat_message.ChatMessage.session_id
+    )
     
-    performance_data = []
-    for agent in agents_data:
-        conversations_count = db.query(ConversationSession).filter(
-            ConversationSession.company_id == company_id,
-            ConversationSession.agent_id == agent.id,
-            ConversationSession.created_at >= start_date,
-            ConversationSession.created_at <= end_date
-        ).count()
+    if start_date:
+        query = query.filter(models_conversation_session.ConversationSession.created_at >= start_date)
+    if end_date:
+        query = query.filter(models_conversation_session.ConversationSession.created_at <= end_date)
+        
+    performance_data = query.group_by(models_agent.Agent.name).all()
+    
+    return [
+        {
+            "agent_name": name,
+            "conversations": conversations,
+            "satisfaction": round(satisfaction, 2) if satisfaction else 0,
+            "avg_response": "N/A" # Placeholder
+        }
+        for name, conversations, satisfaction in performance_data
+    ]
 
-        performance_data.append({
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "conversations": conversations_count,
-            "avg_response": "N/A", # Placeholder
-            "satisfaction": "N/A" # Placeholder
-        })
-    return performance_data
-
-@router.get("/customer-satisfaction", response_model=List[Dict[str, Any]])
+@router.get("/customer-satisfaction")
 def get_customer_satisfaction(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    # Placeholder data for customer satisfaction. 
-    # In a real scenario, this would come from user feedback/ratings.
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> List[Dict[str, Any]]:
+    query = db.query(
+        models_chat_message.ChatMessage.feedback_rating,
+        func.count(models_chat_message.ChatMessage.id).label('count')
+    ).filter(models_chat_message.ChatMessage.feedback_rating != None)
+
+    if start_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp >= start_date)
+    if end_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp <= end_date)
+
+    satisfaction_data = query.group_by(models_chat_message.ChatMessage.feedback_rating).all()
+    
+    total_ratings = sum([item.count for item in satisfaction_data])
+    
     return [
-        {"rating": 5, "percentage": 60},
-        {"rating": 4, "percentage": 25},
-        {"rating": 3, "percentage": 10},
-        {"rating": 2, "percentage": 3},
-        {"rating": 1, "percentage": 2}
+        {
+            "rating": rating,
+            "percentage": round((count / total_ratings) * 100, 2) if total_ratings > 0 else 0
+        }
+        for rating, count in satisfaction_data
     ]
 
-@router.get("/top-issues", response_model=List[Dict[str, Any]])
+@router.get("/top-issues")
 def get_top_issues(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    # Placeholder data for top issues. 
-    # In a real scenario, this would come from categorizing chat messages/conversations.
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> List[Dict[str, Any]]:
+    query = db.query(
+        models_chat_message.ChatMessage.issue,
+        func.count(models_chat_message.ChatMessage.id).label('count')
+    ).filter(models_chat_message.ChatMessage.issue != None)
+
+    if start_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp >= start_date)
+    if end_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp <= end_date)
+
+    top_issues_data = query.group_by(models_chat_message.ChatMessage.issue).order_by(desc('count')).limit(10).all()
+    
     return [
-        {"issue": "Account Access", "count": 45},
-        {"issue": "Billing Questions", "count": 32},
-        {"issue": "Technical Support", "count": 28},
-        {"issue": "Product Information", "count": 21},
-        {"issue": "Feature Requests", "count": 15}
+        {
+            "issue": issue,
+            "count": count
+        }
+        for issue, count in top_issues_data
     ]
 
-@router.get("/error-rates", response_model=Dict[str, Any])
+@router.get("/error-rates")
 def get_error_rates(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    # Placeholder for error rates. 
-    # In a real scenario, this would involve parsing logs or specific error tracking.
-    return {
-        "overall_error_rate": "5%",
-        "llm_error_rate": "2%",
-        "tool_error_rate": "3%",
-        "agent_errors": [
-            {"agent_name": "Sales Bot", "errors": 10},
-            {"agent_name": "Support Bot", "errors": 5}
-        ]
-    }
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> Dict[str, Any]:
+    # Placeholder - requires error logging mechanism
+    return {"overall_error_rate": "5.2%"}
 
-@router.get("/latency", response_model=Dict[str, Any])
+@router.get("/latency")
 def get_latency(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    start_date: date = Query(date.today() - timedelta(days=30)),
-    end_date: date = Query(date.today())
-):
-    # Placeholder for latency metrics.
-    # In a real scenario, this would involve tracking message timestamps.
-    return {
-        "avg_response_time": "2.3s",
-        "p90_response_time": "5.1s",
-        "max_response_time": "10.5s"
-    }
+    start_date: datetime.date = Query(None),
+    end_date: datetime.date = Query(None)
+) -> Dict[str, Any]:
+    
+    query = db.query(models_chat_message.ChatMessage).order_by(models_chat_message.ChatMessage.timestamp)
+    if start_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp >= start_date)
+    if end_date:
+        query = query.filter(models_chat_message.ChatMessage.timestamp <= end_date)
+        
+    messages = query.all()
+    
+    response_times = []
+    sessions = {}
+    for msg in messages:
+        if msg.session_id not in sessions:
+            sessions[msg.session_id] = []
+        sessions[msg.session_id].append(msg)
+        
+    for session_id, session_messages in sessions.items():
+        for i in range(len(session_messages) - 1):
+            current_msg = session_messages[i]
+            next_msg = session_messages[i+1]
+            if current_msg.sender == 'user' and next_msg.sender == 'agent':
+                response_time = next_msg.timestamp - current_msg.timestamp
+                response_times.append(response_time.total_seconds())
+                
+    if not response_times:
+        return {"avg_response_time": "N/A"}
+        
+    avg_response_seconds = sum(response_times) / len(response_times)
+    
+    minutes, seconds = divmod(avg_response_seconds, 60)
+    
+    return {"avg_response_time": f"{int(minutes)}m {int(seconds)}s"}
 
-@router.get("/alerts", response_model=List[Dict[str, Any]])
-def get_alerts(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # Placeholder for alerts. 
-    # In a real scenario, alerts would be generated based on predefined rules (e.g., high error rate, low satisfaction).
+@router.get("/alerts")
+def get_alerts(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+    # Placeholder - requires an alerting system
     return [
-        {"id": 1, "type": "critical", "message": "Sales Bot error rate exceeded 10%", "timestamp": "2025-07-20T10:00:00Z"},
-        {"id": 2, "type": "warning", "message": "Support Bot response time increasing", "timestamp": "2025-07-19T15:30:00Z"}
+        {"id": 1, "message": "High error rate detected in payment gateway.", "timestamp": "2025-08-15T14:30:00Z", "type": "critical"},
+        {"id": 2, "message": "Customer satisfaction dropped below 80%.", "timestamp": "2025-08-15T10:00:00Z", "type": "warning"},
     ]

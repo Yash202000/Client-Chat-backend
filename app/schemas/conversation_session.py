@@ -23,6 +23,7 @@ class ConversationSessionUpdate(BaseModel):
     next_step_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
     status: Optional[str] = None # e.g., active, paused, waiting_for_input, completed
+    rating: Optional[int] = None
 
 class ConversationSession(ConversationSessionBase):
     id: int
