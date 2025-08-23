@@ -23,3 +23,8 @@ from app.models.voice_profile import VoiceProfile
 from app.models.webhook import Webhook
 from app.models.widget_settings import WidgetSettings
 from app.models.workflow import Workflow
+from app.models.chat_channel import ChatChannel
+from app.models.channel_membership import ChannelMembership
+from app.models.internal_chat_message import InternalChatMessage
+from app.models.video_call import VideoCall
+

@@ -72,12 +72,14 @@ async def get_current_user_from_ws(
     Dependency to get the current user from a WebSocket connection,
     expecting the token as a query parameter.
     """
+    from app.core.auth import get_user_from_token # Import internally
+
     token = websocket.query_params.get("token")
     if token is None:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
     
     try:
-        user = await get_current_user(db, token)
+        user = get_user_from_token(db, token) # Use the new function
     except HTTPException:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
         

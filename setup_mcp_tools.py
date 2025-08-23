@@ -62,9 +62,12 @@ async def main():
             # Check if tool already exists
             db_tool = tool_service.get_tool_by_name(db, tool_name, COMPANY_ID)
             
+            description = mcp_tool.description or f"No description available for {tool_name}."
+            print(f"    - Tool Name: {tool_name}, Description: '{description}'")
+
             tool_data = ToolCreate(
                 name=tool_name,
-                description=mcp_tool.description,
+                description=description,
                 schema_=adapted_schema.dict(),
                 tool_type="mcp",
                 company_id=COMPANY_ID

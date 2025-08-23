@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import desc, func
 from app.core.dependencies import get_db
 from app.models import conversation_session as models_conversation_session
 from app.models import agent as models_agent

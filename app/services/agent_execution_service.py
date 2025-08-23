@@ -81,16 +81,19 @@ async def _get_tools_for_agent(agent):
                          # Fallback to the original schema if simplification fails
                         simple_params_schema = mcp_tool.inputSchema
 
+                    tool_description = mcp_tool.description or f"No description available for {mcp_tool.name}."
                     tool_definitions.append({
                         "type": "function",
                         "function": {
                             "name": f"{tool.name.replace(' ', '_')}__{mcp_tool.name.replace(' ', '_')}",
-                            "description": mcp_tool.description,
+                            "description": tool_description,
                             "parameters": simple_params_schema,
                         },
                     })
             except Exception as e:
                 print(f"Error fetching tools from MCP server {tool.mcp_server_url}: {e}")
+    
+    print(f"Final tool definitions for LLM: {json.dumps(tool_definitions, indent=2)}")
     return tool_definitions
 
 async def generate_agent_response(db: Session, agent_id: int, session_id: str, company_id: int, user_message: str):
@@ -136,6 +139,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
             f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
+        MAX_HISTORY = 10
+        formatted_history = formatted_history[-MAX_HISTORY:]
         llm_response = provider_module.generate_response(
             db=db, company_id=company_id, model_name=agent.model_name,
             system_prompt=system_prompt, chat_history=formatted_history,

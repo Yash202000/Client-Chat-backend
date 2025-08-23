@@ -2,8 +2,12 @@ from fastapi import APIRouter, Request, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 import logging
 import traceback
+import google.oauth2.credentials
+import google_auth_oauthlib.flow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-from app.core.dependencies import get_db
+from app.core.dependencies import get_db, get_current_active_user
 from app.core.config import settings
 from app.services import (
     contact_service, 
@@ -13,12 +17,14 @@ from app.services import (
     integration_service, 
     messaging_service,
     agent_service,
-    agent_execution_service
+    agent_execution_service,
+    credential_service
 )
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas.chat_message import ChatMessageCreate
-from app.schemas import chat_message as schemas_chat_message
+from app.schemas import chat_message as schemas_chat_message, credential as schemas_credential
 from app.api.v1.endpoints.websocket_conversations import manager as session_ws_manager
+from app.models.user import User
 
 router = APIRouter()
 

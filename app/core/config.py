@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_ID: str = ""
     GMAIL_CLIENT_SECRET: str = ""
     GMAIL_REDIRECT_URI: str = ""
+    GOOGLE_CLIENT_SECRETS_FILE: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     LINKEDIN_CLIENT_ID: str = ""
     LINKEDIN_CLIENT_SECRET: str = ""
