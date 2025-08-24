@@ -25,6 +25,7 @@ class WidgetSettingsBase(BaseModel):
     suggestions_enabled: Optional[bool] = None
     dark_mode: Optional[bool] = None
     typing_indicator_enabled: Optional[bool] = None
+    communication_mode: Optional[str] = 'chat'
     agent_id: int
 
 class WidgetSettingsCreate(WidgetSettingsBase):

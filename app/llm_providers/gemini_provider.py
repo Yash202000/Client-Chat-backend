@@ -1,13 +1,14 @@
 import google.generativeai as genai
 from sqlalchemy.orm import Session
 from app.services import credential_service
+from app.services.vault_service import vault_service
 
 def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list, api_key: str = None):
     if api_key is None:
-        credential = credential_service.get_credential_by_provider_name(db, provider_name="gemini", company_id=company_id)
+        credential = credential_service.get_credential_by_service_name(db, service_name="gemini", company_id=company_id)
         if not credential:
             raise ValueError("Gemini API key not found for this company.")
-        api_key = credential.api_key
+        api_key =   vault_service.decrypt(credential.encrypted_credentials)
 
     if not api_key:
         raise ValueError("GOOGLE_API_KEY is not configured for this agent.")

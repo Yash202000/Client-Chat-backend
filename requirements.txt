@@ -1,12 +1,12 @@
 fastapi
-uvicorn==0.29.0
+uvicorn
 sqlalchemy
 pydantic
 python-dotenv
 requests
 httpx
 
-websockets==12.0
+websockets
 google-generativeai
 groq
 
@@ -23,3 +23,4 @@ numexpr
 pytest
 google-api-python-client
 google-auth-oauthlib
+livekit-api
