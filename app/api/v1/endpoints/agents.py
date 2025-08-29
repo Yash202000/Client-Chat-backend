@@ -6,9 +6,35 @@ from app.schemas import agent as schemas_agent
 from app.services import agent_service
 from app.core.dependencies import get_db, get_current_company, get_current_active_user, require_permission
 from app.models import user as models_user
+from app.crud import crud_published_widget_settings
+from app.services import widget_settings_service
+from app.schemas import widget_settings as schemas_widget_settings
 
 
 router = APIRouter()
+
+@router.get("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
+def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):
+    return widget_settings_service.get_widget_settings(db, agent_id=agent_id)
+
+@router.put("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
+def update_widget_settings(agent_id: int, widget_settings: schemas_widget_settings.WidgetSettingsUpdate, db: Session = Depends(get_db)):
+    return widget_settings_service.update_widget_settings(db, agent_id=agent_id, widget_settings=widget_settings)
+
+@router.post("/{agent_id}/publish", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("agent:update"))])
+def publish_agent_settings(
+    agent_id: int,
+    settings: dict,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    # Optional: Add validation to ensure the agent belongs to the user's company
+    db_agent = agent_service.get_agent(db, agent_id=agent_id, company_id=current_user.company_id)
+    if not db_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    published_settings = crud_published_widget_settings.create_published_widget_settings(db, settings=settings)
+    return {"publish_id": published_settings.publish_id}
 
 @router.post("/", response_model=schemas_agent.Agent, dependencies=[Depends(require_permission("agent:create"))])
 def create_agent(agent: schemas_agent.AgentCreate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):

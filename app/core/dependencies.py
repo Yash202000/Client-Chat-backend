@@ -95,7 +95,7 @@ async def get_current_active_user(
 async def get_current_company(current_user: models_user.User = Depends(get_current_active_user)) -> int:
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="User is not associated with a company")
-    return current_user
+    return current_user.company_id
 
 # Permission checking dependency
 def require_permission(permission_name: str):

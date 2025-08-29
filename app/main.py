@@ -7,7 +7,7 @@ from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
-from app.api.v1.endpoints import ws_updates, comments, gmail, google
+from app.api.v1.endpoints import ws_updates, comments, gmail, google, published
 from app.core.dependencies import get_db
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
@@ -35,6 +35,7 @@ app.include_router(ws_updates.router, prefix="/ws") # New company-wide updates
 app.include_router(comments.router, prefix="/api/v1/comments")
 app.include_router(gmail.router, prefix="/api/v1/gmail")
 app.include_router(google.router, prefix="/api/v1/google")
+app.include_router(published.router, prefix="/api/v1/published")
 
 
 @app.get("/")
@@ -53,15 +54,6 @@ def on_startup():
 async def on_shutdown():
     print("Server is shutting down. Disconnecting all websocket clients...")
     await websocket_manager.disconnect_all()
-
-@app.get("/api/v1/agents/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
-def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):
-    return widget_settings_service.get_widget_settings(db, agent_id=agent_id)
-
-@app.put("/api/v1/agents/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
-def update_widget_settings(agent_id: int, widget_settings: schemas_widget_settings.WidgetSettingsUpdate, db: Session = Depends(get_db)):
-    return widget_settings_service.update_widget_settings(db, agent_id=agent_id, widget_settings=widget_settings)
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, ws="websockets")

@@ -20,8 +20,11 @@ def get_api_key_by_key(db: Session, key: str) -> ApiKey | None:
 def get_api_keys_by_company(db: Session, company_id: int) -> list[ApiKey]:
     return db.query(ApiKey).filter(ApiKey.company_id == company_id).all()
 
-def delete_api_key(db: Session, api_key_id: int):
-    db_api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
+def get_api_key_by_id(db: Session, api_key_id: int) -> ApiKey | None:
+    return db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
+
+def delete_api_key(db: Session, api_key_id: int, company_id: int):
+    db_api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id, ApiKey.company_id == company_id).first()
     if db_api_key:
         db.delete(db_api_key)
         db.commit()

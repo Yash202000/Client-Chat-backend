@@ -27,4 +27,5 @@ from app.models.chat_channel import ChatChannel
 from app.models.channel_membership import ChannelMembership
 from app.models.internal_chat_message import InternalChatMessage
 from app.models.video_call import VideoCall
+from app.models.published_widget_settings import PublishedWidgetSettings
 
