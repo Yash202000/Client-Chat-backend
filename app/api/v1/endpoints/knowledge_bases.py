@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, HttpUrl
+from types import SimpleNamespace
 
 from app.schemas import knowledge_base as schemas_knowledge_base
-from app.services import knowledge_base_service
+from app.services import knowledge_base_service, knowledge_base_processing_service
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.models import user as models_user
 
@@ -15,6 +16,28 @@ class KnowledgeBaseCreateFromURL(BaseModel):
     name: str
     description: str | None = None
     knowledge_base_id: Optional[int] = None # New field for appending
+
+@router.post("/upload", response_model=schemas_knowledge_base.KnowledgeBase, dependencies=[Depends(require_permission("knowledgebase:create"))])
+def upload_knowledge_base_file(
+    *,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    description: str = Form(None),
+    embedding_model: str = Form("nvidia"), # Add embedding_model to the form
+    vector_store_type: str = Form("chroma") # Add vector_store_type to the form
+):
+    """
+    Upload a file to create a new knowledge base.
+    """
+    # Create a simple object that mimics the Agent model for the purpose of passing the embedding model
+    agent = SimpleNamespace(embedding_model=embedding_model)
+    
+    knowledge_base = knowledge_base_processing_service.process_and_store_document(
+        db=db, file=file, agent=agent, company_id=current_user.company_id, name=name, description=description, vector_store_type=vector_store_type
+    )
+    return knowledge_base
 
 @router.post("/from-url", response_model=schemas_knowledge_base.KnowledgeBase, dependencies=[Depends(require_permission("knowledgebase:create"))])
 def create_knowledge_base_from_url(

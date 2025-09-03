@@ -1,3 +1,4 @@
+
 from pydantic import BaseModel, validator
 from typing import List, Optional
 from app.schemas.chat_message import ChatMessage
@@ -12,14 +13,15 @@ class AgentBase(BaseModel):
     welcome_message: str
     prompt: str
     llm_provider: Optional[str] = "groq"
-    model_name: Optional[str] = "llama3-8b-8192"
+    model_name: Optional[str] = "llama-3.1-8b-instant"
     personality: Optional[str] = "helpful"
     language: Optional[str] = "en"
     timezone: Optional[str] = "UTC"
     response_style: Optional[str] = None
     instructions: Optional[str] = None
     credential_id: Optional[int] = None
-    knowledge_base_id: Optional[int] = None
+    knowledge_base_ids: Optional[List[int]] = None
+    embedding_model: Optional[str] = None
     tool_ids: Optional[List[int]] = []
     voice_id: Optional[str] = 'default'
     tts_provider: Optional[str] = 'voice_engine'
@@ -39,7 +41,10 @@ class AgentUpdate(BaseModel):
     instructions: Optional[str] = None
     credential_id: Optional[int] = None
     is_active: Optional[bool] = None
-    knowledge_base_id: Optional[int] = None
+    knowledge_base_ids: Optional[List[int]] = None
+    model_name: Optional[str] = None
+    llm_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
     tool_ids: Optional[List[int]] = None
     status: Optional[str] = None
     voice_id: Optional[str] = None
@@ -48,9 +53,9 @@ class AgentUpdate(BaseModel):
 
 class Agent(AgentBase):
     id: int
-    messages: List[ChatMessage] = []
+    # messages: List[ChatMessage] = []
     credential: Optional[Credential] = None
-    knowledge_base: Optional[KnowledgeBase] = None
+    knowledge_bases: List[KnowledgeBase] = []
     webhooks: List[Webhook] = []
     tools: List[Tool] = []
     version_number: int
@@ -64,6 +69,22 @@ class Agent(AgentBase):
         if 'tools' in values and values['tools']:
             return [tool.id for tool in values['tools']]
         return v
+
+    @validator('knowledge_base_ids', always=True)
+    def populate_knowledge_base_ids_from_knowledge_bases(cls, v, values):
+        if 'knowledge_bases' in values and values['knowledge_bases']:
+            return [kb.id for kb in values['knowledge_bases']]
+        return v
+
+    class Config:
+        from_attributes = True
+
+class AgentVersion(BaseModel):
+    id: int
+    version_number: int
+    status: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
 
     class Config:
         from_attributes = True

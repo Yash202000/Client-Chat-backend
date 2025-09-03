@@ -51,7 +51,7 @@ def create_initial_data():
                 welcome_message="Hello! How can I help you?",
                 prompt=prompt,
                 llm_provider="groq",
-                model_name="llama3-8b-8192"
+                model_name="llama-3.1-8b-instant"
             )
             agent = agent_service.create_agent(db, agent_create_data, company_id=company.id)
             # Create the api_call tool if it doesn't exist

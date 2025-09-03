@@ -2,6 +2,9 @@ import google.generativeai as genai
 from sqlalchemy.orm import Session
 from app.services import credential_service
 from app.services.vault_service import vault_service
+from app.core.config import settings
+
+genai.configure(api_key=settings.GOOGLE_API_KEY)
 
 def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list, api_key: str = None):
     if api_key is None:

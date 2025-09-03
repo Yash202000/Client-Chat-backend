@@ -1,3 +1,4 @@
+import os
 from sqlalchemy.orm import Session
 from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service
 from app.core.config import settings
@@ -6,6 +7,116 @@ from app.schemas.chat_message import ChatMessage as ChatMessageSchema, ChatMessa
 import json
 from app.core.websockets import manager
 from app.services.vault_service import vault_service
+from app.models.agent import Agent
+
+import numpy as np
+import faiss
+from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provider, groq_provider
+from chromadb.api.client import Client as ChromaClient
+from app.services.faiss_vector_database import VectorDatabase
+from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
+
+
+def _get_embeddings(agent: Agent, texts: list[str]):
+    """
+    Generates embeddings for a list of texts using the agent's configured embedding model.
+    """
+    print(f"Generating embeddings for {len(texts)} texts using {agent.embedding_model}...")
+    
+    if agent.embedding_model == 'gemini':
+        embeddings = []
+        for text in texts:
+            try:
+                result = gemini_provider.genai.embed_content(model="models/embedding-001", content=text, task_type="RETRIEVAL_DOCUMENT")
+                embeddings.append(result['embedding'])
+            except Exception as e:
+                print(f"An error occurred while embedding text with Gemini: {e}")
+                embeddings.append(np.zeros(768)) # Gemini's embedding dimension
+        return np.array(embeddings)
+    
+    elif agent.embedding_model == 'nvidia':
+        try:
+            # Attempt to use local NVIDIA model
+            return nvidia_provider.get_embeddings(texts)
+        except Exception as e:
+            print(f"An error occurred while embedding text with local NVIDIA model: {e}")
+            print("Attempting to fallback to NVIDIA API for embeddings...")
+            try:
+                # Fallback to NVIDIA API
+                client = nvidia_api_provider.NVIDIAEmbeddings()
+                return np.array(client.embed_documents(texts))
+            except Exception as api_e:
+                print(f"Fallback to NVIDIA API also failed: {api_e}")
+                return np.array([np.zeros(1024) for _ in texts]) # Final fallback: placeholder
+    
+    elif agent.embedding_model == 'nvidia_api':
+        try:
+            client = nvidia_api_provider.NVIDIAEmbeddings()
+            return np.array(client.embed_documents(texts))
+        except Exception as e:
+            print(f"An error occurred while embedding text with NVIDIA API: {e}")
+            return np.array([np.zeros(1024) for _ in texts]) # Placeholder dimension for NVIDIA
+            
+    else:
+        raise ValueError(f"Unknown embedding model: {agent.embedding_model}")
+
+
+def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: int = 3):
+    """
+    Performs retrieval from the appropriate knowledge bases and returns the augmented context.
+    """
+    if not knowledge_bases:
+        return ""
+
+    all_retrieved_chunks = []
+    query_embedding = _get_embeddings(agent, [user_query])[0]
+
+    for kb in knowledge_bases:
+        try:
+            print(kb.type, kb.provider, kb.connection_details, kb.chroma_collection_name, kb.faiss_index_id)
+            if kb.type == "local" and kb.chroma_collection_name:
+                # Query the local ChromaDB collection managed by our pipeline
+                client = ChromaClient() # This should be configured to connect to your ChromaDB instance
+                collections = client.list_collections() # Debug line to ensure connection
+                print(f"Available collections: {[col.name for col in collections]}")
+                print(client.count_collections())
+                collection = client.get_collection(name=kb.chroma_collection_name)
+                results = collection.query(
+                    query_embeddings=[query_embedding.tolist()],
+                    n_results=k
+                )
+                all_retrieved_chunks.extend(results['documents'][0])
+
+            elif kb.type == "local" and kb.faiss_index_id:
+                # Query the local FAISS index
+                embeddings_instance = NVIDIAEmbeddings() # Assuming NVIDIAEmbeddings is the chosen embedding model
+                faiss_db_path = os.path.join(settings.FAISS_INDEX_DIR, str(agent.company_id), kb.faiss_index_id)
+                faiss_db = VectorDatabase(embeddings=embeddings_instance, db_path=faiss_db_path, index_name=kb.faiss_index_id)
+                if faiss_db.load_index():
+                    # FAISS similarity search expects a string query, not an embedding
+                    results = faiss_db.similarity_search(user_query, k=k)
+                    all_retrieved_chunks.extend([doc.page_content for doc in results])
+                else:
+                    print(f"Error loading FAISS index from {faiss_db_path}")
+
+            elif kb.type == "remote" and kb.provider == "chroma" and kb.connection_details:
+                # Query a user-provided, remote ChromaDB instance
+                client = ChromaClient(host=kb.connection_details.get("host"), port=kb.connection_details.get("port"))
+                collection = client.get_collection(name=kb.connection_details.get("collection_name"))
+                results = collection.query(
+                    query_embeddings=[query_embedding.tolist()],
+                    n_results=k
+                )
+                all_retrieved_chunks.extend(results['documents'][0])
+        except Exception as e:
+            print(f"Error querying knowledge base {kb.name} (ID: {kb.id}): {e}")
+
+    if not all_retrieved_chunks:
+        return ""
+
+    context = "\n\n---\n\n".join(all_retrieved_chunks)
+    return context
+
 
 class CustomJsonEncoder(json.JSONEncoder):
     def default(self, o):
@@ -17,8 +128,6 @@ class CustomJsonEncoder(json.JSONEncoder):
             return str(o)
 
 
-# Import provider modules directly and create a provider map
-from app.llm_providers import groq_provider, gemini_provider
 
 PROVIDER_MAP = {
     "groq": groq_provider,
@@ -116,6 +225,9 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
         print(f"Error: LLM provider '{agent.llm_provider}' not found.")
         return
 
+    # Get RAG context
+    rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
+
     generic_tools = await _get_tools_for_agent(agent)
     db_chat_history = chat_service.get_chat_messages(db, agent_id, session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
@@ -139,6 +251,9 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
             f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
+        if rag_context:
+            system_prompt += f"\n\nHere is some context from the knowledge base that might be relevant:\n{rag_context}"
+
         MAX_HISTORY = 10
         formatted_history = formatted_history[-MAX_HISTORY:]
         llm_response = provider_module.generate_response(

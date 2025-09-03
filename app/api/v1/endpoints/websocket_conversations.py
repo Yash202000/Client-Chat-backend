@@ -8,41 +8,13 @@ from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
 from app.core.websockets import manager
-from app.services.stt_service import STTService
-from app.services.tts_service import TTSService
-
-router = APIRouter()
-
-import asyncio
-
-# (other imports)
-from app.services.stt_service import STTService
-from app.services.tts_service import TTSService
-
-# (router definition)
-
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
-from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service
-from app.services.workflow_execution_service import WorkflowExecutionService
-from app.schemas import chat_message as schemas_chat_message
-import json
-from typing import List, Dict, Any
-from app.core.dependencies import get_current_user_from_ws, get_db
-from app.models import user as models_user, conversation_session as models_conversation_session
-from app.core.websockets import manager
 from app.services.stt_service import STTService, GroqSTTService
 from app.services.tts_service import TTSService
 from fastapi import UploadFile
 import io
-
-router = APIRouter()
-
 import asyncio
 
-# (other imports)
-from app.services.stt_service import STTService
-from app.services.tts_service import TTSService
+router = APIRouter()
 
 # (router definition)
 

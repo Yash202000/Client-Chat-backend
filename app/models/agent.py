@@ -1,8 +1,13 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func, Table
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.tool import agent_tools
+
+agent_knowledge_bases = Table('agent_knowledge_bases', Base.metadata,
+    Column('agent_id', Integer, ForeignKey('agents.id'), primary_key=True),
+    Column('knowledge_base_id', Integer, ForeignKey('knowledge_bases.id'), primary_key=True)
+)
 
 class Agent(Base):
     __tablename__ = "agents"
@@ -12,7 +17,8 @@ class Agent(Base):
     welcome_message = Column(String)
     prompt = Column(String) # System prompt for the agent
     llm_provider = Column(String, default="groq") # e.g., 'groq', 'gemini'
-    model_name = Column(String, default="llama3-8b-8192") # e.g., 'llama3-8b-8192', 'gemini-1.5-flash'
+    embedding_model = Column(String, default="gemini") # e.g., 'gemini', 'nvidia', 'nvidia_api'
+    model_name = Column(String, default="llama-3.1-8b-instant") # e.g., 'llama-3.1-8b-instant', 'gemini-1.5-flash'
     personality = Column(String, default="helpful")
     language = Column(String, default="en")
     timezone = Column(String, default="UTC")
@@ -20,7 +26,6 @@ class Agent(Base):
     response_style = Column(String, nullable=True)
     instructions = Column(String, nullable=True)
     credential_id = Column(Integer, ForeignKey("credentials.id"), nullable=True)
-    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
     version_number = Column(Integer, default=1)
     parent_version_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
@@ -31,7 +36,7 @@ class Agent(Base):
     company = relationship("Company", back_populates="agents")
     messages = relationship("ChatMessage", back_populates="agent")
     credential = relationship("Credential")
-    knowledge_base = relationship("KnowledgeBase")
+    knowledge_bases = relationship("KnowledgeBase", secondary=agent_knowledge_bases, back_populates="agents")
     tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")
     workflows = relationship("Workflow", back_populates="agent")
