@@ -44,4 +44,4 @@ def create_message(db: Session, message: chat_schema.InternalChatMessageCreate, 
     return db_message
 
 def get_channel_messages(db: Session, channel_id: int, skip: int = 0, limit: int = 100) -> List[InternalChatMessage]:
-    return db.query(InternalChatMessage).filter(InternalChatMessage.channel_id == channel_id).order_by(InternalChatMessage.created_at.desc()).offset(skip).limit(limit).all()
+    return db.query(InternalChatMessage).filter(InternalChatMessage.channel_id == channel_id).order_by(InternalChatMessage.created_at.asc()).offset(skip).limit(limit).all()

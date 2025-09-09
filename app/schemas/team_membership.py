@@ -1,6 +1,7 @@
 
 from pydantic import BaseModel
 from typing import Optional
+from .user import User
 
 class TeamMembershipBase(BaseModel):
     user_id: int
@@ -17,6 +18,7 @@ class TeamMembershipUpdate(BaseModel):
 class TeamMembership(TeamMembershipBase):
     id: int
     company_id: int
+    user: User
 
     class Config:
         orm_mode = True

@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, websockets, video_calls
+from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls
 
 
 api_router = APIRouter()
@@ -69,8 +69,6 @@ api_router.include_router(teams_calendar.router, prefix="/teams-calendar", tags=
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 
 websocket_router.include_router(websocket_conversations.router, prefix="", tags=["conversations"])
-websocket_router.include_router(websockets.router, prefix="", tags=["websockets"])
-
 api_router.include_router(websocket_router, prefix="/ws", tags=["WebSockets"])
 
 

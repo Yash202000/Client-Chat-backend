@@ -1,7 +1,7 @@
 
 from pydantic import BaseModel
 from typing import List, Optional
-from .user import User
+from .team_membership import TeamMembership
 
 class TeamBase(BaseModel):
     name: str
@@ -15,7 +15,7 @@ class TeamUpdate(TeamBase):
 class Team(TeamBase):
     id: int
     company_id: int
-    members: List[User] = []
+    members: List[TeamMembership] = []
 
     class Config:
         orm_mode = True

@@ -10,11 +10,11 @@ from app.services.vault_service import vault_service
 from app.models.agent import Agent
 
 import numpy as np
-import faiss
+import chromadb
 from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provider, groq_provider
-from chromadb.api.client import Client as ChromaClient
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
+from app.core.object_storage import s3_client, chroma_client
 
 
 def _get_embeddings(agent: Agent, texts: list[str]):
@@ -76,11 +76,10 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
             print(kb.type, kb.provider, kb.connection_details, kb.chroma_collection_name, kb.faiss_index_id)
             if kb.type == "local" and kb.chroma_collection_name:
                 # Query the local ChromaDB collection managed by our pipeline
-                client = ChromaClient() # This should be configured to connect to your ChromaDB instance
-                collections = client.list_collections() # Debug line to ensure connection
+                collections = chroma_client.list_collections() # Debug line to ensure connection
                 print(f"Available collections: {[col.name for col in collections]}")
-                print(client.count_collections())
-                collection = client.get_collection(name=kb.chroma_collection_name)
+                print(chroma_client.count_collections())
+                collection = chroma_client.get_collection(name=kb.chroma_collection_name)
                 results = collection.query(
                     query_embeddings=[query_embedding.tolist()],
                     n_results=k
@@ -101,7 +100,7 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
 
             elif kb.type == "remote" and kb.provider == "chroma" and kb.connection_details:
                 # Query a user-provided, remote ChromaDB instance
-                client = ChromaClient(host=kb.connection_details.get("host"), port=kb.connection_details.get("port"))
+                client = chromadb.HttpClient(host=kb.connection_details.get("host"), port=kb.connection_details.get("port"))
                 collection = client.get_collection(name=kb.connection_details.get("collection_name"))
                 results = collection.query(
                     query_embeddings=[query_embedding.tolist()],

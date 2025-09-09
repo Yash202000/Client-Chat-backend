@@ -5,6 +5,7 @@ from app.schemas import user as schemas_user
 from app.core.security import get_password_hash
 from app.services import user_settings_service
 from app.schemas import user_settings as schemas_user_settings
+import datetime
 
 def get_user(db: Session, user_id: int):
     return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.id == user_id).first()
@@ -62,3 +63,14 @@ def update_user(db: Session, db_obj: models_user.User, obj_in: schemas_user.User
     db.commit()
     db.refresh(db_obj)
     return db_obj
+
+def update_user_presence(db: Session, user_id: int, status: str):
+    user = get_user(db, user_id)
+    if user:
+        user.presence_status = status
+        if status == "offline":
+            user.last_seen = datetime.datetime.utcnow()
+        db.commit()
+        db.refresh(user)
+        return user
+    return None

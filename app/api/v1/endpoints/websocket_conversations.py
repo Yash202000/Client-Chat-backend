@@ -1,8 +1,9 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message
+from app.schemas.websockets import WebSocketMessage
 import json
 from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
@@ -13,10 +14,36 @@ from app.services.tts_service import TTSService
 from fastapi import UploadFile
 import io
 import asyncio
+import datetime
 
 router = APIRouter()
 
 # (router definition)
+
+
+@router.websocket("/wschat/{channel_id}")
+async def internal_chat_websocket_endpoint(
+    websocket: WebSocket,
+    channel_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_user_from_ws)
+):
+    print(f"Attempting to connect to WebSocket for channel {channel_id}")
+    channel_id_str = str(channel_id)
+
+    await manager.connect(websocket, channel_id_str,"user")
+    user_service.update_user_presence(db, user_id=current_user.id, status="online")
+    presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "online"})
+    await manager.broadcast(presence_message.model_dump_json(), channel_id_str)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, channel_id_str)
+        user_service.update_user_presence(db, user_id=current_user.id, status="offline")
+        presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "offline"})
+        await manager.broadcast(presence_message.model_dump_json(), channel_id_str)
 
 @router.websocket("/voice/{company_id}/{agent_id}/{session_id}")
 async def voice_websocket_endpoint(
@@ -531,3 +558,4 @@ async def public_websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
         print(f"Client in session #{session_id} disconnected")
+

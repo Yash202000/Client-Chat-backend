@@ -1,5 +1,8 @@
 from pydantic import BaseModel
 
+class VideoCallCreate(BaseModel):
+    channel_id: int
+    
 class VideoCallInitiateResponse(BaseModel):
     room_name: str
     livekit_token: str

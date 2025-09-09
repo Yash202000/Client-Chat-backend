@@ -12,12 +12,14 @@ class ConnectionManager:
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
         self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type})
+        print(f"Connected: {user_type} to session {session_id}. Total connections for session: {len(self.active_connections[session_id])}")
 
     def disconnect(self, websocket: WebSocket, session_id: str):
         if session_id in self.active_connections:
             connection_to_remove = next((c for c in self.active_connections[session_id] if c["websocket"] == websocket), None)
             if connection_to_remove:
                 self.active_connections[session_id].remove(connection_to_remove)
+                print(f"Disconnected from session {session_id}. Remaining connections: {len(self.active_connections.get(session_id, []))}")
                 if not self.active_connections[session_id]:
                     del self.active_connections[session_id]
 
@@ -42,6 +44,16 @@ class ConnectionManager:
                     # self.active_connections[session_id].remove(connection)
         else:
             print(f"[ConnectionManager] No active connections for session {session_id}")
+    
+    async def broadcast(self, message: str, channel_id: str):
+        print(f"Attempting to broadcast to channel {channel_id}. Active connections: {self.active_connections.keys()}")
+        if channel_id in self.active_connections:
+            print(f"Found {len(self.active_connections[channel_id])} connections for channel {channel_id}")
+            for connection in self.active_connections[channel_id]:
+                await connection["websocket"].send_text(message)
+                print(f"Broadcasted to {connection['websocket']}")
+        else:
+            print(f"No connections found for channel {channel_id}")
 
     async def disconnect_all(self):
         print("[ConnectionManager] Disconnecting all clients...")

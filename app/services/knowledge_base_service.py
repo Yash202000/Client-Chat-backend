@@ -11,6 +11,9 @@ from app.core.object_storage import s3_client, BUCKET_NAME, chroma_client
 import numpy as np
 import os
 import shutil
+import os
+from io import BytesIO
+from pypdf import PdfReader
 
 async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, company_id: int, prompt: str) -> str:
     kb = get_knowledge_base(db, knowledge_base_id, company_id)
@@ -179,3 +182,67 @@ def find_relevant_chunks(db: Session, knowledge_base_id: int, company_id: int, q
     top_k_indices = np.argsort(similarities)[-top_k:][::-1]
     
     return [content_chunks[i] for i in top_k_indices]
+
+import os
+from io import BytesIO
+from pypdf import PdfReader
+
+def get_knowledge_base_content(db: Session, knowledge_base_id: int, company_id: int):
+    db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
+    if not db_knowledge_base:
+        return None
+
+    if db_knowledge_base.storage_type == 's3' and db_knowledge_base.storage_details:
+        try:
+            key = db_knowledge_base.storage_details.get('key')
+            response = s3_client.get_object(
+                Bucket=db_knowledge_base.storage_details.get('bucket'),
+                Key=key
+            )
+            file_content_bytes = response['Body'].read()
+
+            file_extension = os.path.splitext(key)[1].lower()
+
+            if file_extension == '.pdf':
+                try:
+                    pdf_file = BytesIO(file_content_bytes)
+                    reader = PdfReader(pdf_file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text() or ""
+                    return text
+                except Exception as e:
+                    print(f"Error parsing PDF file from S3: {e}")
+                    return "Could not extract text from PDF file."
+            else: # Assume text file for others
+                try:
+                    return file_content_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    return "File content could not be displayed (not valid UTF-8 text)."
+
+        except Exception as e:
+            print(f"Error fetching file from S3: {e}")
+            return None
+    
+    return db_knowledge_base.content
+
+def get_knowledge_base_download_url(db: Session, knowledge_base_id: int, company_id: int):
+    db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
+    if not db_knowledge_base:
+        return None
+
+    if db_knowledge_base.storage_type == 's3' and db_knowledge_base.storage_details:
+        try:
+            return s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': db_knowledge_base.storage_details.get('bucket'),
+                    'Key': db_knowledge_base.storage_details.get('key')
+                },
+                ExpiresIn=3600  # URL expires in 1 hour
+            )
+        except Exception as e:
+            print(f"Error generating presigned URL: {e}")
+            return None
+    
+    return None

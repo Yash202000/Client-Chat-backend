@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 import datetime
 
@@ -16,7 +16,9 @@ class ChatChannelBase(BaseModel):
 
 class InternalChatMessageBase(BaseModel):
     content: str
-    channel_id: int
+    channel_id: Optional[int] = None
+    
+    model_config = ConfigDict(from_attributes=True)
 
 # Schemas for creating new objects
 class ChannelMembershipCreate(ChannelMembershipBase):
@@ -36,15 +38,13 @@ class UserInChat(BaseModel):
     last_name: Optional[str] = None
     presence_status: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ChannelMembership(ChannelMembershipBase):
     id: int
     joined_at: datetime.datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class InternalChatMessage(InternalChatMessageBase):
     id: int
@@ -52,8 +52,7 @@ class InternalChatMessage(InternalChatMessageBase):
     created_at: datetime.datetime
     sender: UserInChat
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ChatChannel(ChatChannelBase):
     id: int
@@ -62,5 +61,4 @@ class ChatChannel(ChatChannelBase):
     participants: List[ChannelMembership] = []
     messages: List[InternalChatMessage] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

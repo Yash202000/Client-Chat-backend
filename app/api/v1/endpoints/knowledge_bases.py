@@ -145,3 +145,31 @@ async def generate_qna_for_knowledge_base(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate Q&A: {e}")
+
+class KnowledgeBaseContent(BaseModel):
+    content: str
+
+@router.get("/{knowledge_base_id}/content", response_model=KnowledgeBaseContent, dependencies=[Depends(require_permission("knowledgebase:read"))])
+def get_knowledge_base_content(
+    knowledge_base_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    content = knowledge_base_service.get_knowledge_base_content(db, knowledge_base_id, current_user.company_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Knowledge Base content not found")
+    return KnowledgeBaseContent(content=content)
+
+class KnowledgeBaseDownloadUrl(BaseModel):
+    download_url: str
+
+@router.get("/{knowledge_base_id}/download-url", response_model=KnowledgeBaseDownloadUrl, dependencies=[Depends(require_permission("knowledgebase:read"))])
+def get_knowledge_base_download_url(
+    knowledge_base_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    download_url = knowledge_base_service.get_knowledge_base_download_url(db, knowledge_base_id, current_user.company_id)
+    if download_url is None:
+        raise HTTPException(status_code=404, detail="Knowledge Base download url not found")
+    return KnowledgeBaseDownloadUrl(download_url=download_url)

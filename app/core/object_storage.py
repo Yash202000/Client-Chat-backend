@@ -18,11 +18,8 @@ s3_client = boto3.client(
 
 BUCKET_NAME = settings.minio_bucket
 
-chroma_client = ChromaClient()
-
-# if settings.CHROMA_DB_HOST:
-#     print(f"Connecting to ChromaDB at {settings.CHROMA_DB_HOST}:{settings.CHROMA_DB_PORT}")
-#     print("Not happend")
-#     # chroma_client = ChromaClient(settings={"chroma_api_impl": "chromadb.api.fastapi.FastAPI", "chroma_server_host": settings.CHROMA_DB_HOST, "chroma_server_http_port": settings.CHROMA_DB_PORT})
-# else:
-#     chroma_client = ChromaClient()
+if settings.CHROMA_DB_HOST:
+    print(f"Connecting to ChromaDB at {settings.CHROMA_DB_HOST}:{settings.CHROMA_DB_PORT}")
+    chroma_client = chromadb.HttpClient(host=settings.CHROMA_DB_HOST, port=settings.CHROMA_DB_PORT)
+else:
+    chroma_client = ChromaClient()

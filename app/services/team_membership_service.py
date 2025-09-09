@@ -1,4 +1,3 @@
-
 from sqlalchemy.orm import Session
 from app.models import team_membership as models_team_membership, user as models_user, team as models_team
 from app.schemas import team_membership as schemas_team_membership
@@ -86,3 +85,9 @@ def delete_team_membership(db: Session, membership_id: int, company_id: int):
         db.delete(db_membership)
         db.commit()
     return db_membership
+
+def is_user_in_team(db: Session, user_id: int, team_id: int) -> bool:
+    return db.query(models_team_membership.TeamMembership).filter(
+        models_team_membership.TeamMembership.user_id == user_id,
+        models_team_membership.TeamMembership.team_id == team_id
+    ).first() is not None
