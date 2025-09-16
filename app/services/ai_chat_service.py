@@ -66,7 +66,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         
         # Default to Groq, but can be changed to Gemini or other providers
         llm_response = groq_provider.generate_response(
-            db=db, company_id=company_id, model_name='llama3-8b-8192',
+            db=db, company_id=company_id, model_name='llama-3.1-8b-instant',
             system_prompt=system_prompt, chat_history=formatted_history,
             tools=[], api_key=settings.GROQ_API_KEY
         )

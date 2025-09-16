@@ -83,6 +83,36 @@ class VectorDatabase:
             logger.error(f"Failed to create vector index: {str(e)}")
             return False
     
+    def create_index_from_texts(self, texts: List[str]) -> bool:
+        """
+        Create vector index from texts
+        
+        Args:
+            texts: List of texts to index
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not texts:
+            logger.warning("No texts provided for indexing")
+            return False
+        
+        try:
+            logger.info(f"Creating vector index from {len(texts)} texts...")
+            
+            # Create FAISS vectorstore
+            self.vectorstore = FAISS.from_texts(
+                texts=texts,
+                embedding=self.embeddings
+            )
+            
+            logger.info("✅ Vector index created successfully!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create vector index: {str(e)}")
+            return False
+    
     def save_index(self) -> bool:
         """
         Save the vector index to disk

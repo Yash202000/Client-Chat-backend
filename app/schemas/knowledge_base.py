@@ -7,7 +7,6 @@ class KnowledgeBaseBase(BaseModel):
     type: str = "local"
     provider: Optional[str] = None
     connection_details: Optional[Dict[str, Any]] = None
-    content: Optional[str] = None
     company_id: Optional[int] = None
     type: str = "local" # 'local' or 'remote'
     storage_type: Optional[str] = None # e.g., 's3'
@@ -16,7 +15,7 @@ class KnowledgeBaseBase(BaseModel):
     faiss_index_id: Optional[str] = None
 
 class KnowledgeBaseCreate(KnowledgeBaseBase):
-    pass
+    content: str
 
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = None
@@ -28,6 +27,7 @@ class KnowledgeBaseUpdate(BaseModel):
 
 class KnowledgeBase(KnowledgeBaseBase):
     id: int
+    content: Optional[str] = None
 
     class Config:
         orm_mode = True

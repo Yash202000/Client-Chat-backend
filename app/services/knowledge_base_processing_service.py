@@ -11,6 +11,76 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
 
+def process_and_store_text(db: Session, text: str, agent: dict, company_id: int, name: str, description: str, vector_store_type: str = "chroma"):
+    """
+    Orchestrates the text processing pipeline:
+    1. Chunks the text.
+    2. Generates embeddings for each chunk.
+    3. Creates a new, unique collection in ChromaDB or a FAISS index.
+    4. Adds the chunks and their embeddings to the new vector store.
+    5. Saves a new entry in the knowledge_bases table.
+    """
+    # 1. Chunk Text
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len,
+        separators=["\n\n", "\n", " ", ""]
+    )
+    text_chunks = text_splitter.split_text(text)
+
+    # 2. Generate Embeddings
+    embeddings_instance = NVIDIAEmbeddings() # Assuming NVIDIAEmbeddings is the chosen embedding model
+    embeddings = _get_embeddings(agent, text_chunks)
+
+    chroma_collection_name = None
+    faiss_index_id = None
+
+    if vector_store_type == "chroma":
+        print("Creating ChromaDB collection")
+        # Create ChromaDB Collection
+        collection_name = f"kb_{company_id}_{uuid.uuid4()}"
+        collection = chroma_client.create_collection(name=collection_name)
+        collection.add(
+            embeddings=embeddings.tolist(),
+            documents=text_chunks,
+            ids=[f"id_{i}" for i in range(len(text_chunks))]
+        )
+        chroma_collection_name = collection_name
+    elif vector_store_type == "faiss":
+        # Create FAISS index
+        faiss_index_id = str(uuid.uuid4())
+        # For FAISS, we need a directory to store the index
+        faiss_db_path = os.path.join(settings.FAISS_INDEX_DIR, str(company_id), faiss_index_id)
+        
+        faiss_db = VectorDatabase(
+            embeddings=embeddings_instance, 
+            db_path=faiss_db_path, 
+            index_name=faiss_index_id # Use the ID as the index name within the path
+        )
+        faiss_db.create_index_from_texts(text_chunks) # Pass langchain Document objects
+        faiss_db.save_index()
+    else:
+        raise ValueError(f"Unsupported vector store type: {vector_store_type}")
+
+    # 3. Save KnowledgeBase Entry
+    kb_entry = KnowledgeBase(
+        name=name,
+        description=description,
+        company_id=company_id,
+        type='local',
+        storage_type=None,
+        storage_details=None,
+        chroma_collection_name=chroma_collection_name,
+        faiss_index_id=faiss_index_id,
+        content=text
+    )
+    db.add(kb_entry)
+    db.commit()
+    db.refresh(kb_entry)
+
+    return kb_entry
+
 def process_and_store_document(db: Session, file, agent: dict, company_id: int, name: str, description: str, vector_store_type: str = "chroma"):
     """
     Orchestrates the document processing pipeline:

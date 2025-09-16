@@ -18,3 +18,4 @@ class Company(Base):
     tools = relationship("Tool", back_populates="company")
     integrations = relationship("Integration", back_populates="company")
     chat_channels = relationship("ChatChannel", back_populates="company")
+    processing_templates = relationship("ProcessingTemplate", back_populates="company")

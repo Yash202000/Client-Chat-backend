@@ -7,7 +7,7 @@ from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
-from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat
+from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, object_detection
 from app.core.dependencies import get_db
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
@@ -38,6 +38,7 @@ app.include_router(google.router, prefix="/api/v1/google")
 app.include_router(published.router, prefix="/api/v1/published")
 app.include_router(ai_images.router, prefix="/api/v1/ai-images", tags=["ai-images"])
 app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["ai-chat"])
+app.include_router(object_detection.router, prefix="/api/v1/object-detection", tags=["object-detection"])
 
 
 @app.get("/")

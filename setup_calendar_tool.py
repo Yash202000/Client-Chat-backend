@@ -38,7 +38,7 @@ def run(params: dict, config: dict):
         return {"error": "Google Calendar integration not found for this company."}
 
     # Find available slots (e.g., search in the next 7 days)
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
     start_time = now
     end_time = now + datetime.timedelta(days=7)
     

@@ -29,4 +29,6 @@ from app.models.internal_chat_message import InternalChatMessage
 from app.models.video_call import VideoCall
 from app.models.published_widget_settings import PublishedWidgetSettings
 from app.models.ai_image import AIImage
+from app.models.processing_template import ProcessingTemplate
+from app.models.temporary_document import TemporaryDocument
 

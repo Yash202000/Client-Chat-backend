@@ -69,7 +69,7 @@ def update_user_presence(db: Session, user_id: int, status: str):
     if user:
         user.presence_status = status
         if status == "offline":
-            user.last_seen = datetime.datetime.utcnow()
+            user.last_seen = datetime.datetime.now(datetime.UTC)
         db.commit()
         db.refresh(user)
         return user
