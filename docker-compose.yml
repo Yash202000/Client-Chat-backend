@@ -50,5 +50,18 @@ services:
         source: /etc/default/minio
         target: /etc/config.env
 
+  db:
+    image: postgres:15
+    restart: always
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U agentconnect"], interval: 10s, timeout: 5s, retries: 5 }
+    volumes:
+      - agentconnect_db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER:     agentconnect
+      POSTGRES_PASSWORD: agentconnect
+
 volumes:
   chroma_data:
+  agentconnect_db:

@@ -6,6 +6,8 @@ from app.models import conversation_session as models_conversation_session
 from app.models import agent as models_agent
 from app.models import chat_message as models_chat_message
 from typing import Dict, Any, List
+from app.models.user import User
+from app.core.auth import get_current_user
 import datetime
 
 router = APIRouter()
@@ -14,10 +16,12 @@ router = APIRouter()
 def get_overall_metrics(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     
     query = db.query(models_conversation_session.ConversationSession)
+    query = query.filter(models_conversation_session.ConversationSession.company_id == current_user.company_id)
     if start_date:
         query = query.filter(models_conversation_session.ConversationSession.created_at >= start_date)
     if end_date:
@@ -26,6 +30,7 @@ def get_overall_metrics(
     total_conversations = query.count()
     
     avg_satisfaction_query = db.query(func.avg(models_chat_message.ChatMessage.feedback_rating))
+    avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.company_id == current_user.company_id)
     if start_date:
         avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.timestamp >= start_date)
     if end_date:
@@ -44,7 +49,8 @@ def get_overall_metrics(
 def get_agent_performance(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     query = db.query(
         models_agent.Agent.name,
@@ -79,7 +85,8 @@ def get_agent_performance(
 def get_customer_satisfaction(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     query = db.query(
         models_chat_message.ChatMessage.feedback_rating,
@@ -107,7 +114,8 @@ def get_customer_satisfaction(
 def get_top_issues(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     query = db.query(
         models_chat_message.ChatMessage.issue,
@@ -133,7 +141,8 @@ def get_top_issues(
 def get_error_rates(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     # Placeholder - requires error logging mechanism
     return {"overall_error_rate": "5.2%"}
@@ -142,7 +151,8 @@ def get_error_rates(
 def get_latency(
     db: Session = Depends(get_db),
     start_date: datetime.date = Query(None),
-    end_date: datetime.date = Query(None)
+    end_date: datetime.date = Query(None),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     
     query = db.query(models_chat_message.ChatMessage).order_by(models_chat_message.ChatMessage.timestamp)
@@ -178,7 +188,7 @@ def get_latency(
     return {"avg_response_time": f"{int(minutes)}m {int(seconds)}s"}
 
 @router.get("/alerts")
-def get_alerts(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+def get_alerts(db: Session = Depends(get_db),current_user: User = Depends(get_current_user),) -> List[Dict[str, Any]]:
     # Placeholder - requires an alerting system
     return [
         {"id": 1, "message": "High error rate detected in payment gateway.", "timestamp": "2025-08-15T14:30:00Z", "type": "critical"},

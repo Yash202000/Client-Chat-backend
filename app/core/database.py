@@ -2,12 +2,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from app.core.config import settings
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./app/data/agentconnect.db"
 
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False},
+    settings.DATABASE_URL, 
+    # connect_args={"check_same_thread": False}, # only for SQLite
     pool_size=20, 
     max_overflow=10
 )

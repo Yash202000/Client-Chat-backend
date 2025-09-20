@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
+from sqlalchemy import BigInteger, Column, Integer, String, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -6,13 +6,13 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, index=True)
     message = Column(String)
     sender = Column(String) # 'user' or 'agent'
     message_type = Column(String, default="message") # 'message' or 'note'
     token = Column(String, nullable=True) # For video call tokens, etc.
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
+    session_id = Column(BigInteger, ForeignKey("conversation_sessions.id"), nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id"))
     company_id = Column(Integer, ForeignKey("companies.id"))
     assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -27,3 +27,4 @@ class ChatMessage(Base):
     company = relationship("Company")
     assignee = relationship("User")
     contact = relationship("Contact", back_populates="chat_messages")
+    session = relationship("ConversationSession", back_populates="messages")

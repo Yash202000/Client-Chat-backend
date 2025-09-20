@@ -13,8 +13,8 @@ def create_initial_data():
         # Check if a default company exists, if not, create one
         default_company = company_service.get_companies(db, limit=1)
         if not default_company:
-            print("Creating default company...")
-            company = company_service.create_company(db, schemas_company.CompanyCreate(name="Default Company"))
+            print("Creating default company agentconnect...")
+            company = company_service.create_company(db, schemas_company.CompanyCreate(name="agentconnect"))
         else:
             company = default_company[0]
 
@@ -26,10 +26,10 @@ def create_initial_data():
         super_admin_role = role_service.get_role_by_name(db, "Super Admin")
 
         # Check if a default user exists, if not, create one
-        default_user = user_service.get_user_by_email(db, "admin@example.com")
+        default_user = user_service.get_user_by_email(db, "admin@agentconnect.com")
         if not default_user:
             print("Creating default admin user...")
-            user_service.create_user(db, schemas_user.UserCreate(email="admin@example.com", password="password123"), company_id=company.id, role_id=super_admin_role.id, is_super_admin=True)
+            user_service.create_user(db, schemas_user.UserCreate(email="admin@agentconnect.com", password="password"), company_id=company.id, role_id=super_admin_role.id, is_super_admin=True)
         else:
             # If user exists but has no role, assign super admin role
             user = default_user

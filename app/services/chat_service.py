@@ -23,6 +23,22 @@ def get_sessions_with_details(db: Session, company_id: int, agent_id: int = None
     sessions = query.order_by(desc(models_conversation_session.ConversationSession.updated_at)).all()
     return sessions
 
+
+def get_session_details(db: Session, company_id: int, agent_id: int = None, broadcast_session_id: str = None,  status: str = None):
+    """
+    Gets all unique sessions for a company, optionally filtered by agent or status.
+    It retrieves the latest message for ordering and context.
+    """
+    print('gone here ')
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == str(broadcast_session_id),
+        models_conversation_session.ConversationSession.agent_id == agent_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+    
+    return session
+
+
 def get_contact_for_session(db: Session, session_id: str, company_id: int):
     """
     Retrieves the contact associated with a given session.
@@ -62,7 +78,7 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
         message=message.message, 
         sender=sender, 
         agent_id=agent_id, 
-        session_id=session_id, 
+        session_id=session.id,
         company_id=company_id,
         message_type=message.message_type,
         token=message.token, # Add the token here
@@ -75,11 +91,19 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
     return db_message
 
 def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_chat_message.ChatMessage).filter(
-        or_(models_chat_message.ChatMessage.agent_id == agent_id, models_chat_message.ChatMessage.agent_id == None),
-        models_chat_message.ChatMessage.session_id == session_id,
-        models_chat_message.ChatMessage.company_id == company_id
-    ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+    
+    if session:
+        return db.query(models_chat_message.ChatMessage).filter(
+            or_(models_chat_message.ChatMessage.agent_id == agent_id, models_chat_message.ChatMessage.agent_id == None),
+            models_chat_message.ChatMessage.session_id == session.id,
+            models_chat_message.ChatMessage.company_id == company_id
+        ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()
+    # else return null
+    return []
 
 def update_conversation_status(db: Session, session_id: str, status: str, company_id: int):
     db.query(models_chat_message.ChatMessage).filter(

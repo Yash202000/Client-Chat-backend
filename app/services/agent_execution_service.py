@@ -204,7 +204,7 @@ async def _get_tools_for_agent(agent):
     print(f"Final tool definitions for LLM: {json.dumps(tool_definitions, indent=2)}")
     return tool_definitions
 
-async def generate_agent_response(db: Session, agent_id: int, session_id: str, company_id: int, user_message: str):
+async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str):
     """
     Orchestrates the agent's response, handling tool use and broadcasting messages.
     - If a tool is called, it broadcasts a 'tool_use' message, executes the tool,
@@ -228,7 +228,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
     rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
 
     generic_tools = await _get_tools_for_agent(agent)
-    db_chat_history = chat_service.get_chat_messages(db, agent_id, session_id, company_id, limit=20)
+    db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})
 
@@ -236,7 +236,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
     typing_indicator_enabled = widget_settings.typing_indicator_enabled if widget_settings else False
 
     if typing_indicator_enabled:
-        await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_on", "sender": "agent"}), "agent")
+        await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_on", "sender": "agent"}), "agent")
 
     try:
         agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
@@ -263,11 +263,11 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
     except Exception as e:
         print(f"LLM Provider Error: {e}")
         if typing_indicator_enabled:
-            await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
+            await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
         return
     finally:
         if typing_indicator_enabled:
-            await manager.broadcast_to_session(session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
+            await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
 
     final_agent_response_text = None
 
@@ -280,7 +280,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
             "message_type": "tool_use",
             "tool_call": {"id": tool_call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(parameters)}}
         }
-        await manager.broadcast_to_session(session_id, json.dumps(tool_call_msg), "agent")
+        await manager.broadcast_to_session(boradcast_session_id, json.dumps(tool_call_msg), "agent")
 
         # --- Tool Execution ---
         if '__' in tool_name:
@@ -333,8 +333,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, c
     # --- Save and Broadcast Final Message ---
     if final_agent_response_text and final_agent_response_text.strip():
         agent_message = ChatMessageCreate(message=final_agent_response_text, message_type="message")
-        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-        await manager.broadcast_to_session(session_id, ChatMessageSchema.model_validate(db_agent_message).model_dump_json(), "agent")
+        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, boradcast_session_id, company_id, "agent")
+        await manager.broadcast_to_session(boradcast_session_id, ChatMessageSchema.model_validate(db_agent_message).model_dump_json(), "agent")
         print(f"[AgentResponse] Broadcasted final agent response to session: {session_id}")
     else:
         print(f"[AgentResponse] Final agent response was empty. Nothing to broadcast.")

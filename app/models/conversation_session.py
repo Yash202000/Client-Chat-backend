@@ -25,3 +25,4 @@ class ConversationSession(Base):
     agent = relationship("Agent")
     workflow = relationship("Workflow")
     contact = relationship("Contact", back_populates="sessions")
+    messages = relationship("ChatMessage", back_populates="session")

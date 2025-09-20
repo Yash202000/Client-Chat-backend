@@ -497,7 +497,7 @@ async def public_websocket_endpoint(
             # Now, create and broadcast the chat message
             chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
-            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
+            await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
 
             if sender == 'user':
                 # The session is already guaranteed to exist, so we can proceed
@@ -521,7 +521,7 @@ async def public_websocket_endpoint(
 
                 # If no workflow was found or resumed, fallback to the default agent response
                 if not execution_result:
-                    await agent_execution_service.generate_agent_response(db, agent_id, session_id, company_id, user_message)
+                    await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, user_message)
                     continue
                 
                 # Handle execution result
@@ -529,7 +529,7 @@ async def public_websocket_endpoint(
                     agent_response_text = execution_result.get("response", "Workflow finished.")
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                    await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
                 
                 elif execution_result.get("status") == "paused_for_prompt":
                     prompt_data = execution_result.get("prompt", {})
@@ -539,7 +539,7 @@ async def public_websocket_endpoint(
                         "options": prompt_data.get("options", []),
                         "sender": "agent",
                     }
-                    await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
+                    await manager.broadcast_to_session(str(session_id), json.dumps(prompt_message), "agent")
 
                 elif execution_result.get("status") == "paused_for_form":
                     form_data = execution_result.get("form", {})
@@ -549,7 +549,7 @@ async def public_websocket_endpoint(
                         "fields": form_data.get("fields", []),
                         "sender": "agent",
                     }
-                    await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
+                    await manager.broadcast_to_session(str(session_id), json.dumps(form_message), "agent")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

@@ -12,7 +12,7 @@ class ChatMessageCreate(ChatMessageBase):
 class ChatMessage(ChatMessageBase):
     id: int
     sender: str
-    session_id: str
+    session_id: int
     timestamp: datetime
     agent_id: Optional[int]
     company_id: int
