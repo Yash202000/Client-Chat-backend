@@ -31,4 +31,7 @@ from app.models.published_widget_settings import PublishedWidgetSettings
 from app.models.ai_image import AIImage
 from app.models.processing_template import ProcessingTemplate
 from app.models.temporary_document import TemporaryDocument
+from app.models.ai_tool import AITool
+from app.models.ai_tool_category import AIToolCategory
+from app.models.ai_tool_question import AIToolQuestion
 
