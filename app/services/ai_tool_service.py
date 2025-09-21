@@ -13,7 +13,7 @@ def execute_ai_tool(db, user, tool, answers, language, api_key=None):
 
     client = Groq(api_key=api_key)
     # Create a prompt from the tool and answers
-    prompt = f" You are a highly efficient and concise AI assistant. Your sole purpose is to generate the requested content based on the provided, information, without any conversational filler, introductions, conclusions, or extra remarks. Provide only the direct answer. You are an expert in {tool.category.name}. "
+    prompt = f"You are an expert in {tool.category.name}. "
     prompt += f"You are using the tool \"{tool.name}\". "
     prompt += f"The user has provided the following information:\n"
     for question in tool.questions:
