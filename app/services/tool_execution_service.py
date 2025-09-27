@@ -53,7 +53,10 @@ async def execute_mcp_tool(db_tool: Tool, mcp_tool_name: str, parameters: dict):
     try:
         async with Client(mcp_server_url) as client:
             print(f"DEBUG: Connected to MCP server. Calling tool '{mcp_tool_name}' with params: {actual_params}")
-            result = await client.call_tool(mcp_tool_name, arguments=actual_params)
+            if actual_params:
+                result = await client.call_tool(mcp_tool_name, arguments={"params": actual_params})
+            else:
+                result = await client.call_tool(mcp_tool_name)
             print(f"DEBUG: MCP tool call returned: {result}")
         return {"result": result}
     except Exception as e:

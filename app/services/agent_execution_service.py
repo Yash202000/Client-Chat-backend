@@ -246,7 +246,10 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             "1. Examine the user's request to determine the appropriate tool.\n"
             "2. Look at the tool's schema to understand its required parameters.\n"
             "3. If the user has provided all the necessary parameters, call the tool.\n"
-            "4. **Crucially, if the user has NOT provided all required parameters, you MUST ask the user for the missing information. Do NOT guess, do NOT use placeholders, and do NOT call the tool without the required information.**\n"
+            "4. **Crucially, if the user has NOT provided all required parameters, you **MUST** ask for the missing information using **natural language**. Do NOT guess, do NOT use placeholders, and do NOT call the tool without the required information.**\n"
+            "5. You ONLY have access to the following tools, and should NEVER make up tools that are not listed here: "
+            "6. For example, if a tool requires a 'user\_id', and the user asks to 'get user details', you must respond with: 'I can certainly help you find those details. Could you please provide the user's ID?'\n"
+            "7. If a tool the user requests is conceptually unavailable (like 'list all orders' when only 'get order by ID' is available), explain the limitation in **simple, non-technical terms** and offer the alternative tool without mentioning the function names.\n"
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
             f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
@@ -284,7 +287,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
 
         # --- Tool Execution ---
         if '__' in tool_name:
-            connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
+            connection_name_from_llm, mcp_tool_name = tool_name.split('___', 1)
             original_connection_name = connection_name_from_llm.replace('_', ' ')
             db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
             if not db_tool or not db_tool.mcp_server_url:

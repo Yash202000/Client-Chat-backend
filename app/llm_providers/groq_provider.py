@@ -6,10 +6,12 @@ from app.services.vault_service import vault_service
 
 def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list = None, api_key: str = None):
     if api_key is None:
-        credential = credential_service.get_credential_by_service_name(db, service_name="groq", company_id=company_id)
+        credential = credential_service.get_credential_by_service_name(
+            db, service_name="groq", company_id=company_id
+        )
         if not credential:
             raise ValueError("Groq API key not found for this company.")
-        api_key =   vault_service.decrypt(credential.encrypted_credentials)
+        api_key = vault_service.decrypt(credential.encrypted_credentials)
 
     client = Groq(api_key=api_key)
 
@@ -27,44 +29,48 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
             )
             response_message = chat_completion.choices[0].message
 
+            # Handle tool calls
             if response_message.tool_calls:
-                tool_call = response_message.tool_calls[0]
-                tool_name = tool_call.function.name
-                
-                # Pre-execution validation
-                available_tool_names = [tool['function']['name'] for tool in tools]
-                if tool_name not in available_tool_names:
-                    error_message = f"You tried to call a tool named '{tool_name}', but that tool does not exist. Please choose a tool from the following available list: {', '.join(available_tool_names)}. Or, ask the user for clarification."
-                    
-                    # Add the error to the history and retry
-                    messages.append(response_message) # Add the LLM's failed attempt
-                    messages.append({"role": "system", "content": error_message}) # Add our corrective prompt
-                    
-                    print(f"DEBUG: Invalid tool '{tool_name}'. Retrying... (Attempt {attempt + 1}/{max_retries})")
-                    continue # Go to the next iteration of the loop to retry
+                available_tool_names = [t["function"]["name"] for t in (tools or [])]
+                tool_calls = []
 
-                return {
-                    "type": "tool_call",
-                    "tool_call_id": tool_call.id,
-                    "tool_name": tool_name,
-                    "parameters": json.loads(tool_call.function.arguments)
-                }
-            else:
-                return {
-                    "type": "text",
-                    "content": response_message.content
-                }
+                for call in response_message.tool_calls:
+                    tool_name = call.function.name
+                    if tool_name not in available_tool_names:
+                        error_message = (
+                            f"You attempted to call '{tool_name}', which is not available. "
+                            f"Please choose only from: {', '.join(available_tool_names)}."
+                        )
+                        # Add LLM’s bad attempt + corrective instruction
+                        messages.append({
+                            "role": "system",
+                            "content": response_message.content or "",
+                        })
+                        messages.append({"role": "system", "content": error_message})
+
+                        print(f"DEBUG: Invalid tool '{tool_name}'. Retrying... (Attempt {attempt+1}/{max_retries})")
+                        break  # trigger retry
+                    else:
+                        tool_calls.append({
+                            "type": "tool_call",
+                            "tool_call_id": call.id,
+                            "tool_name": tool_name,
+                            "parameters": json.loads(call.function.arguments),
+                        })
+
+                if tool_calls:
+                    return tool_calls if len(tool_calls) > 1 else tool_calls[0]
+
+                continue  # retry if invalid tool was detected
+
+            # If no tool call, return plain text
+            return {"type": "text", "content": response_message.content}
 
         except Exception as e:
             print(f"Groq API Error: {e}")
-            # If there's an API error, we break the loop and return the error.
-            return {
-                "type": "text",
-                "content": f"An error occurred with the LLM provider: {e}"
-            }
+            return {"type": "text", "content": f"LLM provider error: {e}"}
 
-    # If all retries fail, return a final error message
     return {
         "type": "text",
-        "content": "I am having trouble selecting the correct tool. Could you please rephrase your request?"
+        "content": "I had trouble selecting a valid tool. Could you rephrase your request?"
     }

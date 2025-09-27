@@ -1,3 +1,4 @@
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models import tool as models_tool
 from app.schemas import tool as schemas_tool
@@ -14,7 +15,7 @@ def get_tool(db: Session, tool_id: int, company_id: int):
 
 def get_tool_by_name(db: Session, name: str, company_id: int):
     db_tool = db.query(models_tool.Tool).filter(
-        models_tool.Tool.name == name,
+        func.trim(func.lower(models_tool.Tool.name)) == name.lower().strip(),
         models_tool.Tool.company_id == company_id
     ).first()
     if db_tool and db_tool.configuration:
@@ -63,6 +64,11 @@ def update_tool(db: Session, tool_id: int, tool: schemas_tool.ToolUpdate, compan
     db_tool = get_tool(db, tool_id, company_id)
     if db_tool:
         update_data = tool.model_dump(exclude_unset=True)
+
+        # 🔑 Convert HttpUrl to string
+        if "mcp_server_url" in update_data and update_data["mcp_server_url"]:
+            update_data["mcp_server_url"] = str(update_data["mcp_server_url"])
+
         if "configuration" in update_data and update_data["configuration"]:
             update_data["configuration"] = vault_service.encrypt_dict(update_data["configuration"])
         
@@ -79,6 +85,7 @@ def update_tool(db: Session, tool_id: int, tool: schemas_tool.ToolUpdate, compan
         db.commit()
         db.refresh(db_tool)
     return db_tool
+
 
 def delete_tool(db: Session, tool_id: int, company_id: int):
     db_tool = get_tool(db, tool_id, company_id)
