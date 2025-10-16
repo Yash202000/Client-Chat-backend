@@ -320,6 +320,11 @@ async def websocket_endpoint(
 
     await manager.connect(websocket, session_id, user_type)
     print(f"[websocket_conversations] WebSocket connection established for session: {session_id}")
+
+    # Update session status to active when user connects
+    if user_type == "user":
+        await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
+
     # Instantiate the execution service
     workflow_exec_service = WorkflowExecutionService(db)
     
@@ -462,6 +467,11 @@ async def websocket_endpoint(
         manager.disconnect(websocket, session_id)
         print(f"Client in session #{session_id} disconnected")
 
+        # Update session status to inactive when user disconnects
+        # Only if there are no more user connections
+        if user_type == "user" and not manager.has_user_connection(session_id):
+            await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
+
 
 @router.websocket("/public/{company_id}/{agent_id}/{session_id}")
 async def public_websocket_endpoint(
@@ -476,8 +486,13 @@ async def public_websocket_endpoint(
     if not agent:
         await websocket.close(code=1008)
         return
-    
+
     await manager.connect(websocket, session_id, user_type)
+
+    # Update session status to active when user connects
+    if user_type == "user":
+        await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
+
     workflow_exec_service = WorkflowExecutionService(db)
 
     try:
@@ -555,7 +570,8 @@ async def public_websocket_endpoint(
         manager.disconnect(websocket, session_id)
         print(f"Client in session #{session_id} disconnected")
 
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
-        print(f"Client in session #{session_id} disconnected")
+        # Update session status to inactive when user disconnects
+        # Only if there are no more user connections
+        if user_type == "user" and not manager.has_user_connection(session_id):
+            await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
 

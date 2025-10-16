@@ -26,16 +26,15 @@ def get_sessions_with_details(db: Session, company_id: int, agent_id: int = None
 
 def get_session_details(db: Session, company_id: int, agent_id: int = None, broadcast_session_id: str = None,  status: str = None):
     """
-    Gets all unique sessions for a company, optionally filtered by agent or status.
-    It retrieves the latest message for ordering and context.
+    Gets session details by conversation_id for a company.
+    Note: agent_id is kept for backward compatibility but not used in filtering
+    since conversations can be viewed across different agents.
     """
-    print('gone here ')
     session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == str(broadcast_session_id),
-        models_conversation_session.ConversationSession.agent_id == agent_id,
         models_conversation_session.ConversationSession.company_id == company_id
     ).first()
-    
+
     return session
 
 
@@ -95,34 +94,62 @@ def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: i
         models_conversation_session.ConversationSession.conversation_id == session_id,
         models_conversation_session.ConversationSession.company_id == company_id
     ).first()
-    
+
     if session:
+        # Return all messages for this session regardless of which agent created them
+        # This allows viewing conversations across different agents in the same company
         return db.query(models_chat_message.ChatMessage).filter(
-            or_(models_chat_message.ChatMessage.agent_id == agent_id, models_chat_message.ChatMessage.agent_id == None),
             models_chat_message.ChatMessage.session_id == session.id,
             models_chat_message.ChatMessage.company_id == company_id
         ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()
     # else return null
     return []
 
-def update_conversation_status(db: Session, session_id: str, status: str, company_id: int):
-    db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id,
-        models_chat_message.ChatMessage.company_id == company_id
+async def update_conversation_status(db: Session, session_id: str, status: str, company_id: int):
+    """
+    Updates the status of a conversation session (e.g., 'resolved', 'active', 'pending').
+    """
+    from app.core.websockets import manager
+    import json
+
+    db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
     ).update({"status": status})
     db.commit()
+
+    # Broadcast status change to all connected agents in real-time
+    status_update_message = json.dumps({
+        "type": "session_status_update",
+        "session_id": session_id,
+        "status": status
+    })
+    await manager.broadcast(status_update_message, str(company_id))
+
     return True
 
-def update_conversation_assignee(db: Session, session_id: str, user_id: int, company_id: int):
-    db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id,
-        models_chat_message.ChatMessage.company_id == company_id
+async def update_conversation_assignee(db: Session, session_id: str, user_id: int, company_id: int):
+    """
+    Assigns a conversation to a user and updates the session status to 'assigned'.
+    """
+    from app.core.websockets import manager
+    import json
+
+    db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
     ).update({"status": "assigned", "assignee_id": user_id})
     db.commit()
-    return True
 
-from app.core.websockets import manager
-import json
+    # Broadcast status change to all connected agents in real-time
+    status_update_message = json.dumps({
+        "type": "session_status_update",
+        "session_id": session_id,
+        "status": "assigned"
+    })
+    await manager.broadcast(status_update_message, str(company_id))
+
+    return True
 
 async def send_proactive_message(db: Session, session_id: str, message_text: str):
     """

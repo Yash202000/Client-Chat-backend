@@ -66,4 +66,15 @@ class ConnectionManager:
         self.active_connections.clear()
         print("[ConnectionManager] All clients disconnected.")
 
+    def has_user_connection(self, session_id: str) -> bool:
+        """
+        Checks if a session has at least one active user (not agent) connection.
+        Returns True if there's an active user connection, False otherwise.
+        """
+        if session_id not in self.active_connections:
+            return False
+
+        user_connections = [c for c in self.active_connections[session_id] if c["user_type"] == "user"]
+        return len(user_connections) > 0
+
 manager = ConnectionManager()

@@ -287,7 +287,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
 
         # --- Tool Execution ---
         if '__' in tool_name:
-            connection_name_from_llm, mcp_tool_name = tool_name.split('___', 1)
+            connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
             original_connection_name = connection_name_from_llm.replace('_', ' ')
             db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
             if not db_tool or not db_tool.mcp_server_url:

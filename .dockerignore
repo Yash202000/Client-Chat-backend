@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+generated_images/
+*.pt
+yolo*.pt
+tests/
+.git/
+.gitignore
+README.md
+docker-compose.yml
+Dockerfile
+.env.example
+
+# Temporary files
+*.log
+*.tmp
+*.cache
