@@ -109,7 +109,7 @@ async def update_conversation_status(db: Session, session_id: str, status: str, 
     """
     Updates the status of a conversation session (e.g., 'resolved', 'active', 'pending').
     """
-    from app.core.websockets import manager
+    from app.services.connection_manager import manager
     import json
 
     # Get the session to retrieve current connection status
@@ -143,7 +143,7 @@ async def update_conversation_assignee(db: Session, session_id: str, user_id: in
     Assigns a conversation to a user and updates the session status to 'assigned'.
     Sends a notification to the assigned user.
     """
-    from app.core.websockets import manager
+    from app.services.connection_manager import manager
     from app.models.user import User
     import json
 
