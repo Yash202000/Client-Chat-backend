@@ -24,3 +24,15 @@ venv/
 
 # FastAPI/Uvicorn
 .uvicorn_reload_history
+
+client_secret.json
+credentials.json
+token.json
+logs/
+*.logs
+debug.log
+access.log
+*.pt
+*.pth
+*.ckpt
+tests/*

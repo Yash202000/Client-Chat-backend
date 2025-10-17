@@ -1,52 +1,26 @@
 import traceback
+import asyncio
+import anyio
 from sqlalchemy.orm import Session
-from app.services import tool_service, workflow_service, workflow_execution_service, contact_service
-from app.schemas import contact as schemas_contact
+from app.models.tool import Tool
+from app.services import workflow_service
+from fastmcp.client import Client
 
-def _execute_update_contact_details(db: Session, company_id: int, session_id: str, parameters: dict):
-    """Directly executes the logic for updating contact details."""
-    contact = contact_service.get_or_create_contact_by_session(db, session_id=session_id, company_id=company_id)
-    if not contact:
-        return {"error": "Could not find or create a contact for this session."}
-    
-    contact_update = schemas_contact.ContactUpdate(**parameters)
-    contact_service.update_contact(db, contact_id=contact.id, contact=contact_update, company_id=company_id)
-    return {"result": f"Contact {contact.id} updated successfully with new details."}
-
-def _execute_calculate_sum(parameters: dict):
-    """Directly executes the logic for calculating a sum."""
-    numbers = parameters.get("numbers", [])
-    if not isinstance(numbers, list):
-        return {"error": "Invalid input. 'numbers' must be a list."}
-    return {"result": sum(numbers)}
-
-
-def execute_tool(db: Session, tool_id: int, company_id: int, session_id: str, parameters: dict):
+def execute_custom_tool(db: Session, tool: Tool, company_id: int, session_id: str, parameters: dict):
     """
-    Executes a tool, prioritizing direct execution for built-in tools.
+    Executes a custom tool by running its stored Python code.
     """
-    db_tool = tool_service.get_tool(db, tool_id, company_id)
-    if not db_tool:
-        return {"error": "Tool not found"}
+    if not tool.code:
+        return {"error": "Tool has no code to execute."}
 
-    # --- Direct execution for built-in tools ---
-    if db_tool.name == "update_contact_details":
-        return _execute_update_contact_details(db, company_id, session_id, parameters)
-    
-    if db_tool.name == "calculate_sum":
-        return _execute_calculate_sum(parameters)
-    # --- End of direct execution ---
-
-
-    # Fallback to dynamic execution for custom tools
     local_scope = {}
     execution_globals = {
         "workflow_service": workflow_service,
-        "workflow_execution_service": workflow_execution_service
+        "workflow_execution_service": "workflow_execution_service" # Placeholder
     }
     
     try:
-        exec(db_tool.code, execution_globals, local_scope)
+        exec(tool.code, execution_globals, local_scope)
         tool_function = local_scope.get("run")
         
         if not callable(tool_function):
@@ -63,7 +37,32 @@ def execute_tool(db: Session, tool_id: int, company_id: int, session_id: str, pa
 
     except Exception as e:
         return {
-            "error": "An error occurred during tool execution.",
+            "error": "An error occurred during custom tool execution.",
             "details": str(e),
             "traceback": traceback.format_exc()
+        }
+
+async def execute_mcp_tool(db_tool: Tool, mcp_tool_name: str, parameters: dict):
+    """
+    Executes a specific tool on a remote MCP server.
+    """
+    mcp_server_url = db_tool.mcp_server_url
+    actual_params = parameters or {}
+
+    print(f"DEBUG: Attempting to connect to MCP server at {mcp_server_url}")
+    try:
+        async with Client(mcp_server_url) as client:
+            print(f"DEBUG: Connected to MCP server. Calling tool '{mcp_tool_name}' with params: {actual_params}")
+            if actual_params:
+                result = await client.call_tool(mcp_tool_name, arguments={"params": actual_params})
+            else:
+                result = await client.call_tool(mcp_tool_name)
+            print(f"DEBUG: MCP tool call returned: {result}")
+        return {"result": result}
+    except Exception as e:
+        print(f"ERROR: An unexpected error occurred during MCP tool execution: {e}")
+        print(traceback.format_exc())
+        return {
+            "error": f"An error occurred on MCP server {mcp_server_url} while running tool '{mcp_tool_name}'.",
+            "details": str(e)
         }

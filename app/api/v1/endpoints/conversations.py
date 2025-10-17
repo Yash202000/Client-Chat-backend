@@ -23,31 +23,73 @@ class FeedbackUpdate(BaseModel):
     feedback_rating: int
     feedback_notes: Optional[str] = None
 
+@router.get("/sessions/counts")
+def get_session_counts(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    """
+    Get counts of sessions by status for the company.
+    Returns: { "open": count, "resolved": count, "all": count }
+    """
+    all_sessions = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
+
+    open_count = sum(1 for s in all_sessions if s.status not in ['resolved', 'archived'])
+    resolved_count = sum(1 for s in all_sessions if s.status in ['resolved', 'archived'])
+
+    return {
+        "open": open_count,
+        "resolved": resolved_count,
+        "all": len(all_sessions)
+    }
+
 @router.get("/sessions", response_model=List[schemas_session.Session])
-def get_all_sessions(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+def get_all_sessions(
+    status_filter: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
     """
-    Get all active sessions for the company, enriched with contact and channel info.
-    This is the primary endpoint for the omnichannel inbox.
+    Get sessions for the company, enriched with contact and channel info.
+
+    Query Parameters:
+    - status_filter: Filter by status category ('open', 'resolved', or None for all)
+      - 'open' returns: active, inactive, assigned, pending
+      - 'resolved' returns: resolved, archived
+      - None returns: all sessions
     """
+    from app.core.websockets import manager
+
     sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
-    print(f"Sessions from DB (raw): {sessions_from_db}")
-    
+
+    # Apply status filter
+    if status_filter == 'open':
+        sessions_from_db = [s for s in sessions_from_db if s.status not in ['resolved', 'archived']]
+    elif status_filter == 'resolved':
+        sessions_from_db = [s for s in sessions_from_db if s.status in ['resolved', 'archived']]
+
     sessions = []
     for s in sessions_from_db:
         first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_user.company_id)
         contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_user.company_id)
 
+        # Get real-time connection status from ConnectionManager
+        real_time_connected = manager.get_connection_status(s.conversation_id)
+
+        # If real-time status differs from DB, update DB
+        if real_time_connected != s.is_client_connected:
+            print(f"[get_all_sessions] Syncing connection status for {s.conversation_id}: DB={s.is_client_connected} -> Real-time={real_time_connected}")
+            s.is_client_connected = real_time_connected
+            db.commit()
+
         sessions.append(schemas_session.Session(
             session_id=s.conversation_id,
             status=s.status,
-            assignee_id=s.agent_id,
+            assignee_id=s.assignee_id,  # Use assignee_id instead of agent_id
             last_message_timestamp=s.updated_at.isoformat(),
             first_message_content=first_message.message if first_message else "",
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
-            contact_phone=contact_info.phone_number if contact_info else None
+            contact_phone=contact_info.phone_number if contact_info else None,
+            is_client_connected=real_time_connected  # Use real-time status
         ))
-    print(f"Sessions to be returned to frontend: {sessions}")
     return sessions
 
 @router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True)
@@ -66,6 +108,19 @@ def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_
             first_message_content=first_message.message if first_message else ""
         ))
     return sessions
+
+
+@router.get("/{agent_id}/sessions/{session_id}", response_model=schemas_session.Session)
+def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    # This endpoint is deprecated in favor of the company-wide /sessions endpoint
+    sessions_from_db = chat_service.get_session_details(db, agent_id=agent_id, broadcast_session_id=session_id, company_id=current_user.company_id)
+    return schemas_session.Session(
+            session_id=sessions_from_db.conversation_id,
+            status=sessions_from_db.status,
+            assignee_id=sessions_from_db.assignee_id,  # Use assignee_id instead of agent_id
+            last_message_timestamp=sessions_from_db.updated_at.isoformat(),
+            first_message_content= ""
+        )
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage])
 def get_messages(agent_id: int, session_id: str, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
@@ -93,26 +148,26 @@ def create_note(
     )
 
 @router.put("/{session_id}/status")
-def update_status(
+async def update_status(
     session_id: str,
     status_update: StatusUpdate,
     db: Session = Depends(get_db),
 
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    success = chat_service.update_conversation_status(db, session_id=session_id, status=status_update.status, company_id=current_user.company_id)
+    success = await chat_service.update_conversation_status(db, session_id=session_id, status=status_update.status, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"message": "Status updated successfully"}
 
 @router.put("/{session_id}/assignee")
-def update_assignee(
+async def update_assignee(
     session_id: str,
     assignee_update: AssigneeUpdate,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    success = chat_service.update_conversation_assignee(db, session_id=session_id, user_id=assignee_update.user_id, company_id=current_user.company_id)
+    success = await chat_service.update_conversation_assignee(db, session_id=session_id, user_id=assignee_update.user_id, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or assignee update failed")
     return {"message": "Assignee updated successfully"}

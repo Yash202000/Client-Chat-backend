@@ -1,16 +1,20 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field, HttpUrl
+from typing import Optional, Dict, Any, Literal
 
 class ToolBase(BaseModel):
-    name: str = Field(..., description="The name of the tool. Must be unique.")
+    name: str = Field(..., description="The user-defined name for the tool or MCP connection.")
     description: Optional[str] = Field(None, description="A brief description of what the tool does.")
-    parameters: Dict[str, Any] = Field(..., description="JSON schema for the tool's input parameters.")
-    # For now, we'll store the actual function code as a string. 
-    # In a more advanced system, this might point to a module/function.
-    code: str = Field(..., description="The Python code for the tool's function.")
-    configuration: Optional[Dict[str, Any]] = Field(None, description="Configuration for the tool, like API keys.")
+    tool_type: Literal["custom", "mcp"] = Field(..., description="The type of the tool.")
 
 class ToolCreate(ToolBase):
+    # For custom tools
+    parameters: Optional[Dict[str, Any]] = Field(None, description="JSON schema for the tool's input parameters.")
+    code: Optional[str] = Field(None, description="The Python code for the tool's function.")
+    
+    # For MCP connections
+    mcp_server_url: Optional[HttpUrl] = Field(None, description="The URL of the MCP server.")
+
+    # For pre-built tools
     pre_built_connector_name: Optional[str] = None
 
 class ToolUpdate(BaseModel):
@@ -18,10 +22,18 @@ class ToolUpdate(BaseModel):
     description: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
     code: Optional[str] = None
+    mcp_server_url: Optional[HttpUrl] = None
     configuration: Optional[Dict[str, Any]] = None
 
 class Tool(ToolBase):
     id: int
+    company_id: int
+    
+    # Optional fields depending on tool_type
+    parameters: Optional[Dict[str, Any]]
+    code: Optional[str]
+    mcp_server_url: Optional[HttpUrl]
+    configuration: Optional[Dict[str, Any]]
 
     class Config:
         orm_mode = True

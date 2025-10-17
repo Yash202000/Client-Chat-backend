@@ -12,7 +12,6 @@ router = APIRouter()
 @router.get("/", response_model=schemas_company_settings.CompanySettings)
 def read_company_settings(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     settings = company_settings_service.get_company_settings(db, company_id=current_user.company_id)
-    print(settings)
     if not settings:
         username = current_user.email.split('@')[0]
         # If no settings exist, create them with default values

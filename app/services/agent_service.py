@@ -1,12 +1,14 @@
 
 from sqlalchemy.orm import Session, joinedload
-from app.models import agent as models_agent, tool as models_tool
+from app.models import agent as models_agent, tool as models_tool, credential as models_credential, knowledge_base as models_knowledge_base
 from app.schemas import agent as schemas_agent
+from fastapi import HTTPException
 
 def get_agent(db: Session, agent_id: int, company_id: int):
     return db.query(models_agent.Agent).options(
-        joinedload(models_agent.Agent.tools), 
+        joinedload(models_agent.Agent.tools),
         joinedload(models_agent.Agent.workflows),
+        joinedload(models_agent.Agent.knowledge_bases),
         joinedload(models_agent.Agent.credential)  # Eagerly load the credential
     ).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
 
@@ -26,7 +28,6 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         response_style=agent.response_style,
         instructions=agent.instructions,
         credential_id=agent.credential_id,
-        knowledge_base_id=agent.knowledge_base_id,
         voice_id=agent.voice_id,
         tts_provider=agent.tts_provider,
         stt_provider=agent.stt_provider,
@@ -42,16 +43,31 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
     # Handle tool_ids for initial creation
     if agent.tool_ids:
         for tool_id in agent.tool_ids:
-            tool = db.query(models_tool.Tool).filter(models_tool.Tool.id == tool_id, models_tool.Tool.company_id == company_id).first()
+            tool = db.query(models_tool.Tool).filter(
+                models_tool.Tool.id == tool_id,
+                models_tool.Tool.company_id == company_id
+            ).first()
             if tool:
                 db_agent.tools.append(tool)
+        db.commit()
+        db.refresh(db_agent)
+
+    # Handle knowledge_base_ids for initial creation
+    if agent.knowledge_base_ids:
+        for kb_id in agent.knowledge_base_ids:
+            kb = db.query(models_knowledge_base.KnowledgeBase).filter(
+                models_knowledge_base.KnowledgeBase.id == kb_id,
+                models_knowledge_base.KnowledgeBase.company_id == company_id
+            ).first()
+            if kb:
+                db_agent.knowledge_bases.append(kb)
         db.commit()
         db.refresh(db_agent)
 
     return db_agent
 
 def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, company_id: int):
-    db_agent = db.query(models_agent.Agent).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
+    db_agent = db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools), joinedload(models_agent.Agent.knowledge_bases)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
     if db_agent:
         update_data = agent.dict(exclude_unset=True)
         
@@ -60,10 +76,41 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
         if tool_ids is not None:
             db_agent.tools.clear() # Clear existing tools
             for tool_id in tool_ids:
-                tool = db.query(models_tool.Tool).filter(models_tool.Tool.id == tool_id, models_tool.Tool.company_id == company_id).first()
+                tool = db.query(models_tool.Tool).filter(
+                    models_tool.Tool.id == tool_id,
+                    models_tool.Tool.company_id == company_id
+                ).first()
                 if tool:
                     db_agent.tools.append(tool)
 
+        # Handle knowledge_base_ids separately
+        knowledge_base_ids = update_data.pop("knowledge_base_ids", None)
+        print(knowledge_base_ids)
+        if knowledge_base_ids is not None:
+            db_agent.knowledge_bases.clear() # Clear existing knowledge bases
+            for kb_id in knowledge_base_ids:
+                kb = db.query(models_knowledge_base.KnowledgeBase).filter(
+                    models_knowledge_base.KnowledgeBase.id == kb_id,
+                    models_knowledge_base.KnowledgeBase.company_id == company_id
+                ).first()
+                print(kb)
+                if kb:
+                    db_agent.knowledge_bases.append(kb)
+        print("updated knowledge bases:", db_agent.knowledge_bases)
+
+        # Handle credential_id separately for "One API Key per Agent per Service" constraint
+        if "credential_id" in update_data and update_data["credential_id"] is not None:
+            new_credential_id = update_data["credential_id"]
+            new_credential = db.query(models_credential.Credential).filter(models_credential.Credential.id == new_credential_id).first()
+            
+            if new_credential:
+                # Check if agent already has a credential for this service
+                existing_credential = db.query(models_credential.Credential).join(models_agent.Agent, models_agent.Agent.credential_id == models_credential.Credential.id).filter(models_agent.Agent.id == agent_id,
+                        models_credential.Credential.service == new_credential.service).first()
+                
+                if existing_credential and existing_credential.id != new_credential_id:
+                    raise HTTPException(status_code=400, detail=f"Agent already has a credential for service '{new_credential.service}'.")
+        
         for key, value in update_data.items():
             setattr(db_agent, key, value)
             
@@ -97,7 +144,6 @@ def create_agent_version(db: Session, agent_id: int, company_id: int):
         response_style=original_agent.response_style,
         instructions=original_agent.instructions,
         credential_id=original_agent.credential_id,
-        knowledge_base_id=original_agent.knowledge_base_id,
         voice_id=original_agent.voice_id,
         tts_provider=original_agent.tts_provider,
         stt_provider=original_agent.stt_provider,
@@ -114,6 +160,12 @@ def create_agent_version(db: Session, agent_id: int, company_id: int):
     for tool in original_agent.tools:
         new_version.tools.append(tool)
     db.commit()
+
+    # Copy knowledge bases from the original agent to the new version
+    for kb in original_agent.knowledge_bases:
+        new_version.knowledge_bases.append(kb)
+    db.commit()
+
     db.refresh(new_version)
 
     return new_version

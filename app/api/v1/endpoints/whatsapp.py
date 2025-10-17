@@ -117,6 +117,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     agent_response_text = await agent_execution_service.generate_agent_response(
                         db, agent.id, session.conversation_id, company_id, message_text
                     )
+                    
+                    print(agent_response_text)
 
                     agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
                     db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")

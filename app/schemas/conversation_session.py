@@ -6,7 +6,7 @@ class ConversationSessionBase(BaseModel):
     workflow_id: Optional[int] = None
     next_step_id: Optional[str] = None
     context: Dict[str, Any] = {}
-    status: str = 'active'
+    status: str = 'active' # e.g., active, paused, waiting_for_input, completed
     is_ai_enabled: bool = True
 
 class ConversationSessionCreate(BaseModel):
@@ -22,7 +22,8 @@ class ConversationSessionCreate(BaseModel):
 class ConversationSessionUpdate(BaseModel):
     next_step_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
-    status: Optional[str] = None
+    status: Optional[str] = None # e.g., active, paused, waiting_for_input, completed
+    rating: Optional[int] = None
 
 class ConversationSession(ConversationSessionBase):
     id: int

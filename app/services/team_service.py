@@ -1,12 +1,12 @@
 from sqlalchemy.orm import Session, joinedload
-from app.models import team as models_team, user as models_user
+from app.models import team as models_team, user as models_user, team_membership as models_team_membership
 from app.schemas import team as schemas_team
 
 def get_team(db: Session, team_id: int, company_id: int):
     return db.query(models_team.Team).filter(models_team.Team.id == team_id, models_team.Team.company_id == company_id).first()
 
 def get_teams(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_team.Team).filter(models_team.Team.company_id == company_id).offset(skip).limit(limit).all()
+    return db.query(models_team.Team).options(joinedload(models_team.Team.members).joinedload(models_team_membership.TeamMembership.user)).filter(models_team.Team.company_id == company_id).offset(skip).limit(limit).all()
 
 def create_team(db: Session, team: schemas_team.TeamCreate, company_id: int):
     db_team = models_team.Team(name=team.name, company_id=company_id)

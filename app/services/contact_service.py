@@ -10,7 +10,7 @@ def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100):
 
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int):
     db_contact = models_contact.Contact(
-        **contact.dict(),
+        **contact.model_dump(),
         company_id=company_id
     )
     db.add(db_contact)
@@ -21,7 +21,7 @@ def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_
 def update_contact(db: Session, contact_id: int, contact: schemas_contact.ContactUpdate, company_id: int):
     db_contact = get_contact(db, contact_id, company_id)
     if db_contact:
-        update_data = contact.dict(exclude_unset=True)
+        update_data = contact.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(db_contact, key, value)
         db.commit()

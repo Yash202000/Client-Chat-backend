@@ -1,5 +1,6 @@
+from typing import Optional
 from app.core.database import SessionLocal
-from fastapi import Header, HTTPException, Depends, status, WebSocket, WebSocketException
+from fastapi import Header, HTTPException, Depends, Query, WebSocketDisconnect, status, WebSocket, WebSocketException
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session, joinedload
@@ -64,23 +65,26 @@ async def get_current_user(
         raise credentials_exception
     return schemas_user.User.from_orm(user)
 
-async def get_current_user_from_ws(
-    websocket: WebSocket,
-    db: Session = Depends(get_db)
-) -> models_user.User:
-    """
-    Dependency to get the current user from a WebSocket connection,
-    expecting the token as a query parameter.
-    """
-    token = websocket.query_params.get("token")
+async def get_current_user_from_ws(websocket: WebSocket, db: Session = Depends(get_db), token: Optional[str] = Query(None)) -> models_user.User:
     if token is None:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
+        raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication token missing")
     
+    credentials_exception = WebSocketDisconnect(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason="Could not validate credentials",
+    )
     try:
-        user = await get_current_user(db, token)
-    except HTTPException:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
-        
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = user_service.get_user_by_email(db, email=email)
+    
+    if user is None:
+        raise credentials_exception
     return user
 
 async def get_current_active_user(
@@ -93,7 +97,7 @@ async def get_current_active_user(
 async def get_current_company(current_user: models_user.User = Depends(get_current_active_user)) -> int:
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="User is not associated with a company")
-    return current_user
+    return current_user.company_id
 
 # Permission checking dependency
 def require_permission(permission_name: str):

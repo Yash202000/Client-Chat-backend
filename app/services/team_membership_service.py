@@ -1,5 +1,4 @@
-
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models import team_membership as models_team_membership, user as models_user, team as models_team
 from app.schemas import team_membership as schemas_team_membership
 
@@ -23,16 +22,20 @@ def add_member_to_team(db: Session, team_id: int, user_id: int, company_id: int,
     return db_membership
 
 def remove_member_from_team(db: Session, team_id: int, user_id: int, company_id: int):
-    db_membership = db.query(models_team_membership.TeamMembership).filter(
+    db_membership = db.query(models_team_membership.TeamMembership).options(
+        joinedload(models_team_membership.TeamMembership.user)
+    ).filter(
         models_team_membership.TeamMembership.team_id == team_id,
         models_team_membership.TeamMembership.user_id == user_id,
         models_team_membership.TeamMembership.company_id == company_id
     ).first()
 
     if db_membership:
+        # Eagerly access the user relationship before deleting
+        _ = db_membership.user
         db.delete(db_membership)
         db.commit()
-    
+
     return db_membership
 
 def get_team_members(db: Session, team_id: int, company_id: int):
@@ -86,3 +89,9 @@ def delete_team_membership(db: Session, membership_id: int, company_id: int):
         db.delete(db_membership)
         db.commit()
     return db_membership
+
+def is_user_in_team(db: Session, user_id: int, team_id: int) -> bool:
+    return db.query(models_team_membership.TeamMembership).filter(
+        models_team_membership.TeamMembership.user_id == user_id,
+        models_team_membership.TeamMembership.team_id == team_id
+    ).first() is not None

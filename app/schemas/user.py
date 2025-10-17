@@ -49,6 +49,8 @@ class User(BaseModel):
     role_id: Optional[int] = None
     role: Optional[Role] = None
     last_login_at: Optional[datetime.datetime] = None
+    presence_status: Optional[str] = "offline"
+    last_seen: Optional[datetime.datetime] = None
     subscription_plan_id: Optional[int] = None
     subscription_status: Optional[str] = None
     subscription_start_date: Optional[datetime.datetime] = None

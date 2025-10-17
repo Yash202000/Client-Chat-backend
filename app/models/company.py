@@ -17,3 +17,5 @@ class Company(Base):
     knowledge_bases = relationship("KnowledgeBase", back_populates="company")
     tools = relationship("Tool", back_populates="company")
     integrations = relationship("Integration", back_populates="company")
+    chat_channels = relationship("ChatChannel", back_populates="company")
+    processing_templates = relationship("ProcessingTemplate", back_populates="company")

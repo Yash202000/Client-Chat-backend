@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools
 
 
 api_router = APIRouter()
@@ -34,7 +34,6 @@ def execute_tool(
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
-api_router.include_router(websocket_conversations.router, prefix="/ws", tags=["conversations"])
 api_router.include_router(credentials.router, prefix="/credentials", tags=["credentials"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(user_settings.router, prefix="/settings", tags=["settings"])
@@ -62,3 +61,17 @@ api_router.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"]
 api_router.include_router(voices.router, prefix="/voices", tags=["voices"])
 api_router.include_router(stt.router, prefix="/stt", tags=["stt"])
 api_router.include_router(public_voice.router, prefix="/ws", tags=["voice"])
+api_router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
+api_router.include_router(config.router, prefix="/config", tags=["config"])
+api_router.include_router(contacts.router, prefix="/contacts", tags=["contacts"])
+api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
+api_router.include_router(teams_calendar.router, prefix="/teams-calendar", tags=["teams_calendar"])
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+# api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
+
+websocket_router.include_router(websocket_conversations.router, prefix="", tags=["conversations"])
+api_router.include_router(websocket_router, prefix="/ws", tags=["WebSockets"])
+
+
+api_router.include_router(video_calls.router, prefix="/video-calls", tags=["video-calls"])
+api_router.include_router(ai_tools.router, prefix="/ai-tools", tags=["ai-tools"])

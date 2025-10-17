@@ -12,7 +12,7 @@ class ChatMessageCreate(ChatMessageBase):
 class ChatMessage(ChatMessageBase):
     id: int
     sender: str
-    session_id: str
+    session_id: int
     timestamp: datetime
     agent_id: Optional[int]
     company_id: int
@@ -22,6 +22,8 @@ class ChatMessage(ChatMessageBase):
     assignee_id: Optional[int] = None
     feedback_rating: Optional[int] = None
     feedback_notes: Optional[str] = None
+    issue: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }

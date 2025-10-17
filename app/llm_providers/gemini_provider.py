@@ -1,13 +1,24 @@
 import google.generativeai as genai
 from sqlalchemy.orm import Session
 from app.services import credential_service
+from app.services.vault_service import vault_service
+from app.core.config import settings
+import requests
+from PIL import Image
+import io
+import os
+import uuid
+
+
+
+genai.configure(api_key=settings.GOOGLE_API_KEY)
 
 def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list, api_key: str = None):
     if api_key is None:
-        credential = credential_service.get_credential_by_provider_name(db, provider_name="gemini", company_id=company_id)
+        credential = credential_service.get_credential_by_service_name(db, service_name="gemini", company_id=company_id)
         if not credential:
             raise ValueError("Gemini API key not found for this company.")
-        api_key = credential.api_key
+        api_key =   vault_service.decrypt(credential.encrypted_credentials)
 
     if not api_key:
         raise ValueError("GOOGLE_API_KEY is not configured for this agent.")
@@ -42,3 +53,29 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
         pass
 
     return {"type": "text", "content": response.text}
+
+def generate_image(prompt: str):
+    
+
+    model = genai.GenerativeModel('gemini-2.5-flash-image-preview')
+    response = model.generate_content(prompt)
+
+    
+    for part in response.candidates[0].content.parts:
+        if part.text is not None:
+            print(part.text)
+        elif part.inline_data is not None:
+            image = Image.open(io.BytesIO(part.inline_data.data))
+            # Ensure the directory exists
+            save_dir = "/home/developer/personal/AgentConnect/backend/app/generated_images"
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Generate a unique filename
+            filename = f"{uuid.uuid4()}.png"
+            filepath = os.path.join(save_dir, filename)
+            
+            image.save(filepath)
+            
+            # Return the path to the saved image
+            
+            return image

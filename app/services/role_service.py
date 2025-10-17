@@ -42,6 +42,17 @@ PERMISSIONS = {
     "billing:manage": "Manage billing and subscription",
     # Client Access
     "client:read_dashboard": "Read-only access to the client dashboard",
+    # AI Tool Management
+    "ai-tool:create": "Create AI tools",
+    "ai-tool:read": "Read AI tools",
+    "ai-tool:update": "Update AI tools",
+    "ai-tool:delete": "Delete AI tools",
+    "ai-tool:import": "Import AI tools from a file",
+    "ai-tool:export": "Export AI tools to a file",
+    "ai-tool-category:create": "Create AI tool categories",
+    "ai-tool-category:read": "Read AI tool categories",
+    "ai-tool-category:update": "Update AI tool categories",
+    "ai-tool-category:delete": "Delete AI tool categories",
 }
 
 def get_role(db: Session, role_id: int, company_id: int = None):
@@ -139,7 +150,8 @@ def create_initial_roles_for_company(db: Session, company_id: int):
         "Agent Builder": [
             "agent:create", "agent:read", "agent:update",
             "workflow:create", "workflow:read", "workflow:update",
-            "tool:read", "knowledgebase:read", "analytics:read"
+            "tool:read", "knowledgebase:read", "analytics:read",
+            "ai-tool:read", "ai-tool-category:read"
         ],
         "Analyst": [
             "agent:read", "workflow:read", "analytics:read"

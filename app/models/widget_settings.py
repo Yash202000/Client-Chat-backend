@@ -29,6 +29,7 @@ class WidgetSettings(Base):
     suggestions_enabled = Column(Boolean, default=False)
     dark_mode = Column(Boolean, default=False)
     typing_indicator_enabled = Column(Boolean, default=False)
+    communication_mode = Column(String, default="chat")
     agent_id = Column(Integer, ForeignKey("agents.id"))
 
     agent = relationship("Agent", back_populates="widget_settings")

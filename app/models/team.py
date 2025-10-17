@@ -12,3 +12,4 @@ class Team(Base):
 
     company = relationship("Company", back_populates="teams")
     members = relationship("TeamMembership", back_populates="team")
+    channels = relationship("ChatChannel", back_populates="team")

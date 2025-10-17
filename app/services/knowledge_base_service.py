@@ -6,7 +6,14 @@ import requests
 from bs4 import BeautifulSoup
 import httpx
 from app.services import credential_service, vectorization_service
+from app.services.vault_service import vault_service
+from app.core.object_storage import s3_client, BUCKET_NAME, chroma_client
 import numpy as np
+import os
+import shutil
+import os
+from io import BytesIO
+from pypdf import PdfReader
 
 async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, company_id: int, prompt: str) -> str:
     kb = get_knowledge_base(db, knowledge_base_id, company_id)
@@ -19,8 +26,8 @@ async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, 
     api_key = None
     for cred in credentials:
         # You might want to have a more robust way to identify Groq credentials
-        if "groq" in cred.platform.lower():
-            api_key = cred.api_key
+        if "groq" in cred.service.lower():
+            api_key = vault_service.decrypt(cred.encrypted_credentials)
             break
     
     if not api_key:
@@ -40,7 +47,7 @@ async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, 
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama3-8b-8192", # Or another suitable Groq model
+                    "model": "llama-3.1-8b-instant", # Or another suitable Groq model
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 1024,
@@ -123,6 +130,30 @@ def update_knowledge_base(db: Session, knowledge_base_id: int, knowledge_base: s
 def delete_knowledge_base(db: Session, knowledge_base_id: int, company_id: int):
     db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
     if db_knowledge_base:
+        if db_knowledge_base.storage_type == 's3' and db_knowledge_base.storage_details:
+            try:
+                s3_client.delete_object(
+                    Bucket=db_knowledge_base.storage_details.get('bucket'), 
+                    Key=db_knowledge_base.storage_details.get('key')
+                )
+            except Exception as e:
+                print(f"Error deleting file from S3: {e}")
+                # Decide if you want to raise an exception or just log the error
+
+        if db_knowledge_base.chroma_collection_name:
+            try:
+                chroma_client.delete_collection(name=db_knowledge_base.chroma_collection_name)
+            except Exception as e:
+                print(f"Error deleting chroma collection: {e}")
+
+        if db_knowledge_base.faiss_index_id:
+            try:
+                if os.path.exists(db_knowledge_base.faiss_index_id):
+                    shutil.rmtree(db_knowledge_base.faiss_index_id)
+                    print(f"FAISS index deleted from: {db_knowledge_base.faiss_index_id}")
+            except Exception as e:
+                print(f"Error deleting FAISS index: {e}")
+
         db.delete(db_knowledge_base)
         db.commit()
     return db_knowledge_base
@@ -151,3 +182,67 @@ def find_relevant_chunks(db: Session, knowledge_base_id: int, company_id: int, q
     top_k_indices = np.argsort(similarities)[-top_k:][::-1]
     
     return [content_chunks[i] for i in top_k_indices]
+
+import os
+from io import BytesIO
+from pypdf import PdfReader
+
+def get_knowledge_base_content(db: Session, knowledge_base_id: int, company_id: int):
+    db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
+    if not db_knowledge_base:
+        return None
+
+    if db_knowledge_base.storage_type == 's3' and db_knowledge_base.storage_details:
+        try:
+            key = db_knowledge_base.storage_details.get('key')
+            response = s3_client.get_object(
+                Bucket=db_knowledge_base.storage_details.get('bucket'),
+                Key=key
+            )
+            file_content_bytes = response['Body'].read()
+
+            file_extension = os.path.splitext(key)[1].lower()
+
+            if file_extension == '.pdf':
+                try:
+                    pdf_file = BytesIO(file_content_bytes)
+                    reader = PdfReader(pdf_file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text() or ""
+                    return text
+                except Exception as e:
+                    print(f"Error parsing PDF file from S3: {e}")
+                    return "Could not extract text from PDF file."
+            else: # Assume text file for others
+                try:
+                    return file_content_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    return "File content could not be displayed (not valid UTF-8 text)."
+
+        except Exception as e:
+            print(f"Error fetching file from S3: {e}")
+            return None
+    
+    return db_knowledge_base.content
+
+def get_knowledge_base_download_url(db: Session, knowledge_base_id: int, company_id: int):
+    db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
+    if not db_knowledge_base:
+        return None
+
+    if db_knowledge_base.storage_type == 's3' and db_knowledge_base.storage_details:
+        try:
+            return s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': db_knowledge_base.storage_details.get('bucket'),
+                    'Key': db_knowledge_base.storage_details.get('key')
+                },
+                ExpiresIn=3600  # URL expires in 1 hour
+            )
+        except Exception as e:
+            print(f"Error generating presigned URL: {e}")
+            return None
+    
+    return None

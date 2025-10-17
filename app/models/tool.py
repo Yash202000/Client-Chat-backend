@@ -13,13 +13,22 @@ class Tool(Base):
     __tablename__ = "tools"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String, index=True)
     description = Column(String, nullable=True)
-    parameters = Column(JSON) # Stores JSON schema for parameters
-    code = Column(Text, nullable=True) # Stores the Python code for the tool
+    
+    # Tool type can be 'custom' or 'mcp'
+    tool_type = Column(String, nullable=False, default="custom")
+    
+    # For custom tools
+    parameters = Column(JSON, nullable=True)
+    code = Column(Text, nullable=True)
+    
+    # For MCP connections
+    mcp_server_url = Column(String, nullable=True)
+    
     is_pre_built = Column(Boolean, default=False)
     company_id = Column(Integer, ForeignKey("companies.id"))
-    configuration = Column(JSON, nullable=True) # Stores tool configuration
+    configuration = Column(JSON, nullable=True)
 
     company = relationship("Company", back_populates="tools")
     agents = relationship("Agent", secondary=agent_tools, back_populates="tools")
