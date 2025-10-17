@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import uvicorn
+import os
 
 from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
@@ -22,9 +24,10 @@ app = FastAPI(
 )
 
 # CORS middleware to allow frontend to connect
+# Note: Widget needs to be accessible from any origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://localhost:5173"],
+    allow_origins=["http://localhost:8080", "http://localhost:5173", "*"],  # Allow widget to be embedded anywhere
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -40,6 +43,10 @@ app.include_router(ai_images.router, prefix="/api/v1/ai-images", tags=["ai-image
 app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["ai-chat"])
 app.include_router(object_detection.router, prefix="/api/v1/object-detection", tags=["object-detection"])
 
+# Mount static files for serving the widget
+widget_static_path = os.path.join(os.path.dirname(__file__), "static", "widget")
+if os.path.exists(widget_static_path):
+    app.mount("/widget", StaticFiles(directory=widget_static_path), name="widget")
 
 @app.get("/")
 async def read_root():
