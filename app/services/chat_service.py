@@ -112,17 +112,27 @@ async def update_conversation_status(db: Session, session_id: str, status: str, 
     from app.core.websockets import manager
     import json
 
-    db.query(models_conversation_session.ConversationSession).filter(
+    # Get the session to retrieve current connection status
+    session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == session_id,
         models_conversation_session.ConversationSession.company_id == company_id
-    ).update({"status": status})
-    db.commit()
+    ).first()
 
-    # Broadcast status change to all connected agents in real-time
+    if not session:
+        return False
+
+    # Update status
+    session.status = status
+    db.commit()
+    db.refresh(session)
+
+    # Broadcast status change to all connected agents in real-time, including connection status
     status_update_message = json.dumps({
         "type": "session_status_update",
         "session_id": session_id,
-        "status": status
+        "status": status,
+        "is_client_connected": session.is_client_connected,
+        "updated_at": session.updated_at.isoformat()
     })
     await manager.broadcast(status_update_message, str(company_id))
 
@@ -131,23 +141,62 @@ async def update_conversation_status(db: Session, session_id: str, status: str, 
 async def update_conversation_assignee(db: Session, session_id: str, user_id: int, company_id: int):
     """
     Assigns a conversation to a user and updates the session status to 'assigned'.
+    Sends a notification to the assigned user.
     """
     from app.core.websockets import manager
+    from app.models.user import User
     import json
 
-    db.query(models_conversation_session.ConversationSession).filter(
+    # First get the session to retrieve current connection status
+    session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == session_id,
         models_conversation_session.ConversationSession.company_id == company_id
-    ).update({"status": "assigned", "assignee_id": user_id})
-    db.commit()
+    ).first()
 
-    # Broadcast status change to all connected agents in real-time
+    if not session:
+        return False
+
+    # Get the assigned user's information
+    assigned_user = db.query(User).filter(User.id == user_id).first()
+
+    # Get contact information for the notification
+    contact = session.contact
+    contact_name = contact.name if contact else "Unknown Contact"
+
+    # Update the session
+    session.status = "assigned"
+    session.assignee_id = user_id
+    db.commit()
+    db.refresh(session)
+
+    # Broadcast status change to all connected agents in real-time, including connection status
     status_update_message = json.dumps({
         "type": "session_status_update",
         "session_id": session_id,
-        "status": "assigned"
+        "status": "assigned",
+        "is_client_connected": session.is_client_connected,
+        "updated_at": session.updated_at.isoformat()
     })
     await manager.broadcast(status_update_message, str(company_id))
+
+    # Send targeted notification to the assigned user
+    if assigned_user:
+        notification_message = json.dumps({
+            "type": "conversation_assigned",
+            "session_id": session_id,
+            "contact_name": contact_name,
+            "channel": session.channel,
+            "is_client_connected": session.is_client_connected,
+            "assigned_to": assigned_user.email,
+            "assigned_to_id": user_id,
+            "message": f"You've been assigned to handle conversation with {contact_name}",
+            "timestamp": session.updated_at.isoformat()
+        })
+        print(f"[update_conversation_assignee] Sending assignment notification to user {user_id} ({assigned_user.email})")
+        print(f"[update_conversation_assignee] Notification payload: {notification_message}")
+        # Broadcast to the entire company (frontend will filter for the assigned user)
+        await manager.broadcast(notification_message, str(company_id))
+        print(f"[update_conversation_assignee] Notification broadcasted to company {company_id}")
 
     return True
 

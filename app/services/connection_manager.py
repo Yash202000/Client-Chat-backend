@@ -77,4 +77,11 @@ class ConnectionManager:
         user_connections = [c for c in self.active_connections[session_id] if c["user_type"] == "user"]
         return len(user_connections) > 0
 
+    def get_connection_status(self, session_id: str) -> bool:
+        """
+        Gets the real-time connection status for a session.
+        Returns True if client is connected, False otherwise.
+        """
+        return self.has_user_connection(session_id)
+
 manager = ConnectionManager()

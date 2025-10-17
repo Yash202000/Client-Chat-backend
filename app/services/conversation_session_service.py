@@ -98,9 +98,10 @@ def get_session_by_conversation_id(db: Session, conversation_id: str, company_id
 
 async def update_session_connection_status(db: Session, conversation_id: str, is_connected: bool) -> ConversationSession:
     """
-    Updates the session status based on client connection state.
-    - If connected: sets status to 'active'
-    - If disconnected: sets status to 'inactive'
+    Updates the session connection state and status based on client connection.
+    - Updates is_client_connected field to track actual connection state
+    - For non-assigned sessions: sets status to 'active' if connected, 'inactive' if disconnected
+    - For assigned sessions: keeps status as 'assigned', only updates is_client_connected
     """
     from app.core.websockets import manager
     import json
@@ -110,29 +111,39 @@ async def update_session_connection_status(db: Session, conversation_id: str, is
     ).first()
 
     if db_session:
-        # Only update if the status is not already resolved or completed
-        if db_session.status not in ['resolved', 'completed', 'closed']:
+        old_connection_status = db_session.is_client_connected
+        old_status = db_session.status
+
+        # Always update the connection field
+        db_session.is_client_connected = is_connected
+
+        # Only update status if the session is not resolved, completed, closed, or assigned
+        if db_session.status not in ['resolved', 'completed', 'closed', 'assigned']:
             new_status = 'active' if is_connected else 'inactive'
-            old_status = db_session.status
+            db_session.status = new_status
 
-            # Only update and broadcast if status actually changed
-            if old_status != new_status:
-                db_session.status = new_status
-                db.commit()
-                db.refresh(db_session)
-                print(f"[conversation_session_service] Updated session {conversation_id} status from {old_status} to: {new_status}")
+        # Commit changes
+        db.commit()
+        db.refresh(db_session)
 
-                # Broadcast status change to all connected agents in the company
-                status_update_message = json.dumps({
-                    "type": "session_status_update",
-                    "session_id": conversation_id,
-                    "status": new_status,
-                    "updated_at": db_session.updated_at.isoformat()
-                })
+        # Log the change
+        if old_connection_status != is_connected or old_status != db_session.status:
+            print(f"[conversation_session_service] Updated session {conversation_id}:")
+            print(f"  - Connection: {old_connection_status} -> {is_connected}")
+            print(f"  - Status: {old_status} -> {db_session.status}")
 
-                # Broadcast to company WebSocket channel
-                if db_session.company_id:
-                    await manager.broadcast(status_update_message, str(db_session.company_id))
+            # Broadcast connection status change to all connected agents in the company
+            status_update_message = json.dumps({
+                "type": "session_status_update",
+                "session_id": conversation_id,
+                "status": db_session.status,
+                "is_client_connected": is_connected,
+                "updated_at": db_session.updated_at.isoformat()
+            })
+
+            # Broadcast to company WebSocket channel
+            if db_session.company_id:
+                await manager.broadcast(status_update_message, str(db_session.company_id))
 
     return db_session
 

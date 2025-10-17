@@ -19,6 +19,7 @@ class ConversationSession(Base):
     context = Column(JSON, nullable=False, default={}) # Stores all collected variables
     status = Column(String, nullable=False, default='active') # e.g., active, paused, waiting_for_input, completed
     is_ai_enabled = Column(Boolean, nullable=False, default=True) # Whether the AI should respond automatically
+    is_client_connected = Column(Boolean, nullable=False, default=False) # Whether the client is currently connected via WebSocket
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

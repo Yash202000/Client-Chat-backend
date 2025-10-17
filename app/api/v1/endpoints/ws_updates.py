@@ -7,7 +7,7 @@ router = APIRouter()
 
 @router.websocket("/ws/{company_id}")
 async def websocket_endpoint(
-    websocket: WebSocket, 
+    websocket: WebSocket,
     company_id: int,
     current_user: models_user.User = Depends(get_current_user_from_ws)
 ):
@@ -17,11 +17,13 @@ async def websocket_endpoint(
         await websocket.close(code=403)
         return
 
-    await manager.connect(websocket, company_id,"user")
-    print(f"[ws_updates] WebSocket connection established for company_id: {company_id}")
+    # Convert company_id to string for consistent channel naming
+    channel_id = str(company_id)
+    await manager.connect(websocket, channel_id, "user")
+    print(f"[ws_updates] WebSocket connection established for company_id: {company_id} (channel: {channel_id})")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket, company_id)
+        manager.disconnect(websocket, channel_id)
         print(f"[ws_updates] WebSocket connection closed for company_id: {company_id}")

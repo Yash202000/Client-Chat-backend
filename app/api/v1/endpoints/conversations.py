@@ -55,6 +55,8 @@ def get_all_sessions(
       - 'resolved' returns: resolved, archived
       - None returns: all sessions
     """
+    from app.core.websockets import manager
+
     sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
 
     # Apply status filter
@@ -68,15 +70,25 @@ def get_all_sessions(
         first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_user.company_id)
         contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_user.company_id)
 
+        # Get real-time connection status from ConnectionManager
+        real_time_connected = manager.get_connection_status(s.conversation_id)
+
+        # If real-time status differs from DB, update DB
+        if real_time_connected != s.is_client_connected:
+            print(f"[get_all_sessions] Syncing connection status for {s.conversation_id}: DB={s.is_client_connected} -> Real-time={real_time_connected}")
+            s.is_client_connected = real_time_connected
+            db.commit()
+
         sessions.append(schemas_session.Session(
             session_id=s.conversation_id,
             status=s.status,
-            assignee_id=s.agent_id,
+            assignee_id=s.assignee_id,  # Use assignee_id instead of agent_id
             last_message_timestamp=s.updated_at.isoformat(),
             first_message_content=first_message.message if first_message else "",
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
-            contact_phone=contact_info.phone_number if contact_info else None
+            contact_phone=contact_info.phone_number if contact_info else None,
+            is_client_connected=real_time_connected  # Use real-time status
         ))
     return sessions
 
@@ -105,7 +117,7 @@ def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db
     return schemas_session.Session(
             session_id=sessions_from_db.conversation_id,
             status=sessions_from_db.status,
-            assignee_id=sessions_from_db.agent_id,
+            assignee_id=sessions_from_db.assignee_id,  # Use assignee_id instead of agent_id
             last_message_timestamp=sessions_from_db.updated_at.isoformat(),
             first_message_content= ""
         )

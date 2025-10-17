@@ -10,6 +10,7 @@ class Session(BaseModel):
     channel: Optional[str] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    is_client_connected: Optional[bool] = False
 
     class Config:
         populate_by_name = True
