@@ -42,9 +42,14 @@ class Settings(BaseSettings):
 
     CHROMA_DB_HOST: Optional[str] = None
     CHROMA_DB_PORT: Optional[int] = None
-    
+
     SECRET_KEY: str = "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg="
     ALGORITHM: str = "HS256"
+
+    # Server configuration
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+    CORS_ORIGINS: str = "http://localhost:8080,http://localhost:5173,*"
 
     class Config:
         env_file = ".env"

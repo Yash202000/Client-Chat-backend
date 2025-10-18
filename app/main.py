@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import uvicorn
+import os
 
 from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
@@ -22,9 +24,12 @@ app = FastAPI(
 )
 
 # CORS middleware to allow frontend to connect
+# Note: Widget needs to be accessible from any origin
+# Parse CORS origins from comma-separated string in settings
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://localhost:5173"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -40,6 +45,10 @@ app.include_router(ai_images.router, prefix="/api/v1/ai-images", tags=["ai-image
 app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["ai-chat"])
 app.include_router(object_detection.router, prefix="/api/v1/object-detection", tags=["object-detection"])
 
+# Mount static files for serving the widget
+widget_static_path = os.path.join(os.path.dirname(__file__), "static", "widget")
+if os.path.exists(widget_static_path):
+    app.mount("/widget", StaticFiles(directory=widget_static_path), name="widget")
 
 @app.get("/")
 async def read_root():
@@ -59,4 +68,4 @@ async def on_shutdown():
     await websocket_manager.disconnect_all()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, ws="websockets")
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT, ws="websockets")
