@@ -25,9 +25,11 @@ app = FastAPI(
 
 # CORS middleware to allow frontend to connect
 # Note: Widget needs to be accessible from any origin
+# Parse CORS origins from comma-separated string in settings
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://localhost:5173", "*"],  # Allow widget to be embedded anywhere
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -66,4 +68,4 @@ async def on_shutdown():
     await websocket_manager.disconnect_all()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, ws="websockets")
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT, ws="websockets")
