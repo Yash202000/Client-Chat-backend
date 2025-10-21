@@ -62,18 +62,18 @@ services:
       POSTGRES_USER:     agentconnect
       POSTGRES_PASSWORD: agentconnect
 
-  frontend:
-    # IMPORTANT: Replace 'your-frontend-image:latest' with the actual name and tag of your built Docker image.
-    image: yashplg/agentconnect-frontend:v1.0
-    container_name: frontend_service
-    ports:
-      # Maps port 8080 on your local machine to port 80 in the container.
-      # You can access your app at http://localhost:8080
-      - "8080:80"
-    environment:
-      # These variables are now used at runtime by your container's startup script.
-      - VITE_BACKEND_URL=http://192.168.31.107:8000
-      - VITE_LIVEKIT_URL=wss://intersee-isrh22yh.livekit.cloud
+  # frontend:
+  #   # IMPORTANT: Replace 'your-frontend-image:latest' with the actual name and tag of your built Docker image.
+  #   image: yashplg/agentconnect-frontend:v1.0
+  #   container_name: frontend_service
+  #   ports:
+  #     # Maps port 8080 on your local machine to port 80 in the container.
+  #     # You can access your app at http://localhost:8080
+  #     - "8080:80"
+  #   environment:
+  #     # These variables are now used at runtime by your container's startup script.
+  #     - VITE_BACKEND_URL=http://192.168.31.107:8000
+  #     - VITE_LIVEKIT_URL=wss://intersee-isrh22yh.livekit.cloud
 
 volumes:
   chroma_data:

@@ -19,3 +19,6 @@ class Company(Base):
     integrations = relationship("Integration", back_populates="company")
     chat_channels = relationship("ChatChannel", back_populates="company")
     processing_templates = relationship("ProcessingTemplate", back_populates="company")
+    intents = relationship("Intent", back_populates="company")
+    entities = relationship("Entity", back_populates="company")
+    workflow_triggers = relationship("WorkflowTrigger", back_populates="company")

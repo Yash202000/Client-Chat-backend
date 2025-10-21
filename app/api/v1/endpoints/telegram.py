@@ -102,7 +102,7 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
 
             # --- Workflow Execution ---
             workflow_exec_service = WorkflowExecutionService(db)
-            execution_result = workflow_exec_service.execute_workflow(
+            execution_result = await workflow_exec_service.execute_workflow(
                 workflow_id=workflow.id,
                 user_message=message_text,
                 conversation_id=session.conversation_id

@@ -2,7 +2,7 @@ import json
 from sqlalchemy.orm import Session, joinedload
 from app.models import workflow as models_workflow, agent as models_agent
 from app.schemas import workflow as schemas_workflow
-from app.services import vectorization_service
+from app.services import vectorization_service, workflow_trigger_service
 
 def get_workflow(db: Session, workflow_id: int, company_id: int):
     return db.query(models_workflow.Workflow).options(
@@ -24,22 +24,35 @@ def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100)
 
 def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, company_id: int):
     workflow_data = workflow.dict(exclude_unset=True)
-    
+
     if 'steps' not in workflow_data or workflow_data['steps'] is None:
         workflow_data['steps'] = {}
 
+    visual_steps_data = None
     for field in ['steps', 'visual_steps']:
         if isinstance(workflow_data.get(field), dict):
+            if field == 'visual_steps':
+                visual_steps_data = workflow_data[field]
             workflow_data[field] = json.dumps(workflow_data[field])
-            
+
     workflow_data['version'] = 1
     workflow_data['is_active'] = True
     workflow_data['company_id'] = company_id
-    
+
     db_workflow = models_workflow.Workflow(**workflow_data)
     db.add(db_workflow)
     db.commit()
     db.refresh(db_workflow)
+
+    # Sync workflow triggers if visual_steps exist
+    if visual_steps_data:
+        workflow_trigger_service.sync_workflow_triggers(
+            db=db,
+            workflow_id=db_workflow.id,
+            company_id=company_id,
+            visual_steps=visual_steps_data
+        )
+
     return db_workflow
 
 def create_new_version(db: Session, parent_workflow_id: int, company_id: int):
@@ -94,13 +107,30 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
     db_workflow = get_workflow(db, workflow_id, company_id)
     if db_workflow:
         update_data = workflow.dict(exclude_unset=True)
+        visual_steps_updated = False
+        visual_steps_data = None
+
         for key, value in update_data.items():
             if key in ['steps', 'visual_steps'] and isinstance(value, dict):
                 setattr(db_workflow, key, json.dumps(value))
+                if key == 'visual_steps':
+                    visual_steps_updated = True
+                    visual_steps_data = value
             else:
                 setattr(db_workflow, key, value)
+
         db.commit()
         db.refresh(db_workflow)
+
+        # Sync workflow triggers if visual_steps were updated
+        if visual_steps_updated and visual_steps_data:
+            workflow_trigger_service.sync_workflow_triggers(
+                db=db,
+                workflow_id=workflow_id,
+                company_id=company_id,
+                visual_steps=visual_steps_data
+            )
+
     return db_workflow
 
 def delete_workflow(db: Session, workflow_id: int, company_id: int):
