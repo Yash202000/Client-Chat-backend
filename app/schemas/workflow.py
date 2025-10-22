@@ -7,6 +7,7 @@ class WorkflowBase(BaseModel):
     description: Optional[str] = None
     agent_id: int
     trigger_phrases: Optional[List[str]] = None
+    intent_config: Optional[Dict[str, Any]] = None
     version: int = 1
     is_active: bool = True
     parent_workflow_id: Optional[int] = None
@@ -22,6 +23,7 @@ class WorkflowUpdate(BaseModel):
     steps: Optional[Dict[str, Any]] = None
     visual_steps: Optional[Dict[str, Any]] = None
     trigger_phrases: Optional[List[str]] = None
+    intent_config: Optional[Dict[str, Any]] = None
 
 class Workflow(WorkflowBase):
     id: int
@@ -29,7 +31,7 @@ class Workflow(WorkflowBase):
     visual_steps: Optional[Dict[str, Any]] = None
     versions: List['Workflow'] = []
 
-    @validator('steps', 'visual_steps', pre=True, allow_reuse=True)
+    @validator('steps', 'visual_steps', 'intent_config', pre=True, allow_reuse=True)
     def parse_json_strings(cls, v):
         if isinstance(v, str):
             try:

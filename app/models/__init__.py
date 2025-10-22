@@ -23,6 +23,7 @@ from app.models.voice_profile import VoiceProfile
 from app.models.webhook import Webhook
 from app.models.widget_settings import WidgetSettings
 from app.models.workflow import Workflow
+from app.models.workflow_trigger import WorkflowTrigger, TriggerChannel
 from app.models.chat_channel import ChatChannel
 from app.models.channel_membership import ChannelMembership
 from app.models.internal_chat_message import InternalChatMessage
@@ -34,4 +35,5 @@ from app.models.temporary_document import TemporaryDocument
 from app.models.ai_tool import AITool
 from app.models.ai_tool_category import AIToolCategory
 from app.models.ai_tool_question import AIToolQuestion
+from app.models.intent import Intent, IntentMatch, Entity, ConversationTag
 

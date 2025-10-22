@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message
 from app.schemas.websockets import WebSocketMessage
@@ -8,6 +8,7 @@ import json
 from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
+from app.models.workflow_trigger import TriggerChannel
 from app.core.websockets import manager
 from app.services.stt_service import STTService, GroqSTTService
 from app.services.tts_service import TTSService
@@ -395,12 +396,22 @@ async def websocket_endpoint(
 
             # 2. If the message is from the user, execute the workflow
             if sender == 'user':
-                # Use the similarity search to find the most relevant workflow
-                workflow = workflow_service.find_similar_workflow(
-                    db, 
-                    company_id=company_id, 
-                    query=user_message
+                # Try trigger-based workflow finding first (new system)
+                workflow = workflow_trigger_service.find_workflow_for_channel_message(
+                    db=db,
+                    channel=TriggerChannel.WEBSOCKET,
+                    company_id=company_id,
+                    message=user_message,
+                    session_data={"session_id": session_id, "agent_id": agent_id}
                 )
+
+                # Fallback to old similarity search if no trigger-based workflow found
+                if not workflow:
+                    workflow = workflow_service.find_similar_workflow(
+                        db,
+                        company_id=company_id,
+                        query=user_message
+                    )
 
                 if not workflow:
                     # If no specific workflow matches, provide a generic response
@@ -415,7 +426,7 @@ async def websocket_endpoint(
                     continue
 
                 # 3. Execute the matched workflow with the current state (conversation_id)
-                execution_result = workflow_exec_service.execute_workflow(
+                execution_result = await workflow_exec_service.execute_workflow(
                     user_message=user_message,
                     conversation_id=session_id,
                     company_id=company_id,
@@ -509,34 +520,40 @@ async def public_websocket_endpoint(
             contact = contact_service.get_or_create_contact_for_channel(db, company_id=company_id, channel="web_chat", channel_identifier=session_id)
             session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id)
 
+            # Handle form data: convert dict to JSON string for storage
+            message_for_storage = user_message
+            if isinstance(user_message, dict):
+                # If it's form data, convert to JSON string for chat message storage
+                message_for_storage = json.dumps(user_message)
+
             # Now, create and broadcast the chat message
-            chat_message = schemas_chat_message.ChatMessageCreate(message=user_message, message_type=message_data.get('message_type', 'message'))
+            chat_message = schemas_chat_message.ChatMessageCreate(message=message_for_storage, message_type=message_data.get('message_type', 'message'))
             db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
             await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
 
             if sender == 'user':
                 # The session is already guaranteed to exist, so we can proceed
                 print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
-                
+
                 execution_result = None
                 if session.status == 'paused' and session.workflow_id:
                     # A workflow is already in progress, so we resume it.
                     workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                     if workflow:
-                         execution_result = await asyncio.to_thread(
-                            workflow_exec_service.execute_workflow, user_message=user_message, company_id=company_id, workflow=workflow, conversation_id=session_id
+                         execution_result = await workflow_exec_service.execute_workflow(
+                            user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
                         )
                 else:
                     # No workflow is in progress, so we find a new one.
-                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=user_message)
+                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
                     if workflow:
-                        execution_result = await asyncio.to_thread(
-                            workflow_exec_service.execute_workflow, user_message=user_message, company_id=company_id, workflow=workflow, conversation_id=session_id
+                        execution_result = await workflow_exec_service.execute_workflow(
+                            user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
                         )
 
                 # If no workflow was found or resumed, fallback to the default agent response
                 if not execution_result:
-                    await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, user_message)
+                    await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
                     continue
                 
                 # Handle execution result

@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models import workflow
 from app.models.workflow import Workflow
@@ -10,6 +11,7 @@ from app.schemas.conversation_session import ConversationSessionUpdate
 from app.schemas.memory import MemoryCreate
 from app.services.graph_execution_engine import GraphExecutionEngine
 from app.services.llm_tool_service import LLMToolService
+from app.services.workflow_intent_service import WorkflowIntentService
 
 import requests
 import numexpr
@@ -18,6 +20,7 @@ class WorkflowExecutionService:
     def __init__(self, db: Session):
         self.db = db
         self.llm_tool_service = LLMToolService(db)
+        self.workflow_intent_service = WorkflowIntentService(db)
 
     def _execute_tool(self, tool_name: str, params: dict, company_id: int = None):
         # The "listen" tool is a special case that signals a pause.
@@ -269,7 +272,280 @@ class WorkflowExecutionService:
 
         return {"output": llm_response}
 
-    def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
+    # ============================================================
+    # NEW CHAT-SPECIFIC NODE EXECUTION METHODS
+    # ============================================================
+
+    def _execute_intent_router_node(self, node_data: dict, context: dict, results: dict):
+        """
+        Routes workflow based on detected intent in context.
+        Returns intent_name to determine which edge to follow.
+        """
+        detected_intent = context.get("detected_intent")
+        intent_confidence = context.get("intent_confidence", 0.0)
+
+        routes = node_data.get("routes", [])
+
+        # Check if detected intent matches any configured route
+        for route in routes:
+            intent_name = route.get("intent_name")
+            min_confidence = route.get("min_confidence", 0.7)
+
+            if detected_intent == intent_name and intent_confidence >= min_confidence:
+                print(f"✓ Intent router: Routing to '{intent_name}' (confidence: {intent_confidence:.2f})")
+                return {
+                    "output": intent_name,
+                    "route": intent_name,
+                    "confidence": intent_confidence
+                }
+
+        # No matching route, use default
+        print(f"✓ Intent router: Using default route (no intent match)")
+        return {
+            "output": "default",
+            "route": "default",
+            "confidence": 0.0
+        }
+
+    async def _execute_entity_collector_node(
+        self, node_data: dict, context: dict, results: dict, workflow: Workflow, conversation_id: str
+    ):
+        """
+        Collects required entities from context or prompts user for missing ones.
+        """
+        entities_to_collect = node_data.get("entities_to_collect", [])
+        collection_strategy = node_data.get("collection_strategy", "ask_if_missing")
+        prompts = node_data.get("prompts", {})
+        max_attempts = node_data.get("max_attempts", 3)
+
+        missing_entities = []
+        collected_entities = {}
+
+        # Check which entities are already in context
+        for entity_name in entities_to_collect:
+            if entity_name in context and context[entity_name]:
+                collected_entities[entity_name] = context[entity_name]
+                print(f"✓ Entity '{entity_name}' already in context: {context[entity_name]}")
+            else:
+                missing_entities.append(entity_name)
+                print(f"✗ Entity '{entity_name}' missing from context")
+
+        if not missing_entities:
+            # All entities collected
+            return {
+                "output": collected_entities,
+                "status": "complete",
+                "collected": collected_entities
+            }
+
+        if collection_strategy == "extract_only":
+            # Don't prompt, just return what we have
+            return {
+                "output": collected_entities,
+                "status": "partial",
+                "collected": collected_entities,
+                "missing": missing_entities
+            }
+
+        # Ask for first missing entity
+        first_missing = missing_entities[0]
+        prompt_text = prompts.get(first_missing, f"Please provide your {first_missing}")
+
+        print(f"ℹ Prompting user for entity '{first_missing}'")
+
+        return {
+            "status": "paused_for_prompt",
+            "prompt": {
+                "text": prompt_text,
+                "options": []
+            },
+            "collecting_entity": first_missing,
+            "remaining_entities": missing_entities
+        }
+
+    def _execute_check_entity_node(self, node_data: dict, context: dict, results: dict):
+        """
+        Checks if a specific entity exists in context.
+        Returns boolean for routing (true/false edges).
+        """
+        entity_name = node_data.get("entity_name")
+        check_type = node_data.get("check_type", "exists")  # exists, not_empty, valid
+
+        entity_value = context.get(entity_name)
+
+        if check_type == "exists":
+            has_entity = entity_name in context
+        elif check_type == "not_empty":
+            has_entity = entity_name in context and entity_value not in [None, "", []]
+        elif check_type == "valid":
+            # Could add regex validation here
+            validation_regex = node_data.get("validation_regex")
+            if validation_regex and entity_value:
+                import re
+                has_entity = bool(re.match(validation_regex, str(entity_value)))
+            else:
+                has_entity = entity_name in context and entity_value is not None
+        else:
+            has_entity = False
+
+        print(f"✓ Check entity '{entity_name}': {has_entity} (value: {entity_value})")
+
+        return {
+            "output": has_entity,
+            "entity_name": entity_name,
+            "entity_value": entity_value,
+            "check_result": has_entity
+        }
+
+    def _execute_update_context_node(self, node_data: dict, context: dict, results: dict):
+        """
+        Updates context with new variables or values.
+        """
+        variables = node_data.get("variables", {})
+
+        updated_vars = {}
+        for var_name, var_value in variables.items():
+            # Resolve placeholders in value
+            resolved_value = self._resolve_placeholders(str(var_value), context, results)
+            context[var_name] = resolved_value
+            updated_vars[var_name] = resolved_value
+            print(f"✓ Updated context: {var_name} = {resolved_value}")
+
+        return {
+            "output": "Context updated",
+            "updated_variables": updated_vars
+        }
+
+    def _execute_tag_conversation_node(self, node_data: dict, context: dict, results: dict, conversation_id: str):
+        """
+        Adds tags to the conversation for organization and filtering.
+        """
+        tags = node_data.get("tags", [])
+
+        # Resolve any placeholders in tags
+        resolved_tags = []
+        for tag in tags:
+            resolved_tag = self._resolve_placeholders(str(tag), context, results)
+            resolved_tags.append(resolved_tag)
+
+        # Update conversation session with tags
+        try:
+            session = conversation_session_service.get_session(self.db, conversation_id)
+            if session:
+                current_tags = session.context.get("tags", []) if session.context else []
+                updated_tags = list(set(current_tags + resolved_tags))  # Remove duplicates
+
+                session_context = session.context or {}
+                session_context["tags"] = updated_tags
+
+                conversation_session_service.update_session_context(
+                    self.db, conversation_id, session_context
+                )
+
+                print(f"✓ Added tags to conversation: {resolved_tags}")
+
+                return {
+                    "output": "Tags added",
+                    "tags_added": resolved_tags,
+                    "all_tags": updated_tags
+                }
+        except Exception as e:
+            print(f"✗ Error adding tags: {e}")
+            return {"error": f"Failed to add tags: {e}"}
+
+    def _execute_assign_to_agent_node(
+        self, node_data: dict, context: dict, results: dict, conversation_id: str, company_id: int
+    ):
+        """
+        Assigns the conversation to a human agent or agent pool.
+        """
+        assignment_type = node_data.get("assignment_type", "pool")  # pool, specific, round_robin
+        agent_id = node_data.get("agent_id")
+        pool_name = node_data.get("pool_name", "support")
+        priority = node_data.get("priority", "normal")
+        notes = node_data.get("notes", "")
+
+        resolved_notes = self._resolve_placeholders(notes, context, results)
+
+        try:
+            session = conversation_session_service.get_session(self.db, conversation_id)
+            if session:
+                # Disable AI for manual handling
+                session_update = ConversationSessionUpdate(
+                    is_ai_enabled=False,
+                    status='pending_agent_assignment'
+                )
+                conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+                # Store assignment info in context
+                assignment_info = {
+                    "assigned_at": datetime.now().isoformat(),
+                    "assignment_type": assignment_type,
+                    "pool": pool_name,
+                    "priority": priority,
+                    "notes": resolved_notes
+                }
+
+                if agent_id:
+                    assignment_info["agent_id"] = agent_id
+
+                session_context = session.context or {}
+                session_context["assignment"] = assignment_info
+                conversation_session_service.update_session_context(
+                    self.db, conversation_id, session_context
+                )
+
+                print(f"✓ Assigned conversation to {assignment_type}: {pool_name or agent_id}")
+
+                return {
+                    "output": "Assigned to agent",
+                    "assignment": assignment_info
+                }
+        except Exception as e:
+            print(f"✗ Error assigning to agent: {e}")
+            return {"error": f"Failed to assign to agent: {e}"}
+
+    def _execute_set_status_node(self, node_data: dict, context: dict, results: dict, conversation_id: str):
+        """
+        Sets the conversation status (e.g., resolved, pending, escalated).
+        """
+        status = node_data.get("status", "active")
+        reason = node_data.get("reason", "")
+
+        resolved_reason = self._resolve_placeholders(reason, context, results)
+
+        try:
+            session_update = ConversationSessionUpdate(
+                status=status
+            )
+            conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+            # Also store in context
+            session = conversation_session_service.get_session(self.db, conversation_id)
+            if session:
+                session_context = session.context or {}
+                session_context["status_history"] = session_context.get("status_history", [])
+                session_context["status_history"].append({
+                    "status": status,
+                    "reason": resolved_reason,
+                    "timestamp": datetime.now().isoformat()
+                })
+                conversation_session_service.update_session_context(
+                    self.db, conversation_id, session_context
+                )
+
+            print(f"✓ Set conversation status to: {status}")
+
+            return {
+                "output": f"Status set to {status}",
+                "status": status,
+                "reason": resolved_reason
+            }
+        except Exception as e:
+            print(f"✗ Error setting status: {e}")
+            return {"error": f"Failed to set status: {e}"}
+
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -295,6 +571,52 @@ class WorkflowExecutionService:
 
         # Load all memories for this session into the context
         context = {memory.key: memory.value for memory in memory_service.get_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)}
+
+        # ============================================================
+        # WORKFLOW INTENT DETECTION
+        # ============================================================
+        # Check if this workflow has intent detection enabled
+        if self.workflow_intent_service.workflow_has_intents_enabled(workflow_obj):
+            print(f"DEBUG: Intent detection enabled for workflow '{workflow_obj.name}'")
+
+            intent_match = await self.workflow_intent_service.detect_intent_for_workflow(
+                message=user_message,
+                workflow=workflow_obj,
+                conversation_id=conversation_id,
+                company_id=company_id
+            )
+
+            if intent_match:
+                intent_dict, confidence, entities, matched_method = intent_match
+                print(f"✓ Workflow intent detected: {intent_dict.get('name')} (confidence: {confidence:.2f}, method: {matched_method})")
+
+                # Add detected intent information to context
+                context['detected_intent'] = intent_dict.get('name')
+                context['intent_confidence'] = confidence
+                context['intent_matched_method'] = matched_method
+
+                # Merge extracted entities into context
+                if entities:
+                    print(f"✓ Extracted entities: {entities}")
+                    context.update(entities)
+
+                    # Save entities to memory for persistence
+                    for entity_name, entity_value in entities.items():
+                        memory_service.set_memory(
+                            self.db,
+                            MemoryCreate(key=entity_name, value=entity_value),
+                            agent_id=workflow_obj.agent.id,
+                            session_id=conversation_id
+                        )
+
+                # Check if confidence meets auto-trigger threshold
+                if not self.workflow_intent_service.should_auto_trigger(workflow_obj, confidence):
+                    min_confidence = workflow_obj.intent_config.get("min_confidence", 0.7)
+                    print(f"ℹ Intent confidence {confidence:.2f} below threshold {min_confidence}, workflow may not proceed")
+                    # Continue execution anyway since workflow was explicitly called
+            else:
+                print(f"✗ No intent matched for workflow '{workflow_obj.name}'")
+
         results = {}
 
         # Ensure visual_steps is a dictionary
@@ -396,6 +718,46 @@ class WorkflowExecutionService:
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
 
+            # ============================================================
+            # NEW CHAT-SPECIFIC NODES
+            # ============================================================
+
+            elif node_type == "intent_router":
+                # Routes based on detected intent in context
+                result = self._execute_intent_router_node(node_data, context, results)
+
+            elif node_type == "entity_collector":
+                # Collects required entities from user
+                result = await self._execute_entity_collector_node(
+                    node_data, context, results, workflow_obj, conversation_id
+                )
+
+            elif node_type == "check_entity":
+                # Checks if entity exists in context
+                result = self._execute_check_entity_node(node_data, context, results)
+
+            elif node_type == "update_context":
+                # Updates context variables
+                result = self._execute_update_context_node(node_data, context, results)
+
+            elif node_type == "tag_conversation":
+                # Adds tags to conversation
+                result = self._execute_tag_conversation_node(
+                    node_data, context, results, conversation_id
+                )
+
+            elif node_type == "assign_to_agent":
+                # Transfers conversation to human agent
+                result = self._execute_assign_to_agent_node(
+                    node_data, context, results, conversation_id, workflow_obj.agent.company_id
+                )
+
+            elif node_type == "set_status":
+                # Sets conversation status
+                result = self._execute_set_status_node(
+                    node_data, context, results, conversation_id
+                )
+
             results[current_node_id] = result
             last_executed_node_id = current_node_id
 
@@ -407,7 +769,8 @@ class WorkflowExecutionService:
                 variable_to_save = node_data.get("output_variable")
                 if not variable_to_save:
                     params = node_data.get("params", {})
-                    variable_to_save = params.get("output_variable")
+                    # Check both 'output_variable' and 'save_to_variable' for backward compatibility
+                    variable_to_save = params.get("output_variable") or params.get("save_to_variable")
                 
                 print(f"DEBUG: Pausing node data: {node_data}")
                 print(f"DEBUG: 'output_variable' from node data is: '{variable_to_save}'")

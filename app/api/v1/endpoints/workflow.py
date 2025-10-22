@@ -1,12 +1,29 @@
-from typing import List
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import workflow as schemas_workflow
 from app.services import workflow_service
+from app.services.workflow_intent_service import WorkflowIntentService
 from app.models import user as models_user
 
 router = APIRouter()
+
+# Pydantic models for intent_config management
+class IntentConfigUpdate(BaseModel):
+    intent_config: Optional[Dict[str, Any]] = None
+
+class TestWorkflowIntentRequest(BaseModel):
+    message: str
+
+class TestWorkflowIntentResponse(BaseModel):
+    intent_detected: bool
+    intent_name: Optional[str] = None
+    confidence: Optional[float] = None
+    matched_method: Optional[str] = None
+    entities: Optional[Dict[str, Any]] = None
+    should_auto_trigger: bool = False
 
 @router.post("/", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:create"))])
 def create_workflow(workflow: schemas_workflow.WorkflowCreate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
@@ -59,3 +76,120 @@ def activate_workflow_version(version_id: int, db: Session = Depends(get_db), cu
     if activated_version is None:
         raise HTTPException(status_code=404, detail="Workflow version not found")
     return activated_version
+
+# --- Intent Configuration Endpoints ---
+
+@router.get("/{workflow_id}/intent-config", dependencies=[Depends(require_permission("workflow:read"))])
+def get_workflow_intent_config(workflow_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    """
+    Get the intent configuration for a specific workflow.
+    """
+    workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    return {
+        "workflow_id": workflow.id,
+        "workflow_name": workflow.name,
+        "intent_config": workflow.intent_config or {}
+    }
+
+@router.put("/{workflow_id}/intent-config", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
+def update_workflow_intent_config(
+    workflow_id: int,
+    config: IntentConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Update the intent configuration for a workflow.
+    This allows configuring trigger intents, entities, and auto-trigger settings.
+    """
+    workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    # Update the workflow with new intent_config
+    update_data = schemas_workflow.WorkflowUpdate(intent_config=config.intent_config)
+    updated_workflow = workflow_service.update_workflow(
+        db=db,
+        workflow_id=workflow_id,
+        workflow=update_data,
+        company_id=current_user.company_id
+    )
+
+    return updated_workflow
+
+@router.post("/{workflow_id}/test-intent", response_model=TestWorkflowIntentResponse, dependencies=[Depends(require_permission("workflow:read"))])
+async def test_workflow_intent(
+    workflow_id: int,
+    request: TestWorkflowIntentRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Test intent detection for a workflow with a sample message.
+    Returns the detected intent, confidence, and extracted entities.
+    """
+    workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    intent_service = WorkflowIntentService(db)
+
+    # Check if workflow has intents enabled
+    if not intent_service.workflow_has_intents_enabled(workflow):
+        return TestWorkflowIntentResponse(
+            intent_detected=False,
+            should_auto_trigger=False
+        )
+
+    # Detect intent
+    intent_match = await intent_service.detect_intent_for_workflow(
+        message=request.message,
+        workflow=workflow,
+        conversation_id="test_conversation",
+        company_id=current_user.company_id
+    )
+
+    if intent_match:
+        intent_dict, confidence, entities, matched_method = intent_match
+        should_auto_trigger = intent_service.should_auto_trigger(workflow, confidence)
+
+        return TestWorkflowIntentResponse(
+            intent_detected=True,
+            intent_name=intent_dict.get("name"),
+            confidence=confidence,
+            matched_method=matched_method,
+            entities=entities,
+            should_auto_trigger=should_auto_trigger
+        )
+
+    return TestWorkflowIntentResponse(
+        intent_detected=False,
+        should_auto_trigger=False
+    )
+
+@router.delete("/{workflow_id}/intent-config", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
+def delete_workflow_intent_config(
+    workflow_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Remove intent configuration from a workflow.
+    """
+    workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    # Set intent_config to None
+    update_data = schemas_workflow.WorkflowUpdate(intent_config=None)
+    updated_workflow = workflow_service.update_workflow(
+        db=db,
+        workflow_id=workflow_id,
+        workflow=update_data,
+        company_id=current_user.company_id
+    )
+
+    return updated_workflow
