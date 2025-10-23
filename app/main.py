@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
 from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, object_detection
 from app.core.dependencies import get_db
+from app.services.connection_manager import manager
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
 from create_tool import create_api_call_tool

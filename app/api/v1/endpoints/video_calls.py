@@ -7,7 +7,7 @@ from app.core.dependencies import get_db, get_current_user
 from app.models.user import User
 from app.crud import crud_video_call
 from app.schemas.video_call import VideoCallCreate
-from app.core.websockets import manager
+from app.services.connection_manager import manager
 import json
 
 router = APIRouter()

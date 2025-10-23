@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema, ChatMessageCreate
 import json
-from app.core.websockets import manager
+from app.services.connection_manager import manager
 from app.services.vault_service import vault_service
 from app.models.agent import Agent
 

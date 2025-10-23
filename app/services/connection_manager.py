@@ -63,6 +63,15 @@ class ConnectionManager:
         else:
             print(f"[broadcast] ❌ No connections found for channel '{channel_id}'")
 
+    async def broadcast_to_company(self, company_id: int, message: str):
+        """
+        Broadcast a message to all users connected to a company channel.
+        This is an alias for broadcast() with company_id converted to string.
+        """
+        channel_id = str(company_id)
+        print(f"[broadcast_to_company] Broadcasting to company {company_id} (channel: '{channel_id}')")
+        await self.broadcast(message, channel_id)
+
     async def disconnect_all(self):
         print("[ConnectionManager] Disconnecting all clients...")
         for session_id in list(self.active_connections.keys()):

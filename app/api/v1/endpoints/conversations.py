@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 
-from app.core.dependencies import get_db, get_current_active_user, get_current_company
+from app.core.dependencies import get_db, get_current_active_user, get_current_company, require_permission
 from app.services import chat_service, agent_service, conversation_session_service
 from app.schemas import chat_message as schemas_chat_message, session as schemas_session, conversation_session as schemas_conversation_session
 from app.models import user as models_user
@@ -23,7 +23,7 @@ class FeedbackUpdate(BaseModel):
     feedback_rating: int
     feedback_notes: Optional[str] = None
 
-@router.get("/sessions/counts")
+@router.get("/sessions/counts", dependencies=[Depends(require_permission("conversation:read"))])
 def get_session_counts(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     """
     Get counts of sessions by status for the company.
@@ -40,7 +40,7 @@ def get_session_counts(db: Session = Depends(get_db), current_user: models_user.
         "all": len(all_sessions)
     }
 
-@router.get("/sessions", response_model=List[schemas_session.Session])
+@router.get("/sessions", response_model=List[schemas_session.Session], dependencies=[Depends(require_permission("conversation:read"))])
 def get_all_sessions(
     status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -55,7 +55,7 @@ def get_all_sessions(
       - 'resolved' returns: resolved, archived
       - None returns: all sessions
     """
-    from app.core.websockets import manager
+    from app.services.connection_manager import manager
 
     sessions_from_db = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
 
@@ -92,7 +92,7 @@ def get_all_sessions(
         ))
     return sessions
 
-@router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True)
+@router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True, dependencies=[Depends(require_permission("conversation:read"))])
 def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     # This endpoint is deprecated in favor of the company-wide /sessions endpoint
     sessions_from_db = chat_service.get_sessions_with_details(db, agent_id=agent_id, company_id=current_user.company_id)
@@ -110,7 +110,7 @@ def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_
     return sessions
 
 
-@router.get("/{agent_id}/sessions/{session_id}", response_model=schemas_session.Session)
+@router.get("/{agent_id}/sessions/{session_id}", response_model=schemas_session.Session, dependencies=[Depends(require_permission("conversation:read"))])
 def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     # This endpoint is deprecated in favor of the company-wide /sessions endpoint
     sessions_from_db = chat_service.get_session_details(db, agent_id=agent_id, broadcast_session_id=session_id, company_id=current_user.company_id)
@@ -122,17 +122,16 @@ def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db
             first_message_content= ""
         )
 
-@router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage])
+@router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])
 def get_messages(agent_id: int, session_id: str, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     return chat_service.get_chat_messages(db, agent_id=agent_id, session_id=session_id, company_id=current_user.company_id)
 
-@router.post("/{agent_id}/{session_id}/notes", response_model=schemas_chat_message.ChatMessage)
+@router.post("/{agent_id}/{session_id}/notes", response_model=schemas_chat_message.ChatMessage, dependencies=[Depends(require_permission("conversation:update"))])
 def create_note(
     agent_id: int,
     session_id: str,
     note: NoteCreate,
     db: Session = Depends(get_db),
-
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     # We can consider adding author_id to notes in the future
@@ -147,12 +146,11 @@ def create_note(
         sender="agent" 
     )
 
-@router.put("/{session_id}/status")
+@router.put("/{session_id}/status", dependencies=[Depends(require_permission("conversation:update"))])
 async def update_status(
     session_id: str,
     status_update: StatusUpdate,
     db: Session = Depends(get_db),
-
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     success = await chat_service.update_conversation_status(db, session_id=session_id, status=status_update.status, company_id=current_user.company_id)
@@ -160,7 +158,7 @@ async def update_status(
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"message": "Status updated successfully"}
 
-@router.put("/{session_id}/assignee")
+@router.put("/{session_id}/assignee", dependencies=[Depends(require_permission("conversation:update"))])
 async def update_assignee(
     session_id: str,
     assignee_update: AssigneeUpdate,
@@ -175,7 +173,7 @@ async def update_assignee(
 class AIToggleUpdate(BaseModel):
     is_ai_enabled: bool
 
-@router.put("/{session_id}/toggle-ai", response_model=schemas_conversation_session.ConversationSession)
+@router.put("/{session_id}/toggle-ai", response_model=schemas_conversation_session.ConversationSession, dependencies=[Depends(require_permission("conversation:update"))])
 def toggle_ai(
     session_id: str,
     update: AIToggleUpdate,
@@ -196,7 +194,7 @@ def toggle_ai(
     return session
 
 
-@router.put("/{session_id}/feedback")
+@router.put("/{session_id}/feedback", dependencies=[Depends(require_permission("conversation:update"))])
 def update_feedback(
     session_id: str,
     feedback_update: FeedbackUpdate,

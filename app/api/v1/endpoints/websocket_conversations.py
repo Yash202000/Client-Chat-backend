@@ -2,14 +2,14 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
 from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
 from app.services.workflow_execution_service import WorkflowExecutionService
-from app.schemas import chat_message as schemas_chat_message
+from app.schemas import chat_message as schemas_chat_message, websocket as schemas_websocket
 from app.schemas.websockets import WebSocketMessage
 import json
 from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
 from app.models.workflow_trigger import TriggerChannel
-from app.core.websockets import manager
+from app.services.connection_manager import manager
 from app.services.stt_service import STTService, GroqSTTService
 from app.services.tts_service import TTSService
 from fastapi import UploadFile
@@ -518,7 +518,25 @@ async def public_websocket_endpoint(
 
             # Ensure contact and session exist before creating a message
             contact = contact_service.get_or_create_contact_for_channel(db, company_id=company_id, channel="web_chat", channel_identifier=session_id)
+
+            # Check if this is a new session
+            existing_session = db.query(models_conversation_session.ConversationSession).filter(
+                models_conversation_session.ConversationSession.conversation_id == session_id,
+                models_conversation_session.ConversationSession.company_id == company_id
+            ).first()
+            is_new_session = existing_session is None
+
             session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id)
+
+            # Broadcast new session creation to all company users
+            if is_new_session:
+                print(f"[websocket_conversations] 🆕 New session created: {session_id}. Broadcasting to company {company_id}")
+                session_update_schema = schemas_websocket.WebSocketSessionUpdate.model_validate(session)
+                await manager.broadcast_to_company(
+                    company_id,
+                    json.dumps({"type": "new_session", "session": session_update_schema.model_dump(by_alias=True)})
+                )
+                print(f"[websocket_conversations] ✅ Broadcasted new session to company {company_id}")
 
             # Handle form data: convert dict to JSON string for storage
             message_for_storage = user_message
