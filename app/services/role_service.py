@@ -53,6 +53,26 @@ PERMISSIONS = {
     "ai-tool-category:read": "Read AI tool categories",
     "ai-tool-category:update": "Update AI tool categories",
     "ai-tool-category:delete": "Delete AI tool categories",
+    # Conversation Management
+    "conversation:create": "Create conversations",
+    "conversation:read": "Read conversations and active clients",
+    "conversation:update": "Update conversations",
+    "conversation:delete": "Delete conversations",
+    # Voice Lab
+    "voice:create": "Create and manage voice models",
+    "voice:read": "Read voice models",
+    "voice:update": "Update voice models",
+    "voice:delete": "Delete voice models",
+    # Internal Chat
+    "chat:create": "Create internal chat channels",
+    "chat:read": "Read and participate in internal chat",
+    "chat:update": "Update chat channels",
+    "chat:delete": "Delete chat channels",
+    # AI Image Generation
+    "image:create": "Generate AI images",
+    "image:read": "View AI image gallery",
+    "image:update": "Update AI images",
+    "image:delete": "Delete AI images",
 }
 
 def get_role(db: Session, role_id: int, company_id: int = None):
@@ -148,13 +168,18 @@ def create_initial_roles_for_company(db: Session, company_id: int):
     roles_to_permissions = {
         "Admin": [p for p in PERMISSIONS.keys() if p not in ["client:read_dashboard"]],
         "Agent Builder": [
-            "agent:create", "agent:read", "agent:update",
-            "workflow:create", "workflow:read", "workflow:update",
+            "agent:create", "agent:read", "agent:update", "agent:delete",
+            "workflow:create", "workflow:read", "workflow:update", "workflow:delete",
             "tool:read", "knowledgebase:read", "analytics:read",
-            "ai-tool:read", "ai-tool-category:read"
+            "ai-tool:read", "ai-tool-category:read",
+            "conversation:read", "conversation:update",
+            "voice:create", "voice:read", "voice:update", "voice:delete",
+            "chat:read", "chat:create",
+            "image:create", "image:read"
         ],
         "Analyst": [
-            "agent:read", "workflow:read", "analytics:read"
+            "agent:read", "workflow:read", "analytics:read",
+            "conversation:read"
         ],
         "Client": [
             "client:read_dashboard", "agent:read"

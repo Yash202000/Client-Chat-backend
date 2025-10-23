@@ -80,12 +80,12 @@ def export_ai_tools(db: Session = Depends(get_db)):
 def create_ai_tool_category(category: ai_tool_schema.AIToolCategoryCreate, db: Session = Depends(get_db)):
     return crud_ai_tool.create_ai_tool_category(db=db, category=category)
 
-@router.get("/categories/", response_model=List[ai_tool_schema.AIToolCategory], tags=["AI Tools"])
+@router.get("/categories/", response_model=List[ai_tool_schema.AIToolCategory], tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool-category:read"))])
 def read_ai_tool_categories(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     categories = crud_ai_tool.get_ai_tool_categories(db, skip=skip, limit=limit)
     return categories
 
-@router.get("/categories/{category_id}", response_model=ai_tool_schema.AIToolCategory, tags=["AI Tools"])
+@router.get("/categories/{category_id}", response_model=ai_tool_schema.AIToolCategory, tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool-category:read"))])
 def read_ai_tool_category(category_id: int, db: Session = Depends(get_db)):
     db_category = crud_ai_tool.get_ai_tool_category(db, category_id=category_id)
     if db_category is None:
@@ -96,12 +96,12 @@ def read_ai_tool_category(category_id: int, db: Session = Depends(get_db)):
 def create_ai_tool(tool: ai_tool_schema.AIToolCreate, db: Session = Depends(get_db)):
     return crud_ai_tool.create_ai_tool(db=db, tool=tool)
 
-@router.get("/", response_model=List[ai_tool_schema.AITool], tags=["AI Tools"])
+@router.get("/", response_model=List[ai_tool_schema.AITool], tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool:read"))])
 def read_ai_tools(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: user_model.User = Depends(get_current_active_user)):
     tools = crud_ai_tool.get_ai_tools(db, skip=skip, limit=limit, user_id=current_user.id)
     return tools
 
-@router.get("/{tool_id}", response_model=ai_tool_schema.AITool, tags=["AI Tools"])
+@router.get("/{tool_id}", response_model=ai_tool_schema.AITool, tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool:read"))])
 def read_ai_tool(tool_id: int, db: Session = Depends(get_db), current_user: user_model.User = Depends(get_current_active_user)):
     db_tool = crud_ai_tool.get_ai_tool(db, tool_id=tool_id, user_id=current_user.id)
     if db_tool is None:
@@ -144,7 +144,7 @@ def unfavorite_tool(tool_id: int, db: Session = Depends(get_db), current_user: u
     return {"message": "Tool unfavorited successfully"}
 
 
-@router.post("/{tool_id}/execute", tags=["AI Tools"])
+@router.post("/{tool_id}/execute", tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool:read"))])
 def execute_tool(tool_id: int, request: ai_tool_schema.ExecuteToolRequest, db: Session = Depends(get_db), current_user: user_model.User = Depends(get_current_active_user)):
     print(f"Received answers: {request.answers}")
     print(f"Received language: {request.language}")

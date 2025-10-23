@@ -103,7 +103,7 @@ async def update_session_connection_status(db: Session, conversation_id: str, is
     - For non-assigned sessions: sets status to 'active' if connected, 'inactive' if disconnected
     - For assigned sessions: keeps status as 'assigned', only updates is_client_connected
     """
-    from app.core.websockets import manager
+    from app.services.connection_manager import manager
     import json
 
     db_session = db.query(ConversationSession).filter(

@@ -3,14 +3,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.models import user as models_user
 from app.services import ai_image_service
 from app.schemas import ai_image as schemas_ai_image
 
 router = APIRouter()
 
-@router.post("/", response_model=schemas_ai_image.AIImage)
+@router.post("/", response_model=schemas_ai_image.AIImage, dependencies=[Depends(require_permission("image:create"))])
 def create_ai_image(
     image_data: schemas_ai_image.AIImageCreate,
     db: Session = Depends(get_db),
@@ -18,7 +18,7 @@ def create_ai_image(
 ):
     return ai_image_service.create_and_upload_ai_image(db=db, image_data=image_data)
 
-@router.get("/", response_model=List[schemas_ai_image.AIImage])
+@router.get("/", response_model=List[schemas_ai_image.AIImage], dependencies=[Depends(require_permission("image:read"))])
 def read_ai_images(
     skip: int = 0,
     limit: int = 100,
@@ -28,7 +28,7 @@ def read_ai_images(
     images = ai_image_service.crud_ai_image.get_ai_images(db, skip=skip, limit=limit)
     return images
 
-@router.delete("/{image_id}", response_model=schemas_ai_image.AIImage)
+@router.delete("/{image_id}", response_model=schemas_ai_image.AIImage, dependencies=[Depends(require_permission("image:delete"))])
 def delete_ai_image(
     image_id: int,
     db: Session = Depends(get_db),

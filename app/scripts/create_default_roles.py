@@ -28,12 +28,54 @@ PERMISSIONS = {
     "workflow:read": "Read workflow information",
     "workflow:update": "Update workflow information",
     "workflow:delete": "Delete a workflow",
+    # Tool Management
+    "tool:create": "Create tools",
+    "tool:read": "Read tools",
+    "tool:update": "Update tools",
+    "tool:delete": "Delete tools",
+    # KnowledgeBase Management
+    "knowledgebase:create": "Create knowledge bases",
+    "knowledgebase:read": "Read knowledge bases",
+    "knowledgebase:update": "Update knowledge bases",
+    "knowledgebase:delete": "Delete knowledge bases",
     # Analytics
     "analytics:read": "Read analytics data",
     # Company Settings
     "company_settings:update": "Update company settings",
+    "billing:manage": "Manage billing and subscription",
     # Client Access
     "client:read_dashboard": "Read-only access to the client dashboard",
+    # AI Tool Management
+    "ai-tool:create": "Create AI tools",
+    "ai-tool:read": "Read AI tools",
+    "ai-tool:update": "Update AI tools",
+    "ai-tool:delete": "Delete AI tools",
+    "ai-tool:import": "Import AI tools from a file",
+    "ai-tool:export": "Export AI tools to a file",
+    "ai-tool-category:create": "Create AI tool categories",
+    "ai-tool-category:read": "Read AI tool categories",
+    "ai-tool-category:update": "Update AI tool categories",
+    "ai-tool-category:delete": "Delete AI tool categories",
+    # Conversation Management
+    "conversation:create": "Create conversations",
+    "conversation:read": "Read conversations and active clients",
+    "conversation:update": "Update conversations",
+    "conversation:delete": "Delete conversations",
+    # Voice Lab
+    "voice:create": "Create and manage voice models",
+    "voice:read": "Read voice models",
+    "voice:update": "Update voice models",
+    "voice:delete": "Delete voice models",
+    # Internal Chat
+    "chat:create": "Create internal chat channels",
+    "chat:read": "Read and participate in internal chat",
+    "chat:update": "Update chat channels",
+    "chat:delete": "Delete chat channels",
+    # AI Image Generation
+    "image:create": "Generate AI images",
+    "image:read": "View AI image gallery",
+    "image:update": "Update AI images",
+    "image:delete": "Delete AI images",
 }
 
 # Define all roles and their associated permissions
@@ -58,11 +100,20 @@ ROLES = {
         "permissions": [
             "agent:create", "agent:read", "agent:update", "agent:delete",
             "workflow:create", "workflow:read", "workflow:update", "workflow:delete",
+            "tool:read", "knowledgebase:read", "analytics:read",
+            "ai-tool:read", "ai-tool-category:read",
+            "conversation:read", "conversation:update",
+            "voice:create", "voice:read", "voice:update", "voice:delete",
+            "chat:read", "chat:create",
+            "image:create", "image:read",
         ],
     },
     "Analyst": {
         "description": "Read-only access to dashboards and analytics",
-        "permissions": ["analytics:read"],
+        "permissions": [
+            "agent:read", "workflow:read", "analytics:read",
+            "conversation:read",
+        ],
     },
     "Client": {
         "description": "Read-only access for clients",

@@ -8,7 +8,7 @@ import json
 from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
-from app.core.websockets import manager
+from app.services.connection_manager import manager
 from app.services.stt_service import STTService, GroqSTTService
 from app.services.tts_service import TTSService
 from fastapi import UploadFile
