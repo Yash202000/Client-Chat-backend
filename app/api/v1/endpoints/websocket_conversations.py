@@ -554,7 +554,8 @@ async def public_websocket_endpoint(
                 print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
 
                 execution_result = None
-                if session.status == 'paused' and session.workflow_id:
+                # Check if a workflow is paused (indicated by next_step_id being set)
+                if session.next_step_id and session.workflow_id:
                     # A workflow is already in progress, so we resume it.
                     workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                     if workflow:

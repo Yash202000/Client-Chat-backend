@@ -630,7 +630,8 @@ class WorkflowExecutionService:
         graph_engine = GraphExecutionEngine(visual_steps_data)
         
         print(f"DEBUG: Workflow resumed with user_message: '{user_message}'")
-        if session.status == 'paused' and session.next_step_id:
+        # Check if workflow is paused (indicated by next_step_id being set)
+        if session.next_step_id:
             current_node_id = session.next_step_id
             print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
             # The variable to save was stored in the context before pausing.
@@ -778,10 +779,12 @@ class WorkflowExecutionService:
                     context["variable_to_save"] = variable_to_save
                     memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
+                # Keep session status as 'active' so it remains visible in the UI
+                # The presence of next_step_id indicates the workflow is paused waiting for input
                 session_update = ConversationSessionUpdate(
                     next_step_id=next_node_id,
                     context=context,
-                    status='paused'
+                    status='active'  # Keep as active instead of paused to keep conversation visible
                 )
                 conversation_session_service.update_session(self.db, conversation_id, session_update)
                 
@@ -806,7 +809,12 @@ class WorkflowExecutionService:
             print(f"DEBUG: get_next_node returned: {current_node_id}")
 
         # Finalizing the workflow
-        session_update = ConversationSessionUpdate(status='completed', context=context)
+        # Instead of marking the session as 'completed', keep it 'active' so multiple workflows can run
+        # and the conversation remains visible. Track workflow completion in context.
+        context['last_workflow_completed_at'] = datetime.now().isoformat()
+        context['last_workflow_id'] = workflow_obj.id
+
+        session_update = ConversationSessionUpdate(status='active', context=context)
         conversation_session_service.update_session(self.db, conversation_id, session_update)
 
         final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
