@@ -11,6 +11,7 @@ from app.models.integration import Integration
 from app.models.knowledge_base import KnowledgeBase
 from app.models.memory import Memory
 from app.models.notification_settings import NotificationSettings
+from app.models.optimization_suggestion import OptimizationSuggestion
 from app.models.permission import Permission
 from app.models.role import Role
 from app.models.subscription_plan import SubscriptionPlan

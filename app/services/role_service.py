@@ -63,11 +63,13 @@ PERMISSIONS = {
     "voice:read": "Read voice models",
     "voice:update": "Update voice models",
     "voice:delete": "Delete voice models",
-    # Internal Chat
+    # Internal Chat (Team Chat)
     "chat:create": "Create internal chat channels",
-    "chat:read": "Read and participate in internal chat",
+    "chat:read": "Read and participate in internal team chat",
     "chat:update": "Update chat channels",
     "chat:delete": "Delete chat channels",
+    # AI Chat
+    "ai-chat:read": "Access AI chat assistant",
     # AI Image Generation
     "image:create": "Generate AI images",
     "image:read": "View AI image gallery",
@@ -175,6 +177,7 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             "conversation:read", "conversation:update",
             "voice:create", "voice:read", "voice:update", "voice:delete",
             "chat:read", "chat:create",
+            "ai-chat:read",
             "image:create", "image:read"
         ],
         "Analyst": [

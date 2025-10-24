@@ -126,11 +126,12 @@ async def update_conversation_status(db: Session, session_id: str, status: str, 
     db.commit()
     db.refresh(session)
 
-    # Broadcast status change to all connected agents in real-time, including connection status
+    # Broadcast status change to all connected agents in real-time, including connection status and assignee
     status_update_message = json.dumps({
         "type": "session_status_update",
         "session_id": session_id,
         "status": status,
+        "assignee_id": session.assignee_id,
         "is_client_connected": session.is_client_connected,
         "updated_at": session.updated_at.isoformat()
     })
@@ -169,11 +170,12 @@ async def update_conversation_assignee(db: Session, session_id: str, user_id: in
     db.commit()
     db.refresh(session)
 
-    # Broadcast status change to all connected agents in real-time, including connection status
+    # Broadcast status change to all connected agents in real-time, including connection status and assignee
     status_update_message = json.dumps({
         "type": "session_status_update",
         "session_id": session_id,
         "status": "assigned",
+        "assignee_id": user_id,
         "is_client_connected": session.is_client_connected,
         "updated_at": session.updated_at.isoformat()
     })

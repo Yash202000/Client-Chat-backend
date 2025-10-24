@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 class WidgetSettingsBase(BaseModel):
     primary_color: Optional[str] = None
@@ -15,6 +15,7 @@ class WidgetSettingsBase(BaseModel):
     user_message_text_color: Optional[str] = None
     bot_message_color: Optional[str] = None
     bot_message_text_color: Optional[str] = None
+    time_color: Optional[str] = None
     widget_size: Optional[str] = None
     show_header: Optional[bool] = None
     livekit_url: Optional[str] = None
@@ -26,6 +27,7 @@ class WidgetSettingsBase(BaseModel):
     dark_mode: Optional[bool] = None
     typing_indicator_enabled: Optional[bool] = None
     communication_mode: Optional[str] = 'chat'
+    meta: Optional[Dict[str, Any]] = None  # Flexible JSON field for additional customizations
     agent_id: int
 
 class WidgetSettingsCreate(WidgetSettingsBase):

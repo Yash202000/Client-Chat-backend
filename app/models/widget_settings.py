@@ -1,5 +1,5 @@
 
-from sqlalchemy import Boolean, Column, Integer, String, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -19,6 +19,7 @@ class WidgetSettings(Base):
     user_message_text_color = Column(String, default="#FFFFFF")
     bot_message_color = Column(String, default="#E0E7FF")
     bot_message_text_color = Column(String, default="#1F2937")
+    time_color = Column(String, default="#9CA3AF")
     widget_size = Column(String, default="medium")
     show_header = Column(Boolean, default=True)
     livekit_url = Column(String, nullable=True)
@@ -30,6 +31,7 @@ class WidgetSettings(Base):
     dark_mode = Column(Boolean, default=False)
     typing_indicator_enabled = Column(Boolean, default=False)
     communication_mode = Column(String, default="chat")
+    meta = Column(JSON, nullable=True, default={})  # Flexible JSON field for additional customizations
     agent_id = Column(Integer, ForeignKey("agents.id"))
 
     agent = relationship("Agent", back_populates="widget_settings")

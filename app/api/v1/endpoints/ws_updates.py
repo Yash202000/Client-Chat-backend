@@ -6,6 +6,7 @@ from app.services import user_service
 from jose import JWTError, jwt
 from app.core.config import settings
 from typing import Optional
+import json
 
 router = APIRouter()
 
@@ -64,7 +65,19 @@ async def websocket_endpoint(
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"[ws_updates] 📨 Received data from client: {data[:100]}")
+
+            # Handle ping/pong messages to keep connection alive
+            try:
+                message = json.loads(data)
+                if message.get("type") == "ping":
+                    # Respond to heartbeat ping with pong
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    print(f"[ws_updates] 💓 Heartbeat ping received, sent pong")
+                    continue
+            except json.JSONDecodeError:
+                # Not a JSON message, just log it
+                print(f"[ws_updates] 📨 Received non-JSON data from client: {data[:100]}")
+
     except WebSocketDisconnect:
         print(f"[ws_updates] 🔌 Client disconnected from channel '{channel_id}'")
         manager.disconnect(websocket, channel_id)
