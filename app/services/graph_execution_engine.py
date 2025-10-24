@@ -4,6 +4,10 @@ from collections import deque
 
 class GraphExecutionEngine:
     def __init__(self, workflow_data):
+        # Handle None or empty workflow_data
+        if workflow_data is None:
+            workflow_data = {}
+
         self.nodes = {node['id']: node for node in workflow_data.get('nodes', [])}
         self.edges = workflow_data.get('edges', [])
         self.adjacency_list = self._build_adjacency_list()
