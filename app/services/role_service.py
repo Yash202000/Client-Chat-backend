@@ -106,6 +106,8 @@ def create_role(db: Session, role: schemas_role.RoleCreate, company_id: int = No
         db_role.permissions.extend(permissions)
 
     db.add(db_role)
+    db.commit()
+    db.refresh(db_role)
     return db_role
 
 def update_role(db: Session, role_id: int, role: schemas_role.RoleUpdate, company_id: int):
