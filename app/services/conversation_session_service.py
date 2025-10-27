@@ -137,6 +137,7 @@ async def update_session_connection_status(db: Session, conversation_id: str, is
                 "type": "session_status_update",
                 "session_id": conversation_id,
                 "status": db_session.status,
+                "assignee_id": db_session.assignee_id,
                 "is_client_connected": is_connected,
                 "updated_at": db_session.updated_at.isoformat()
             })

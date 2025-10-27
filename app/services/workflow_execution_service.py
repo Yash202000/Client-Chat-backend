@@ -621,12 +621,23 @@ class WorkflowExecutionService:
 
         # Ensure visual_steps is a dictionary
         visual_steps_data = workflow_obj.visual_steps
+
+        # Handle None or empty visual_steps
+        if visual_steps_data is None:
+            print(f"WARNING: Workflow {workflow_obj.id} has no visual_steps defined")
+            return {"status": "error", "response": "Workflow configuration is incomplete. Please contact support."}
+
         if isinstance(visual_steps_data, str):
             try:
                 visual_steps_data = json.loads(visual_steps_data)
             except json.JSONDecodeError:
-                return {"error": "Failed to parse workflow visual steps."}
-        
+                return {"status": "error", "response": "Failed to parse workflow visual steps."}
+
+        # Validate that visual_steps_data has required structure
+        if not isinstance(visual_steps_data, dict):
+            print(f"WARNING: Workflow {workflow_obj.id} visual_steps is not a dict: {type(visual_steps_data)}")
+            return {"status": "error", "response": "Workflow configuration is invalid. Please contact support."}
+
         graph_engine = GraphExecutionEngine(visual_steps_data)
         
         print(f"DEBUG: Workflow resumed with user_message: '{user_message}'")
