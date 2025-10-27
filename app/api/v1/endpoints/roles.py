@@ -2,14 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.core.dependencies import get_db, get_current_company, get_current_active_user
+from app.core.dependencies import get_db, get_current_company, get_current_active_user, require_permission
 from app.models import user as models_user
 from app.services import role_service
 from app.schemas import role as schemas_role
 
 router = APIRouter()
 
-@router.post("/", response_model=schemas_role.Role)
+@router.post("/", response_model=schemas_role.Role, dependencies=[Depends(require_permission("role:create"))])
 def create_role(
     role: schemas_role.RoleCreate,
     db: Session = Depends(get_db),
@@ -17,7 +17,7 @@ def create_role(
 ):
     return role_service.create_role(db=db, role=role, company_id=current_user.company_id)
 
-@router.get("/", response_model=List[schemas_role.Role])
+@router.get("/", response_model=List[schemas_role.Role], dependencies=[Depends(require_permission("role:read"))])
 def read_roles(
     skip: int = 0,
     limit: int = 100,
@@ -27,7 +27,7 @@ def read_roles(
     roles = role_service.get_roles(db, company_id=current_user.company_id, skip=skip, limit=limit)
     return roles
 
-@router.get("/{role_id}", response_model=schemas_role.Role)
+@router.get("/{role_id}", response_model=schemas_role.Role, dependencies=[Depends(require_permission("role:read"))])
 def read_role(
     role_id: int,
     db: Session = Depends(get_db),
@@ -38,7 +38,7 @@ def read_role(
         raise HTTPException(status_code=404, detail="Role not found")
     return db_role
 
-@router.put("/{role_id}", response_model=schemas_role.Role)
+@router.put("/{role_id}", response_model=schemas_role.Role, dependencies=[Depends(require_permission("role:update"))])
 def update_role(
     role_id: int,
     role: schemas_role.RoleUpdate,
@@ -47,7 +47,7 @@ def update_role(
 ):
     return role_service.update_role(db=db, role_id=role_id, role=role, company_id=current_user.company_id)
 
-@router.delete("/{role_id}", response_model=schemas_role.Role)
+@router.delete("/{role_id}", response_model=schemas_role.Role, dependencies=[Depends(require_permission("role:delete"))])
 def delete_role(
     role_id: int,
     db: Session = Depends(get_db),
