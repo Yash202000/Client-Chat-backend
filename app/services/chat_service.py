@@ -123,6 +123,12 @@ async def update_conversation_status(db: Session, session_id: str, status: str, 
 
     # Update status
     session.status = status
+
+    # Track resolution timestamp
+    if status == 'resolved':
+        import datetime
+        session.resolved_at = datetime.datetime.utcnow()
+
     db.commit()
     db.refresh(session)
 

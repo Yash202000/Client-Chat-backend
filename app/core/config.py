@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""
     LIVEKIT_URL: str = ""
-    FRONTEND_URL: str = "http://localhost:8080"
+    FRONTEND_URL: str
     WHATSAPP_VERIFY_TOKEN: str = ""
     MESSENGER_VERIFY_TOKEN: str = ""
     INSTAGRAM_VERIFY_TOKEN: str = ""

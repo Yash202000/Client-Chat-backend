@@ -646,6 +646,76 @@ async def public_websocket_endpoint(
                     )
                     print(f"[websocket_conversations] ✅ Broadcasted new session to company {company_id}")
 
+                # Check if session was resolved and reopen it when client sends message
+                if session.status == 'resolved' and sender == 'user':
+                    import datetime
+
+                    old_status = session.status
+
+                    # Track reopening metadata
+                    session.reopen_count = (session.reopen_count or 0) + 1
+                    session.last_reopened_at = datetime.datetime.utcnow()
+
+                    # Calculate time since resolution (for analytics)
+                    time_since_resolution = None
+                    if session.resolved_at:
+                        time_since_resolution = (datetime.datetime.utcnow() - session.resolved_at).total_seconds()
+
+                    # Set status based on assignee:
+                    # - If assignee exists: set to 'assigned' (goes to assigned user's "mine" tab)
+                    # - If no assignee: set to 'active' (goes to "open" tab for everyone)
+                    if session.assignee_id:
+                        session.status = 'assigned'
+                    else:
+                        session.status = 'active'
+
+                    db.commit()
+                    db.refresh(session)
+
+                    # Add system message about reopening
+                    reopen_text = f"Conversation reopened by customer"
+                    if session.reopen_count > 1:
+                        reopen_text += f" (Reopened {session.reopen_count}x)"
+
+                    system_message = schemas_chat_message.ChatMessageCreate(
+                        message=reopen_text,
+                        message_type="system"
+                    )
+                    db_system_message = chat_service.create_chat_message(
+                        db, system_message, agent_id, session_id, company_id, 'system'
+                    )
+
+                    # Broadcast system message to session
+                    await manager.broadcast_to_session(
+                        str(session_id),
+                        schemas_chat_message.ChatMessage.model_validate(db_system_message).model_dump_json(),
+                        'system'
+                    )
+
+                    # Get contact information for the broadcast
+                    contact_name = session.contact.name if session.contact else None
+
+                    # Enhanced broadcast with metadata
+                    await manager.broadcast_to_company(
+                        company_id,
+                        json.dumps({
+                            "type": "session_reopened",
+                            "session_id": session_id,
+                            "conversation_id": session.conversation_id,
+                            "status": session.status,  # Will be 'assigned' or 'active' based on assignee
+                            "previous_status": old_status,
+                            "assignee_id": session.assignee_id,
+                            "contact_name": contact_name,
+                            "reopen_count": session.reopen_count,
+                            "last_reopened_at": session.last_reopened_at.isoformat(),
+                            "resolved_at": session.resolved_at.isoformat() if session.resolved_at else None,
+                            "time_since_resolution": time_since_resolution,
+                            "updated_at": session.updated_at.isoformat()
+                        })
+                    )
+
+                    print(f"[websocket_conversations] 🔄 Session {session_id} reopened from resolved → {session.status} (Reopen #{session.reopen_count}, Assignee: {session.assignee_id or 'None'})")
+
                 # Handle form data: convert dict to JSON string for storage
                 message_for_storage = user_message
                 if isinstance(user_message, dict):
