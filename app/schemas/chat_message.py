@@ -20,6 +20,7 @@ class ChatMessage(ChatMessageBase):
     token: Optional[str] = None
     status: Optional[str] = None
     assignee_id: Optional[int] = None
+    assignee_name: Optional[str] = None  # Name of the agent/user who sent this message
     feedback_rating: Optional[int] = None
     feedback_notes: Optional[str] = None
     issue: Optional[str] = None
