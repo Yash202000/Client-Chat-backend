@@ -54,7 +54,32 @@ async def authenticate_ws_user(websocket: WebSocket, token: Optional[str]) -> Op
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Could not validate credentials")
         return None
 
-# (router definition)
+
+async def heartbeat_handler(websocket: WebSocket, session_id: str):
+    """
+    Background task that sends periodic ping messages to keep connection alive
+    and detect inactive clients.
+
+    Args:
+        websocket: The WebSocket connection
+        session_id: Session identifier for logging
+
+    This task runs concurrently with the main message loop and sends pings
+    at intervals defined by WS_PING_INTERVAL configuration.
+    """
+    try:
+        while True:
+            await asyncio.sleep(settings.WS_PING_INTERVAL)
+            try:
+                await websocket.send_text(json.dumps({"type": "ping"}))
+            except Exception as e:
+                print(f"[heartbeat] Error sending ping to session {session_id}: {e}")
+                break
+    except asyncio.CancelledError:
+        print(f"[heartbeat] Heartbeat task cancelled for session {session_id}")
+        raise
+    except Exception as e:
+        print(f"[heartbeat] Unexpected error in heartbeat for session {session_id}: {e}")
 
 
 @router.websocket("/wschat/{channel_id}")
@@ -426,16 +451,33 @@ async def websocket_endpoint(
     if user_type == "user":
         with get_db_session() as db:
             await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
-    
+
+    # Start heartbeat task if enabled
+    heartbeat_task = None
+    if settings.WS_ENABLE_HEARTBEAT:
+        heartbeat_task = asyncio.create_task(heartbeat_handler(websocket, session_id))
+
     try:
         while True:
             data = await websocket.receive_text()
+
+            # Update activity timestamp
+            manager.update_activity(session_id, websocket)
+
             print(f"[websocket_conversations] Received data from frontend: {data}")
             if not data:
                 continue
 
             try:
                 message_data = json.loads(data)
+
+                # Handle ping/pong messages
+                if message_data.get('type') == 'pong':
+                    continue  # Just an acknowledgment, no further processing
+                if message_data.get('type') == 'ping':
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    continue
+
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
             except (json.JSONDecodeError, AttributeError):
@@ -587,6 +629,15 @@ async def websocket_endpoint(
             with get_db_session() as db:
                 await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
 
+    finally:
+        # Cancel heartbeat task
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
 
 @router.websocket("/public/{company_id}/{agent_id}/{session_id}")
 async def public_websocket_endpoint(
@@ -610,10 +661,26 @@ async def public_websocket_endpoint(
         with get_db_session() as db:
             await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
 
+    # Start heartbeat task if enabled
+    heartbeat_task = None
+    if settings.WS_ENABLE_HEARTBEAT:
+        heartbeat_task = asyncio.create_task(heartbeat_handler(websocket, session_id))
+
     try:
         while True:
             data = await websocket.receive_text()
+
+            # Update activity timestamp
+            manager.update_activity(session_id, websocket)
+
             message_data = json.loads(data)
+
+            # Handle ping/pong messages
+            if message_data.get('type') == 'pong':
+                continue  # Just an acknowledgment, no further processing
+            if message_data.get('type') == 'ping':
+                await websocket.send_text(json.dumps({"type": "pong"}))
+                continue
             user_message = message_data.get('message')
             sender = message_data.get('sender')
 
@@ -789,4 +856,13 @@ async def public_websocket_endpoint(
         if user_type == "user" and not manager.has_user_connection(session_id):
             with get_db_session() as db:
                 await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
+
+    finally:
+        # Cancel heartbeat task
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
