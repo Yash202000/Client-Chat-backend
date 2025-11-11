@@ -90,21 +90,54 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
     db.refresh(db_message)
     return db_message
 
-def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: int, skip: int = 0, limit: int = 100):
+def get_chat_messages(db: Session, agent_id: int, session_id: str, company_id: int, skip: int = 0, limit: int = 50, before_id: int = None):
+    """
+    Get chat messages with pagination support.
+
+    Args:
+        db: Database session
+        agent_id: Agent ID (kept for backward compatibility, not used in filtering)
+        session_id: Conversation session ID
+        company_id: Company ID
+        skip: Number of messages to skip (used for offset-based pagination, deprecated)
+        limit: Maximum number of messages to return
+        before_id: Get messages before this message ID (cursor-based pagination)
+
+    Returns:
+        List of messages in chronological order (oldest to newest)
+
+    Note:
+        - When before_id is provided, it returns messages older than the specified message
+        - When before_id is None, it returns the latest messages
+        - Messages are always returned in chronological order (oldest first)
+    """
     session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == session_id,
         models_conversation_session.ConversationSession.company_id == company_id
     ).first()
 
-    if session:
-        # Return all messages for this session regardless of which agent created them
-        # This allows viewing conversations across different agents in the same company
-        return db.query(models_chat_message.ChatMessage).filter(
-            models_chat_message.ChatMessage.session_id == session.id,
-            models_chat_message.ChatMessage.company_id == company_id
-        ).order_by(models_chat_message.ChatMessage.timestamp).offset(skip).limit(limit).all()
-    # else return null
-    return []
+    if not session:
+        return []
+
+    # Base query for all messages in this session
+    query = db.query(models_chat_message.ChatMessage).filter(
+        models_chat_message.ChatMessage.session_id == session.id,
+        models_chat_message.ChatMessage.company_id == company_id
+    )
+
+    if before_id is not None:
+        # Cursor-based pagination: Get messages before the specified message ID
+        # We order by ID descending to get older messages, then reverse
+        query = query.filter(models_chat_message.ChatMessage.id < before_id)
+        messages = query.order_by(desc(models_chat_message.ChatMessage.id)).limit(limit).all()
+        # Reverse to return in chronological order (oldest to newest)
+        return list(reversed(messages))
+    else:
+        # Get the latest messages (most recent)
+        # Order by descending to get latest first, then reverse
+        messages = query.order_by(desc(models_chat_message.ChatMessage.id)).limit(limit).all()
+        # Reverse to return in chronological order (oldest to newest)
+        return list(reversed(messages))
 
 async def update_conversation_status(db: Session, session_id: str, status: str, company_id: int):
     """

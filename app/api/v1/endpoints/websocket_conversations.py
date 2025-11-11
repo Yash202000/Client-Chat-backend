@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
+from app.services import chat_service, widget_settings_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message, websocket as schemas_websocket
 from app.schemas.websockets import WebSocketMessage
@@ -229,6 +229,17 @@ async def voice_websocket_endpoint(
                     user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
                     db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user", assignee_id=None)
                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_user_message).model_dump_json(), "user")
+
+                    # Check if AI is enabled for this session
+                    session_obj = db.query(models_conversation_session.ConversationSession).filter(
+                        models_conversation_session.ConversationSession.conversation_id == session_id,
+                        models_conversation_session.ConversationSession.company_id == company_id
+                    ).first()
+
+                    if session_obj and not session_obj.is_ai_enabled:
+                        print(f"AI is disabled for session {session_id}. No voice response will be generated.")
+                        transcript_queue.task_done()
+                        continue
 
                     # 2. Generate the agent's response
                     agent_response_text = await agent_execution_service.generate_agent_response(
@@ -492,6 +503,25 @@ async def websocket_endpoint(
                     await websocket.send_text(json.dumps({"type": "pong"}))
                     continue
 
+                # Handle agent typing events from dashboard
+                if message_data.get('type') == 'agent_typing':
+                    is_typing = message_data.get('is_typing', False)
+                    typing_session_id = message_data.get('session_id')
+
+                    if typing_session_id:
+                        # Broadcast typing indicator to the widget user
+                        await manager.broadcast_to_session(
+                            typing_session_id,
+                            json.dumps({
+                                "message_type": "typing",
+                                "is_typing": is_typing,
+                                "sender": "agent"
+                            }),
+                            "agent"
+                        )
+                        print(f"[websocket_conversations] Agent typing event: is_typing={is_typing}, session={typing_session_id}")
+                    continue
+
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
             except (json.JSONDecodeError, AttributeError):
@@ -535,6 +565,27 @@ async def websocket_endpoint(
                 await manager.broadcast_to_session(session_id, json.dumps(message_dict), sender)
                 print(f"[websocket_conversations] Broadcasted message to session: {session_id}")
 
+                # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
+                # This happens before workflow/AI processing to show immediate feedback
+                typing_indicator_sent = False
+                if sender == 'user':
+                    # Quick check for AI enabled (single DB query, cached by SQLAlchemy)
+                    agent = agent_service.get_agent(db, agent_id, company_id)
+                    ai_enabled = agent and agent.credential is not None
+
+                    if ai_enabled:
+                        # Quick check for typing indicator setting (single DB query, cached)
+                        widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                        if widget_settings and widget_settings.typing_indicator_enabled:
+                            # Send typing indicator IMMEDIATELY before any workflow/AI processing
+                            await manager.broadcast_to_session(
+                                session_id,
+                                json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                                "agent"
+                            )
+                            typing_indicator_sent = True
+                            print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
+
                 # If agent sends message, check session channel and send to external platform
                 if sender == 'agent':
                     session_obj = db.query(models_conversation_session.ConversationSession).filter(
@@ -572,42 +623,66 @@ async def websocket_endpoint(
 
                 # 2. If the message is from the user, execute the workflow
                 if sender == 'user':
-                    # Try trigger-based workflow finding first (new system)
-                    workflow = workflow_trigger_service.find_workflow_for_channel_message(
-                        db=db,
-                        channel=TriggerChannel.WEBSOCKET,
-                        company_id=company_id,
-                        message=user_message,
-                        session_data={"session_id": session_id, "agent_id": agent_id}
-                    )
+                    # Check if AI is enabled for this session
+                    session_obj = db.query(models_conversation_session.ConversationSession).filter(
+                        models_conversation_session.ConversationSession.conversation_id == session_id,
+                        models_conversation_session.ConversationSession.company_id == company_id
+                    ).first()
 
-                    # Fallback to old similarity search if no trigger-based workflow found
-                    if not workflow:
-                        workflow = workflow_service.find_similar_workflow(
-                            db,
-                            company_id=company_id,
-                            query=user_message
-                        )
-
-                    if not workflow:
-                        # If no specific workflow matches, provide a generic response
-                        print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
-                        agent_response_text = await agent_execution_service.generate_agent_response(
-                            db, agent_id, session_id, company_id, message_data['message']
-                        )
-                        agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
-                        await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                        print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                    if session_obj and not session_obj.is_ai_enabled:
+                        print(f"AI is disabled for session {session_id}. No response will be generated.")
                         continue
 
-                    # 3. Execute the matched workflow with the current state (conversation_id)
-                    execution_result = await workflow_exec_service.execute_workflow(
-                        user_message=user_message,
-                        conversation_id=session_id,
-                        company_id=company_id,
-                        workflow=workflow
-                    )
+                    execution_result = None
+                    try:
+                        # Try trigger-based workflow finding first (new system)
+                        workflow = workflow_trigger_service.find_workflow_for_channel_message(
+                            db=db,
+                            channel=TriggerChannel.WEBSOCKET,
+                            company_id=company_id,
+                            message=user_message,
+                            session_data={"session_id": session_id, "agent_id": agent_id}
+                        )
+
+                        # Fallback to old similarity search if no trigger-based workflow found
+                        if not workflow:
+                            workflow = workflow_service.find_similar_workflow(
+                                db,
+                                company_id=company_id,
+                                query=user_message
+                            )
+
+                        if not workflow:
+                            # If no specific workflow matches, provide a generic response
+                            print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
+                            agent_response_text = await agent_execution_service.generate_agent_response(
+                                db, agent_id, session_id, company_id, message_data['message']
+                            )
+                            agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                            db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                            print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                            continue
+
+                        # 3. Execute the matched workflow with the current state (conversation_id)
+                        execution_result = await workflow_exec_service.execute_workflow(
+                            user_message=user_message,
+                            conversation_id=session_id,
+                            company_id=company_id,
+                            workflow=workflow
+                        )
+                    finally:
+                        # Turn off typing indicator after workflow/AI processing completes
+                        if typing_indicator_sent:
+                            await manager.broadcast_to_session(
+                                session_id,
+                                json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                                "agent"
+                            )
+                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
+
+                    if not execution_result:
+                        continue
 
                     # 4. Handle the execution result
                     if execution_result.get("status") == "completed":
@@ -820,6 +895,28 @@ async def public_websocket_endpoint(
                     # If it's form data, convert to JSON string for chat message storage
                     message_for_storage = json.dumps(user_message)
 
+                # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
+                # This happens before any database operations to minimize delay
+                typing_indicator_sent = False
+                print(f"[DEBUG] Checking typing indicator - sender: {sender}")
+                if sender == 'user':
+                    # Quick check for typing indicator setting (single DB query, cached)
+                    widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                    print(f"[DEBUG] Widget settings: {widget_settings}")
+                    if widget_settings:
+                        print(f"[DEBUG] Widget settings exists, typing_indicator_enabled: {widget_settings.typing_indicator_enabled}")
+                    if widget_settings and widget_settings.typing_indicator_enabled:
+                        # Send typing indicator IMMEDIATELY before any other processing
+                        await manager.broadcast_to_session(
+                            str(session_id),
+                            json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                            "agent"
+                        )
+                        typing_indicator_sent = True
+                        print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
+                    else:
+                        print(f"[DEBUG] Typing indicator NOT sent - widget_settings: {widget_settings}, enabled: {widget_settings.typing_indicator_enabled if widget_settings else 'N/A'}")
+
                 # Now, create and broadcast the chat message
                 chat_message = schemas_chat_message.ChatMessageCreate(message=message_for_storage, message_type=message_data.get('message_type', 'message'))
                 db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id=None)
@@ -843,26 +940,43 @@ async def public_websocket_endpoint(
                     # The session is already guaranteed to exist, so we can proceed
                     print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
 
-                    execution_result = None
-                    # Check if a workflow is paused (indicated by next_step_id being set)
-                    if session.next_step_id and session.workflow_id:
-                        # A workflow is already in progress, so we resume it.
-                        workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
-                        if workflow:
-                             execution_result = await workflow_exec_service.execute_workflow(
-                                user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
-                            )
-                    else:
-                        # No workflow is in progress, so we find a new one.
-                        workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
-                        if workflow:
-                            execution_result = await workflow_exec_service.execute_workflow(
-                                user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
-                            )
+                    # Check if AI is enabled for this session
+                    if not session.is_ai_enabled:
+                        print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
+                        continue
 
-                    # If no workflow was found or resumed, fallback to the default agent response
+                    execution_result = None
+                    try:
+                        # Check if a workflow is paused (indicated by next_step_id being set)
+                        if session.next_step_id and session.workflow_id:
+                            # A workflow is already in progress, so we resume it.
+                            workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                            if workflow:
+                                 execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                )
+                        else:
+                            # No workflow is in progress, so we find a new one.
+                            workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
+                            if workflow:
+                                execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                )
+
+                        # If no workflow was found or resumed, fallback to the default agent response
+                        if not execution_result:
+                            await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                    finally:
+                        # Turn off typing indicator after AI processing completes
+                        if typing_indicator_sent:
+                            await manager.broadcast_to_session(
+                                str(session_id),
+                                json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                                "agent"
+                            )
+                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
+
                     if not execution_result:
-                        await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
                         continue
 
                     # Handle execution result

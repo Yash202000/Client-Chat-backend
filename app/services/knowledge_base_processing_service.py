@@ -10,6 +10,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
+from app.services.docx_loader import DOCXLoader
 
 def process_and_store_text(db: Session, text: str, agent: dict, company_id: int, name: str, description: str, vector_store_type: str = "chroma"):
     """
@@ -115,9 +116,17 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
             loader = PyPDFLoader(tmp_file_path)
         elif file_extension == '.txt':
             loader = TextLoader(tmp_file_path)
+        elif file_extension == '.docx':
+            loader = DOCXLoader(tmp_file_path)
         else:
-            raise ValueError(f"Unsupported file type: {file_extension}")
-        
+            # Provide helpful error message
+            supported_types = ['.pdf', '.txt', '.docx']
+            raise ValueError(
+                f"Unsupported file type: {file_extension}. "
+                f"Supported formats: {', '.join(supported_types)}. "
+                f"Note: Legacy .doc files must be converted to .docx or .pdf first."
+            )
+
         documents = loader.load()
     finally:
         os.remove(tmp_file_path)

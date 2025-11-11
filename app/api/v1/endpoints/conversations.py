@@ -124,8 +124,37 @@ def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db
         )
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])
-def get_messages(agent_id: int, session_id: str, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
-    return chat_service.get_chat_messages(db, agent_id=agent_id, session_id=session_id, company_id=current_user.company_id)
+def get_messages(
+    agent_id: int,
+    session_id: str,
+    limit: int = 20,
+    before_id: int = None,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Get messages for a conversation session with pagination support.
+
+    Args:
+        agent_id: The agent ID
+        session_id: The conversation session ID
+        limit: Maximum number of messages to return (default: 20, max: 100)
+        before_id: Return messages before this message ID (for loading older messages)
+
+    Returns:
+        List of messages in chronological order (oldest to newest)
+    """
+    # Cap the limit to prevent excessive data retrieval
+    limit = min(limit, 100)
+
+    return chat_service.get_chat_messages(
+        db,
+        agent_id=agent_id,
+        session_id=session_id,
+        company_id=current_user.company_id,
+        limit=limit,
+        before_id=before_id
+    )
 
 @router.post("/{agent_id}/{session_id}/notes", response_model=schemas_chat_message.ChatMessage, dependencies=[Depends(require_permission("conversation:update"))])
 def create_note(
