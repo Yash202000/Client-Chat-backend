@@ -19,12 +19,14 @@ services:
     ports:
       - "9411:9411"
     depends_on: [otel-collector]
+    restart: always
     
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ${PWD}/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    restart: always
 
   chroma:
     image: chromadb/chroma
@@ -35,6 +37,7 @@ services:
     environment:
       - CHROMA_OPEN_TELEMETRY__ENDPOINT=http://otel-collector:4317/
       - CHROMA_OPEN_TELEMETRY__SERVICE_NAME=chroma
+    restart: always
     depends_on:
       - otel-collector
       - zipkin
@@ -42,6 +45,7 @@ services:
   minio1:
     <<: *minio-common
     hostname: minio1
+    restart: always
     volumes:
       - type: bind
         source: /mnt/data/agentconnect
@@ -64,7 +68,7 @@ services:
 
   # frontend:
   #   # IMPORTANT: Replace 'your-frontend-image:latest' with the actual name and tag of your built Docker image.
-  #   image: yashplg/agentconnect-frontend:v1.0
+  #   image: yashplg/agentconnect-frontend:v1.2
   #   container_name: frontend_service
   #   ports:
   #     # Maps port 8080 on your local machine to port 80 in the container.
@@ -72,8 +76,11 @@ services:
   #     - "8080:80"
   #   environment:
   #     # These variables are now used at runtime by your container's startup script.
-  #     - VITE_BACKEND_URL=http://192.168.31.107:8000
+  #     - VITE_BACKEND_URL=https://agentconnect.com
   #     - VITE_LIVEKIT_URL=wss://intersee-isrh22yh.livekit.cloud
+  #     - VITE_VOICE_ENGINE_URL=http://localhost:8001
+  #   restart: always
+      
 
 volumes:
   chroma_data:

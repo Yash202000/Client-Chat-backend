@@ -20,6 +20,9 @@ class ConversationSession(Base):
     status = Column(String, nullable=False, default='active') # e.g., active, paused, waiting_for_input, completed
     is_ai_enabled = Column(Boolean, nullable=False, default=True) # Whether the AI should respond automatically
     is_client_connected = Column(Boolean, nullable=False, default=False) # Whether the client is currently connected via WebSocket
+    reopen_count = Column(Integer, nullable=False, default=0) # Number of times conversation has been reopened after resolution
+    last_reopened_at = Column(DateTime, nullable=True) # Timestamp of most recent reopening
+    resolved_at = Column(DateTime, nullable=True) # Timestamp when conversation was marked as resolved
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

@@ -148,3 +148,44 @@ async def update_session_connection_status(db: Session, conversation_id: str, is
 
     return db_session
 
+
+async def reopen_resolved_session(db: Session, session: ConversationSession, company_id: int) -> ConversationSession:
+    """
+    Reopens a resolved conversation session and notifies agents.
+
+    Args:
+        db: Database session
+        session: The conversation session to reopen
+        company_id: Company ID for broadcasting
+
+    Returns:
+        The updated session with status='active'
+    """
+    from app.services.connection_manager import manager
+    import json
+
+    if session.status != 'resolved':
+        return session  # Already active or in another state
+
+    old_status = session.status
+    session.status = 'active'
+    db.commit()
+    db.refresh(session)
+
+    # Broadcast status change to company agents
+    await manager.broadcast_to_company(
+        company_id,
+        json.dumps({
+            "type": "session_reopened",
+            "session_id": session.conversation_id,
+            "status": "active",
+            "previous_status": old_status,
+            "assignee_id": session.assignee_id,
+            "updated_at": session.updated_at.isoformat()
+        })
+    )
+
+    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} reopened from {old_status} → active")
+
+    return session
+

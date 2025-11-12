@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import os
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
@@ -12,6 +13,7 @@ from app.api.v1.main import api_router, websocket_router
 from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, object_detection
 from app.core.dependencies import get_db
 from app.services.connection_manager import manager
+from app.services.websocket_cleanup_service import cleanup_inactive_sessions
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
 from create_tool import create_api_call_tool
@@ -57,16 +59,43 @@ async def read_root():
 
 
 from app.initial_data import create_initial_data
-from app.core.websockets import manager as websocket_manager
+
+# Initialize scheduler for background tasks
+scheduler = AsyncIOScheduler()
 
 @app.on_event("startup")
 def on_startup():
     create_initial_data()
 
+    # Start WebSocket cleanup scheduler if enabled
+    if settings.WS_ENABLE_HEARTBEAT:
+        scheduler.add_job(
+            cleanup_inactive_sessions,
+            'interval',
+            seconds=settings.WS_CLEANUP_INTERVAL,
+            args=[manager],
+            id='websocket_cleanup',
+            replace_existing=True
+        )
+        scheduler.start()
+        print(f"[Startup] WebSocket cleanup scheduler started (interval: {settings.WS_CLEANUP_INTERVAL}s)")
+        print(f"[Startup] Preview session timeout: {settings.WS_PREVIEW_SESSION_TIMEOUT}s")
+        print(f"[Startup] Regular session timeout: {settings.WS_REGULAR_SESSION_TIMEOUT}s")
+    else:
+        print("[Startup] WebSocket heartbeat disabled (WS_ENABLE_HEARTBEAT=False)")
+
 @app.on_event("shutdown")
 async def on_shutdown():
-    print("Server is shutting down. Disconnecting all websocket clients...")
-    await websocket_manager.disconnect_all()
+    print("Server is shutting down...")
+
+    # Shutdown scheduler
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        print("[Shutdown] Scheduler stopped")
+
+    # Disconnect all WebSocket clients
+    await manager.disconnect_all()
+    print("[Shutdown] All WebSocket clients disconnected")
 
 if __name__ == "__main__":
     uvicorn.run(app, host=settings.HOST, port=settings.PORT, ws="websockets")

@@ -232,11 +232,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})
 
-    widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
-    typing_indicator_enabled = widget_settings.typing_indicator_enabled if widget_settings else False
-
-    if typing_indicator_enabled:
-        await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_on", "sender": "agent"}), "agent")
+    # Note: Typing indicator is now handled at the WebSocket endpoint level
+    # to ensure it shows immediately after user message (not here which is later in the flow)
 
     try:
         agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
@@ -265,12 +262,11 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
-        if typing_indicator_enabled:
-            await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
+        # Typing indicator OFF is handled at WebSocket endpoint level (in finally block)
         return
     finally:
-        if typing_indicator_enabled:
-            await manager.broadcast_to_session(boradcast_session_id, json.dumps({"type": "typing_off", "sender": "agent"}), "agent")
+        # Typing indicator OFF is handled at WebSocket endpoint level (in finally block)
+        pass
 
     final_agent_response_text = None
 

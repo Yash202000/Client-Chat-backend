@@ -111,10 +111,30 @@ def upload_knowledge_base_file(
 ):
     """
     Upload a file to create a new knowledge base.
+    Supported formats: PDF (.pdf), Text (.txt), Word (.docx)
     """
+    # Validate file type using MIME type detection
+    file_content = file.file.read()
+    mime_type = magic.from_buffer(file_content[:2048], mime=True)
+    file.file.seek(0)  # Reset file pointer
+
+    # Allowed MIME types
+    allowed_mime_types = {
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"
+    }
+
+    if mime_type not in allowed_mime_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {mime_type}. Supported formats: PDF, TXT, DOCX. "
+                   f"Note: Legacy .doc files must be converted to .docx or .pdf first."
+        )
+
     # Create a simple object that mimics the Agent model for the purpose of passing the embedding model
     agent = SimpleNamespace(embedding_model=embedding_model)
-    
+
     knowledge_base = knowledge_base_processing_service.process_and_store_document(
         db=db, file=file, agent=agent, company_id=current_user.company_id, name=name, description=description, vector_store_type=vector_store_type
     )

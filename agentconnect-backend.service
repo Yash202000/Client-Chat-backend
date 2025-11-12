@@ -1,0 +1,42 @@
+[Unit]
+Description=AgentConnect Backend Service
+After=network.target docker.service
+Requires=docker.service
+# Wait for dependencies to be ready
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=developer
+Group=developer
+WorkingDirectory=/home/developer/personal/AgentConnect/backend
+
+# Load environment variables from .env file
+EnvironmentFile=/home/developer/personal/AgentConnect/backend/.env
+Environment="PATH=/home/developer/personal/AgentConnect/backend/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Start docker-compose services first, then start backend
+ExecStartPre=/bin/bash -c 'cd /home/developer/personal/AgentConnect/backend && /usr/bin/docker compose up -d'
+ExecStartPre=/bin/sleep 15
+ExecStart=/home/developer/personal/AgentConnect/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Restart configuration
+Restart=on-failure
+RestartSec=10
+
+# Stop configuration
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGINT
+
+# Logging
+StandardOutput=append:/var/log/agentconnect-backend.log
+StandardError=append:/var/log/agentconnect-backend-error.log
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

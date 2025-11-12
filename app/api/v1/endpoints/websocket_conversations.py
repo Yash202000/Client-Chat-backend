@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
+from app.services import chat_service, widget_settings_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message, websocket as schemas_websocket
 from app.schemas.websockets import WebSocketMessage
@@ -54,7 +54,32 @@ async def authenticate_ws_user(websocket: WebSocket, token: Optional[str]) -> Op
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Could not validate credentials")
         return None
 
-# (router definition)
+
+async def heartbeat_handler(websocket: WebSocket, session_id: str):
+    """
+    Background task that sends periodic ping messages to keep connection alive
+    and detect inactive clients.
+
+    Args:
+        websocket: The WebSocket connection
+        session_id: Session identifier for logging
+
+    This task runs concurrently with the main message loop and sends pings
+    at intervals defined by WS_PING_INTERVAL configuration.
+    """
+    try:
+        while True:
+            await asyncio.sleep(settings.WS_PING_INTERVAL)
+            try:
+                await websocket.send_text(json.dumps({"type": "ping"}))
+            except Exception as e:
+                print(f"[heartbeat] Error sending ping to session {session_id}: {e}")
+                break
+    except asyncio.CancelledError:
+        print(f"[heartbeat] Heartbeat task cancelled for session {session_id}")
+        raise
+    except Exception as e:
+        print(f"[heartbeat] Unexpected error in heartbeat for session {session_id}: {e}")
 
 
 @router.websocket("/wschat/{channel_id}")
@@ -202,8 +227,19 @@ async def voice_websocket_endpoint(
                 with get_db_session() as db:
                     # 1. Save and broadcast the user's transcribed message
                     user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
-                    db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
+                    db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user", assignee_id=None)
                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_user_message).model_dump_json(), "user")
+
+                    # Check if AI is enabled for this session
+                    session_obj = db.query(models_conversation_session.ConversationSession).filter(
+                        models_conversation_session.ConversationSession.conversation_id == session_id,
+                        models_conversation_session.ConversationSession.company_id == company_id
+                    ).first()
+
+                    if session_obj and not session_obj.is_ai_enabled:
+                        print(f"AI is disabled for session {session_id}. No voice response will be generated.")
+                        transcript_queue.task_done()
+                        continue
 
                     # 2. Generate the agent's response
                     agent_response_text = await agent_execution_service.generate_agent_response(
@@ -212,7 +248,7 @@ async def voice_websocket_endpoint(
 
                     # 3. Save and broadcast the agent's text message
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
-                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
                 # 4. Convert the agent's response to speech and stream it
@@ -362,8 +398,22 @@ async def internal_voice_websocket_endpoint(
                 # Use temporary DB session
                 with get_db_session() as db:
                     chat_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
-                    db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), "agent")
+                    db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, "agent", assignee_id=current_user.id)
+
+                    # Enrich message with assignee name for broadcast
+                    message_dict = schemas_chat_message.ChatMessage.model_validate(db_message).model_dump(mode='json')
+                    if db_message.assignee_id:
+                        assignee_user = db.query(models_user.User).filter(models_user.User.id == db_message.assignee_id).first()
+                        if assignee_user:
+                            # Build full name from first_name and last_name
+                            name_parts = []
+                            if assignee_user.first_name:
+                                name_parts.append(assignee_user.first_name)
+                            if assignee_user.last_name:
+                                name_parts.append(assignee_user.last_name)
+                            message_dict['assignee_name'] = ' '.join(name_parts) if name_parts else assignee_user.email
+
+                    await manager.broadcast_to_session(session_id, json.dumps(message_dict), "agent")
 
                 transcript_queue.task_done()
 
@@ -426,16 +476,52 @@ async def websocket_endpoint(
     if user_type == "user":
         with get_db_session() as db:
             await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
-    
+
+    # Start heartbeat task if enabled
+    heartbeat_task = None
+    if settings.WS_ENABLE_HEARTBEAT:
+        heartbeat_task = asyncio.create_task(heartbeat_handler(websocket, session_id))
+
     try:
         while True:
             data = await websocket.receive_text()
+
+            # Update activity timestamp
+            manager.update_activity(session_id, websocket)
+
             print(f"[websocket_conversations] Received data from frontend: {data}")
             if not data:
                 continue
 
             try:
                 message_data = json.loads(data)
+
+                # Handle ping/pong messages
+                if message_data.get('type') == 'pong':
+                    continue  # Just an acknowledgment, no further processing
+                if message_data.get('type') == 'ping':
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    continue
+
+                # Handle agent typing events from dashboard
+                if message_data.get('type') == 'agent_typing':
+                    is_typing = message_data.get('is_typing', False)
+                    typing_session_id = message_data.get('session_id')
+
+                    if typing_session_id:
+                        # Broadcast typing indicator to the widget user
+                        await manager.broadcast_to_session(
+                            typing_session_id,
+                            json.dumps({
+                                "message_type": "typing",
+                                "is_typing": is_typing,
+                                "sender": "agent"
+                            }),
+                            "agent"
+                        )
+                        print(f"[websocket_conversations] Agent typing event: is_typing={is_typing}, session={typing_session_id}")
+                    continue
+
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
             except (json.JSONDecodeError, AttributeError):
@@ -457,10 +543,48 @@ async def websocket_endpoint(
                     message_type=message_data.get('message_type', 'message'),
                     token=message_data.get('token')
                 )
-                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
+
+                # Determine assignee_id: if agent is sending, use current_user.id
+                assignee_id = current_user.id if sender == 'agent' else None
+                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id)
                 print(f"[websocket_conversations] Created chat message: {db_message.id}")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
+
+                # Enrich message with assignee name for broadcast
+                message_dict = schemas_chat_message.ChatMessage.model_validate(db_message).model_dump(mode='json')
+                if sender == 'agent' and db_message.assignee_id:
+                    assignee_user = db.query(models_user.User).filter(models_user.User.id == db_message.assignee_id).first()
+                    if assignee_user:
+                        # Build full name from first_name and last_name
+                        name_parts = []
+                        if assignee_user.first_name:
+                            name_parts.append(assignee_user.first_name)
+                        if assignee_user.last_name:
+                            name_parts.append(assignee_user.last_name)
+                        message_dict['assignee_name'] = ' '.join(name_parts) if name_parts else assignee_user.email
+
+                await manager.broadcast_to_session(session_id, json.dumps(message_dict), sender)
                 print(f"[websocket_conversations] Broadcasted message to session: {session_id}")
+
+                # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
+                # This happens before workflow/AI processing to show immediate feedback
+                typing_indicator_sent = False
+                if sender == 'user':
+                    # Quick check for AI enabled (single DB query, cached by SQLAlchemy)
+                    agent = agent_service.get_agent(db, agent_id, company_id)
+                    ai_enabled = agent and agent.credential is not None
+
+                    if ai_enabled:
+                        # Quick check for typing indicator setting (single DB query, cached)
+                        widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                        if widget_settings and widget_settings.typing_indicator_enabled:
+                            # Send typing indicator IMMEDIATELY before any workflow/AI processing
+                            await manager.broadcast_to_session(
+                                session_id,
+                                json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                                "agent"
+                            )
+                            typing_indicator_sent = True
+                            print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
 
                 # If agent sends message, check session channel and send to external platform
                 if sender == 'agent':
@@ -499,48 +623,72 @@ async def websocket_endpoint(
 
                 # 2. If the message is from the user, execute the workflow
                 if sender == 'user':
-                    # Try trigger-based workflow finding first (new system)
-                    workflow = workflow_trigger_service.find_workflow_for_channel_message(
-                        db=db,
-                        channel=TriggerChannel.WEBSOCKET,
-                        company_id=company_id,
-                        message=user_message,
-                        session_data={"session_id": session_id, "agent_id": agent_id}
-                    )
+                    # Check if AI is enabled for this session
+                    session_obj = db.query(models_conversation_session.ConversationSession).filter(
+                        models_conversation_session.ConversationSession.conversation_id == session_id,
+                        models_conversation_session.ConversationSession.company_id == company_id
+                    ).first()
 
-                    # Fallback to old similarity search if no trigger-based workflow found
-                    if not workflow:
-                        workflow = workflow_service.find_similar_workflow(
-                            db,
-                            company_id=company_id,
-                            query=user_message
-                        )
-
-                    if not workflow:
-                        # If no specific workflow matches, provide a generic response
-                        print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
-                        agent_response_text = await agent_execution_service.generate_agent_response(
-                            db, agent_id, session_id, company_id, message_data['message']
-                        )
-                        agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                        await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                        print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                    if session_obj and not session_obj.is_ai_enabled:
+                        print(f"AI is disabled for session {session_id}. No response will be generated.")
                         continue
 
-                    # 3. Execute the matched workflow with the current state (conversation_id)
-                    execution_result = await workflow_exec_service.execute_workflow(
-                        user_message=user_message,
-                        conversation_id=session_id,
-                        company_id=company_id,
-                        workflow=workflow
-                    )
+                    execution_result = None
+                    try:
+                        # Try trigger-based workflow finding first (new system)
+                        workflow = workflow_trigger_service.find_workflow_for_channel_message(
+                            db=db,
+                            channel=TriggerChannel.WEBSOCKET,
+                            company_id=company_id,
+                            message=user_message,
+                            session_data={"session_id": session_id, "agent_id": agent_id}
+                        )
+
+                        # Fallback to old similarity search if no trigger-based workflow found
+                        if not workflow:
+                            workflow = workflow_service.find_similar_workflow(
+                                db,
+                                company_id=company_id,
+                                query=user_message
+                            )
+
+                        if not workflow:
+                            # If no specific workflow matches, provide a generic response
+                            print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
+                            agent_response_text = await agent_execution_service.generate_agent_response(
+                                db, agent_id, session_id, company_id, message_data['message']
+                            )
+                            agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                            db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                            print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                            continue
+
+                        # 3. Execute the matched workflow with the current state (conversation_id)
+                        execution_result = await workflow_exec_service.execute_workflow(
+                            user_message=user_message,
+                            conversation_id=session_id,
+                            company_id=company_id,
+                            workflow=workflow
+                        )
+                    finally:
+                        # Turn off typing indicator after workflow/AI processing completes
+                        if typing_indicator_sent:
+                            await manager.broadcast_to_session(
+                                session_id,
+                                json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                                "agent"
+                            )
+                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
+
+                    if not execution_result:
+                        continue
 
                     # 4. Handle the execution result
                     if execution_result.get("status") == "completed":
                         agent_response_text = execution_result.get("response", "Workflow finished.")
                         agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                         await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
                         print(f"[websocket_conversations] Broadcasted workflow completion to session: {session_id}")
 
@@ -587,6 +735,15 @@ async def websocket_endpoint(
             with get_db_session() as db:
                 await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
 
+    finally:
+        # Cancel heartbeat task
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
 
 @router.websocket("/public/{company_id}/{agent_id}/{session_id}")
 async def public_websocket_endpoint(
@@ -610,10 +767,26 @@ async def public_websocket_endpoint(
         with get_db_session() as db:
             await conversation_session_service.update_session_connection_status(db, session_id, is_connected=True)
 
+    # Start heartbeat task if enabled
+    heartbeat_task = None
+    if settings.WS_ENABLE_HEARTBEAT:
+        heartbeat_task = asyncio.create_task(heartbeat_handler(websocket, session_id))
+
     try:
         while True:
             data = await websocket.receive_text()
+
+            # Update activity timestamp
+            manager.update_activity(session_id, websocket)
+
             message_data = json.loads(data)
+
+            # Handle ping/pong messages
+            if message_data.get('type') == 'pong':
+                continue  # Just an acknowledgment, no further processing
+            if message_data.get('type') == 'ping':
+                await websocket.send_text(json.dumps({"type": "pong"}))
+                continue
             user_message = message_data.get('message')
             sender = message_data.get('sender')
 
@@ -646,48 +819,171 @@ async def public_websocket_endpoint(
                     )
                     print(f"[websocket_conversations] ✅ Broadcasted new session to company {company_id}")
 
+                # Check if session was resolved and reopen it when client sends message
+                if session.status == 'resolved' and sender == 'user':
+                    import datetime
+
+                    old_status = session.status
+
+                    # Track reopening metadata
+                    session.reopen_count = (session.reopen_count or 0) + 1
+                    session.last_reopened_at = datetime.datetime.utcnow()
+
+                    # Calculate time since resolution (for analytics)
+                    time_since_resolution = None
+                    if session.resolved_at:
+                        time_since_resolution = (datetime.datetime.utcnow() - session.resolved_at).total_seconds()
+
+                    # Set status based on assignee:
+                    # - If assignee exists: set to 'assigned' (goes to assigned user's "mine" tab)
+                    # - If no assignee: set to 'active' (goes to "open" tab for everyone)
+                    if session.assignee_id:
+                        session.status = 'assigned'
+                    else:
+                        session.status = 'active'
+
+                    db.commit()
+                    db.refresh(session)
+
+                    # Add system message about reopening
+                    reopen_text = f"Conversation reopened by customer"
+                    if session.reopen_count > 1:
+                        reopen_text += f" (Reopened {session.reopen_count}x)"
+
+                    system_message = schemas_chat_message.ChatMessageCreate(
+                        message=reopen_text,
+                        message_type="system"
+                    )
+                    db_system_message = chat_service.create_chat_message(
+                        db, system_message, agent_id, session_id, company_id, 'system', assignee_id=None
+                    )
+
+                    # Broadcast system message to session
+                    await manager.broadcast_to_session(
+                        str(session_id),
+                        schemas_chat_message.ChatMessage.model_validate(db_system_message).model_dump_json(),
+                        'system'
+                    )
+
+                    # Get contact information for the broadcast
+                    contact_name = session.contact.name if session.contact else None
+
+                    # Enhanced broadcast with metadata
+                    await manager.broadcast_to_company(
+                        company_id,
+                        json.dumps({
+                            "type": "session_reopened",
+                            "session_id": session_id,
+                            "conversation_id": session.conversation_id,
+                            "status": session.status,  # Will be 'assigned' or 'active' based on assignee
+                            "previous_status": old_status,
+                            "assignee_id": session.assignee_id,
+                            "contact_name": contact_name,
+                            "reopen_count": session.reopen_count,
+                            "last_reopened_at": session.last_reopened_at.isoformat(),
+                            "resolved_at": session.resolved_at.isoformat() if session.resolved_at else None,
+                            "time_since_resolution": time_since_resolution,
+                            "updated_at": session.updated_at.isoformat()
+                        })
+                    )
+
+                    print(f"[websocket_conversations] 🔄 Session {session_id} reopened from resolved → {session.status} (Reopen #{session.reopen_count}, Assignee: {session.assignee_id or 'None'})")
+
                 # Handle form data: convert dict to JSON string for storage
                 message_for_storage = user_message
                 if isinstance(user_message, dict):
                     # If it's form data, convert to JSON string for chat message storage
                     message_for_storage = json.dumps(user_message)
 
+                # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
+                # This happens before any database operations to minimize delay
+                typing_indicator_sent = False
+                print(f"[DEBUG] Checking typing indicator - sender: {sender}")
+                if sender == 'user':
+                    # Quick check for typing indicator setting (single DB query, cached)
+                    widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                    print(f"[DEBUG] Widget settings: {widget_settings}")
+                    if widget_settings:
+                        print(f"[DEBUG] Widget settings exists, typing_indicator_enabled: {widget_settings.typing_indicator_enabled}")
+                    if widget_settings and widget_settings.typing_indicator_enabled:
+                        # Send typing indicator IMMEDIATELY before any other processing
+                        await manager.broadcast_to_session(
+                            str(session_id),
+                            json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                            "agent"
+                        )
+                        typing_indicator_sent = True
+                        print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
+                    else:
+                        print(f"[DEBUG] Typing indicator NOT sent - widget_settings: {widget_settings}, enabled: {widget_settings.typing_indicator_enabled if widget_settings else 'N/A'}")
+
                 # Now, create and broadcast the chat message
                 chat_message = schemas_chat_message.ChatMessageCreate(message=message_for_storage, message_type=message_data.get('message_type', 'message'))
-                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender)
-                await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_message).model_dump_json(), sender)
+                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id=None)
+
+                # Enrich message with assignee name for broadcast (if message has assignee from database)
+                message_dict = schemas_chat_message.ChatMessage.model_validate(db_message).model_dump(mode='json')
+                if db_message.assignee_id:
+                    assignee_user = db.query(models_user.User).filter(models_user.User.id == db_message.assignee_id).first()
+                    if assignee_user:
+                        # Build full name from first_name and last_name
+                        name_parts = []
+                        if assignee_user.first_name:
+                            name_parts.append(assignee_user.first_name)
+                        if assignee_user.last_name:
+                            name_parts.append(assignee_user.last_name)
+                        message_dict['assignee_name'] = ' '.join(name_parts) if name_parts else assignee_user.email
+
+                await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), sender)
 
                 if sender == 'user':
                     # The session is already guaranteed to exist, so we can proceed
                     print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
 
-                    execution_result = None
-                    # Check if a workflow is paused (indicated by next_step_id being set)
-                    if session.next_step_id and session.workflow_id:
-                        # A workflow is already in progress, so we resume it.
-                        workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
-                        if workflow:
-                             execution_result = await workflow_exec_service.execute_workflow(
-                                user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
-                            )
-                    else:
-                        # No workflow is in progress, so we find a new one.
-                        workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
-                        if workflow:
-                            execution_result = await workflow_exec_service.execute_workflow(
-                                user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
-                            )
+                    # Check if AI is enabled for this session
+                    if not session.is_ai_enabled:
+                        print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
+                        continue
 
-                    # If no workflow was found or resumed, fallback to the default agent response
+                    execution_result = None
+                    try:
+                        # Check if a workflow is paused (indicated by next_step_id being set)
+                        if session.next_step_id and session.workflow_id:
+                            # A workflow is already in progress, so we resume it.
+                            workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                            if workflow:
+                                 execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                )
+                        else:
+                            # No workflow is in progress, so we find a new one.
+                            workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
+                            if workflow:
+                                execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                )
+
+                        # If no workflow was found or resumed, fallback to the default agent response
+                        if not execution_result:
+                            await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                    finally:
+                        # Turn off typing indicator after AI processing completes
+                        if typing_indicator_sent:
+                            await manager.broadcast_to_session(
+                                str(session_id),
+                                json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                                "agent"
+                            )
+                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
+
                     if not execution_result:
-                        await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
                         continue
 
                     # Handle execution result
                     if execution_result.get("status") == "completed":
                         agent_response_text = execution_result.get("response", "Workflow finished.")
                         agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                         await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
                     elif execution_result.get("status") == "paused_for_prompt":
@@ -719,4 +1015,13 @@ async def public_websocket_endpoint(
         if user_type == "user" and not manager.has_user_connection(session_id):
             with get_db_session() as db:
                 await conversation_session_service.update_session_connection_status(db, session_id, is_connected=False)
+
+    finally:
+        # Cancel heartbeat task
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 

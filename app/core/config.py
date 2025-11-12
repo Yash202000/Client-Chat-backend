@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""
     LIVEKIT_URL: str = ""
-    FRONTEND_URL: str = "http://localhost:8080"
+    FRONTEND_URL: str
     WHATSAPP_VERIFY_TOKEN: str = ""
     MESSENGER_VERIFY_TOKEN: str = ""
     INSTAGRAM_VERIFY_TOKEN: str = ""
@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     CORS_ORIGINS: str = "http://localhost:8080,http://localhost:5173,*"
+
+    # WebSocket session cleanup settings
+    WS_PING_INTERVAL: int = 30  # Send ping every 30 seconds
+    WS_CLEANUP_INTERVAL: int = 60  # Run cleanup every 60 seconds
+    WS_REGULAR_SESSION_TIMEOUT: int = 1800  # 30 minutes (1800 seconds)
+    WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
+    WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
 
     class Config:
         env_file = ".env"
