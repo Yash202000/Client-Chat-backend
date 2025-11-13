@@ -35,7 +35,7 @@ async def authenticate_websocket_user(websocket: WebSocket, token: Optional[str]
     finally:
         db.close()
 
-@router.websocket("/ws/{company_id}")
+@router.websocket("/{company_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
     company_id: int,
@@ -60,6 +60,24 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Company mismatch")
         return
 
+    # Update user presence status to online
+    db = SessionLocal()
+    try:
+        user_service.update_user_presence(db, user_id=current_user.id, status="online")
+        print(f"[ws_updates] ✅ Updated presence status to 'online' for user: {current_user.email}")
+
+        # Broadcast presence update to all company users
+        presence_update = json.dumps({
+            "type": "presence_update",
+            "payload": {
+                "user_id": current_user.id,
+                "status": "online"
+            }
+        })
+        await manager.broadcast(presence_update, channel_id)
+    finally:
+        db.close()
+
     print(f"[ws_updates] 📊 Current active channels: {list(manager.active_connections.keys())}")
 
     try:
@@ -81,9 +99,49 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         print(f"[ws_updates] 🔌 Client disconnected from channel '{channel_id}'")
         manager.disconnect(websocket, channel_id)
+
+        # Update user presence status to offline
+        db = SessionLocal()
+        try:
+            user_service.update_user_presence(db, user_id=current_user.id, status="offline")
+            print(f"[ws_updates] ✅ Updated presence status to 'offline' for user: {current_user.email}")
+
+            # Broadcast presence update to all company users
+            presence_update = json.dumps({
+                "type": "presence_update",
+                "payload": {
+                    "user_id": current_user.id,
+                    "status": "offline"
+                }
+            })
+            await manager.broadcast(presence_update, channel_id)
+        finally:
+            db.close()
+
         print(f"[ws_updates] ❌ WebSocket connection closed for company_id: {company_id}")
         print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")
     except Exception as e:
         print(f"[ws_updates] ⚠️ Error in WebSocket: {e}")
         manager.disconnect(websocket, channel_id)
+
+        # Update user presence status to offline on error
+        db = SessionLocal()
+        try:
+            user_service.update_user_presence(db, user_id=current_user.id, status="offline")
+            print(f"[ws_updates] ✅ Updated presence status to 'offline' for user: {current_user.email} (due to error)")
+
+            # Broadcast presence update to all company users
+            presence_update = json.dumps({
+                "type": "presence_update",
+                "payload": {
+                    "user_id": current_user.id,
+                    "status": "offline"
+                }
+            })
+            await manager.broadcast(presence_update, channel_id)
+        except Exception as broadcast_error:
+            print(f"[ws_updates] ⚠️ Failed to update presence on error: {broadcast_error}")
+        finally:
+            db.close()
+
         print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")

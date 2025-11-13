@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications
 
 
 api_router = APIRouter()
@@ -55,7 +55,7 @@ api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
 api_router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
 api_router.include_router(webhook_router.router, prefix="/webhooks", tags=["webhooks"])
-api_router.include_router(ws_updates.router, prefix="/ws/updates", tags=["ws_updates"])
+# ws_updates.router is included in main.py with prefix="/ws" for global company-wide WebSocket
 api_router.include_router(proxy.router, prefix="/proxy", tags=["proxy"])
 api_router.include_router(proactive.router, prefix="/proactive", tags=["proactive"])
 api_router.include_router(api_keys.router, prefix="/api-keys", tags=["api-keys"])
@@ -68,6 +68,7 @@ api_router.include_router(contacts.router, prefix="/contacts", tags=["contacts"]
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(teams_calendar.router, prefix="/teams-calendar", tags=["teams_calendar"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 # api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
 
 websocket_router.include_router(websocket_conversations.router, prefix="", tags=["conversations"])

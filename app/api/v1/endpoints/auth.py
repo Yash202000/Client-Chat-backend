@@ -67,9 +67,9 @@ def update_presence(
 ):
     """
     Update current user's presence status.
-    Valid values: online, offline, busy, away, do_not_disturb
+    Valid values: online, offline, busy, away, do_not_disturb, in_call
     """
-    valid_statuses = ["online", "offline", "busy", "away", "do_not_disturb"]
+    valid_statuses = ["online", "offline", "busy", "away", "do_not_disturb", "in_call"]
     if presence_status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

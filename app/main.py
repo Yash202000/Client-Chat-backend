@@ -14,9 +14,11 @@ from app.api.v1.endpoints import ws_updates, comments, gmail, google, published,
 from app.core.dependencies import get_db
 from app.services.connection_manager import manager
 from app.services.websocket_cleanup_service import cleanup_inactive_sessions
+from app.services.call_timeout_service import call_timeout_service
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
 from create_tool import create_api_call_tool
+import asyncio
 
 # Create all database tables
 Base.metadata.create_all(bind=engine)
@@ -64,7 +66,7 @@ from app.initial_data import create_initial_data
 scheduler = AsyncIOScheduler()
 
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     create_initial_data()
 
     # Start WebSocket cleanup scheduler if enabled
@@ -84,9 +86,17 @@ def on_startup():
     else:
         print("[Startup] WebSocket heartbeat disabled (WS_ENABLE_HEARTBEAT=False)")
 
+    # Start call timeout service
+    asyncio.create_task(call_timeout_service.start())
+    print("[Startup] Call timeout service started (timeout: 30s, check interval: 10s)")
+
 @app.on_event("shutdown")
 async def on_shutdown():
     print("Server is shutting down...")
+
+    # Stop call timeout service
+    call_timeout_service.stop()
+    print("[Shutdown] Call timeout service stopped")
 
     # Shutdown scheduler
     if scheduler.running:

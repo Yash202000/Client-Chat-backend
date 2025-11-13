@@ -17,8 +17,15 @@ class ChatChannelBase(BaseModel):
 class InternalChatMessageBase(BaseModel):
     content: str
     channel_id: Optional[int] = None
-    
+    parent_message_id: Optional[int] = None  # For threading
+
     model_config = ConfigDict(from_attributes=True)
+
+class ChatAttachmentBase(BaseModel):
+    file_name: str
+    file_url: str
+    file_type: str
+    file_size: int
 
 # Schemas for creating new objects
 class ChannelMembershipCreate(ChannelMembershipBase):
@@ -29,6 +36,24 @@ class ChatChannelCreate(ChatChannelBase):
 
 class InternalChatMessageCreate(InternalChatMessageBase):
     pass
+
+class ChatAttachmentCreate(ChatAttachmentBase):
+    message_id: int
+    uploaded_by: int
+
+class MessageReactionBase(BaseModel):
+    emoji: str
+
+class MessageReactionCreate(MessageReactionBase):
+    message_id: int
+
+class MessageReaction(MessageReactionBase):
+    id: int
+    message_id: int
+    user_id: int
+    created_at: datetime.datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 # Schemas for reading/returning objects from the API
 class UserInChat(BaseModel):
@@ -46,11 +71,22 @@ class ChannelMembership(ChannelMembershipBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ChatAttachment(ChatAttachmentBase):
+    id: int
+    message_id: int
+    uploaded_by: int
+    created_at: datetime.datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
 class InternalChatMessage(InternalChatMessageBase):
     id: int
     sender_id: int
     created_at: datetime.datetime
     sender: UserInChat
+    attachments: List[ChatAttachment] = []
+    reactions: List['MessageReaction'] = []
+    reply_count: Optional[int] = 0  # Computed field for number of replies
 
     model_config = ConfigDict(from_attributes=True)
 
