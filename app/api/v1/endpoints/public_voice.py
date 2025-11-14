@@ -1,7 +1,7 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service, widget_settings_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message
 import json
@@ -64,8 +64,9 @@ async def public_voice_websocket_endpoint(
     stt_service = None
     if stt_provider == "groq":
         groq_api_key = None
-        # Check if the agent has a specific credential for Groq
-        if agent.credential and agent.credential.service == 'groq':
+        print(agent.credential)
+        # Check if the agent has a specific credential for Groq (case-insensitive)
+        if agent.credential and agent.credential.service.lower() == 'groq':
             logger.info("Found Groq credential associated with the agent.")
             try:
                 # The credential service returns the raw decrypted key for simple services like Groq
@@ -80,8 +81,10 @@ async def public_voice_websocket_endpoint(
         
         if not groq_api_key:
             logger.warning("Groq API key not found in agent's vault. Falling back to environment variable.")
-
-        stt_service = GroqSTTService(api_key=groq_api_key)
+            # Don't pass api_key if None, let service use environment variable
+            stt_service = GroqSTTService()
+        else:
+            stt_service = GroqSTTService(api_key=groq_api_key)
 
     elif stt_provider == "deepgram":
         stt_service = STTService(websocket)
@@ -187,23 +190,45 @@ async def public_voice_websocket_endpoint(
                 db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
                 await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_user_message).json(), "user")
 
-                # 2. Generate the agent's response
-                agent_response_text = await agent_execution_service.generate_agent_response(
-                    db, agent_id, session_id, company_id, transcript
-                )
-                logger.info(f"LLM response: {agent_response_text}")
+                # Check and send typing indicator before agent processing
+                typing_indicator_sent = False
+                widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                if widget_settings and widget_settings.typing_indicator_enabled:
+                    await manager.broadcast_to_session(
+                        session_id,
+                        json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                        "agent"
+                    )
+                    typing_indicator_sent = True
+                    logger.info(f"[Voice] Typing indicator ON for session: {session_id}")
 
-                # 3. Save and broadcast the agent's text message
-                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
-                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                try:
+                    # 2. Generate the agent's response
+                    agent_response_text = await agent_execution_service.generate_agent_response(
+                        db, agent_id, session_id, session_id, company_id, transcript
+                    )
+                    logger.info(f"LLM response: {agent_response_text}")
 
-                # 4. Convert the agent's response to speech and stream it
-                audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
-                logger.info("Streaming TTS audio to client...")
-                async for audio_chunk in audio_stream:
-                    await websocket.send_bytes(audio_chunk)
-                
+                    # 3. Save and broadcast the agent's text message
+                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
+                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+
+                    # 4. Convert the agent's response to speech and stream it
+                    audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
+                    logger.info("Streaming TTS audio to client...")
+                    async for audio_chunk in audio_stream:
+                        await websocket.send_bytes(audio_chunk)
+                finally:
+                    # Turn off typing indicator after processing completes
+                    if typing_indicator_sent:
+                        await manager.broadcast_to_session(
+                            session_id,
+                            json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                            "agent"
+                        )
+                        logger.info(f"[Voice] Typing indicator OFF for session: {session_id}")
+
                 transcript_queue.task_done()
             logger.info("Finished processing transcript")
 

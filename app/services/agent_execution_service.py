@@ -329,13 +329,11 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     elif llm_response.get('type') == 'text':
         final_agent_response_text = llm_response.get('content', 'No response content.')
 
-    # --- Save and Broadcast Final Message ---
+    # --- Return Final Message ---
+    # Note: Message saving and broadcasting is handled by the caller (e.g., public_voice.py)
     if final_agent_response_text and final_agent_response_text.strip():
-        agent_message = ChatMessageCreate(message=final_agent_response_text, message_type="message")
-        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, boradcast_session_id, company_id, "agent")
-        await manager.broadcast_to_session(boradcast_session_id, ChatMessageSchema.model_validate(db_agent_message).model_dump_json(), "agent")
-        print(f"[AgentResponse] Broadcasted final agent response to session: {session_id}")
+        print(f"[AgentResponse] Generated response text: {final_agent_response_text[:100]}...")
     else:
-        print(f"[AgentResponse] Final agent response was empty. Nothing to broadcast.")
-        
+        print(f"[AgentResponse] Final agent response was empty.")
+
     return final_agent_response_text

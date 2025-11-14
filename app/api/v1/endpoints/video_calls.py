@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from typing import Optional
 from livekit import api
 from app.core.config import settings
 from sqlalchemy.orm import Session
@@ -16,15 +17,29 @@ class TokenRequest(BaseModel):
     room_name: str
     participant_name: str
 
+class PublicTokenRequest(BaseModel):
+    room_name: str
+    participant_name: str
+    agent_id: Optional[int] = None
+
 def get_livekit_token(room_name: str, participant_name: str):
     if not settings.LIVEKIT_API_KEY or not settings.LIVEKIT_API_SECRET or not settings.LIVEKIT_URL:
         raise HTTPException(status_code=500, detail="LiveKit server not configured. Please check your .env file.")
 
     video_grant = api.VideoGrants(room=room_name, room_join=True, can_publish=True, can_subscribe=True)
-    
+
     user_token = api.AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET).with_identity(participant_name).with_name(participant_name).with_grants(video_grant)
 
     return user_token.to_jwt()
+
+@router.post("/token")
+def get_public_token(request: PublicTokenRequest):
+    """Generate LiveKit token for voice mode widget (public endpoint)"""
+    token = get_livekit_token(request.room_name, request.participant_name)
+    return {
+        "access_token": token,
+        "livekit_url": settings.LIVEKIT_URL
+    }
 
 @router.post("/channels/{channel_id}/initiate")
 async def initiate_video_call(

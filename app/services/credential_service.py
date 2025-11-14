@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.models import credential as models_credential
 from app.schemas import credential as schemas_credential
 from app.services.vault_service import vault_service
@@ -7,7 +8,7 @@ def create_credential(db: Session, credential: schemas_credential.CredentialCrea
     encrypted_creds = vault_service.encrypt(credential.credentials)
     db_credential = models_credential.Credential(
         name=credential.name,
-        service=credential.service,
+        service=credential.service.lower(),  # Normalize service name to lowercase
         encrypted_credentials=encrypted_creds,
         company_id=company_id
     )
@@ -33,8 +34,9 @@ def get_decrypted_credential(db: Session, credential_id: int, company_id: int) -
     return None
 
 def get_credential_by_service_name(db: Session, service_name: str, company_id: int):
+    # Case-insensitive service name comparison
     return db.query(models_credential.Credential).filter(
-        models_credential.Credential.service == service_name, 
+        func.lower(models_credential.Credential.service) == service_name.lower(),
         models_credential.Credential.company_id == company_id
     ).first()
 
@@ -50,7 +52,11 @@ def update_credential(db: Session, credential_id: int, credential: schemas_crede
         if 'credentials' in update_data:
             db_credential.encrypted_credentials = vault_service.encrypt(update_data['credentials'])
             del update_data['credentials'] # Don't try to set this attribute directly
-        
+
+        # Normalize service name to lowercase if being updated
+        if 'service' in update_data:
+            update_data['service'] = update_data['service'].lower()
+
         for key, value in update_data.items():
             setattr(db_credential, key, value)
             
