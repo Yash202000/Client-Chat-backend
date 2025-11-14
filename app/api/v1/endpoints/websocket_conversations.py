@@ -99,6 +99,9 @@ async def internal_chat_websocket_endpoint(
     if not current_user:
         return
 
+    # Note: User-specific channels are available but incoming calls use company channel
+    # This provides better reliability as agents are always connected to company channel
+
     # Update presence with temporary DB session
     with get_db_session() as db:
         user_service.update_user_presence(db, user_id=current_user.id, status="online")
@@ -965,7 +968,33 @@ async def public_websocket_endpoint(
 
                         # If no workflow was found or resumed, fallback to the default agent response
                         if not execution_result:
-                            await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                            agent_response = await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                            if agent_response:
+                                # Handle dict response (with call info) or string response
+                                if isinstance(agent_response, dict):
+                                    agent_response_text = agent_response.get('text', '')
+                                    call_initiated = agent_response.get('call_initiated', False)
+                                else:
+                                    agent_response_text = agent_response
+                                    call_initiated = False
+
+                                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+
+                                # Build message dict for broadcast
+                                message_dict = schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump(mode='json')
+
+                                # Add call info to broadcast if call was initiated
+                                if call_initiated and isinstance(agent_response, dict):
+                                    message_dict.update({
+                                        'call_initiated': True,
+                                        'agent_name': agent_response.get('agent_name'),
+                                        'room_name': agent_response.get('room_name'),
+                                        'livekit_url': agent_response.get('livekit_url'),
+                                        'user_token': agent_response.get('user_token')
+                                    })
+
+                                await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
                     finally:
                         # Turn off typing indicator after AI processing completes
                         if typing_indicator_sent:

@@ -163,9 +163,33 @@ from fastmcp.client import Client
 
 async def _get_tools_for_agent(agent):
     """
-    Builds a list of tool definitions for the LLM, including custom and dynamically fetched MCP tools.
+    Builds a list of tool definitions for the LLM, including custom, MCP, and built-in tools.
     """
     tool_definitions = []
+
+    # Add built-in handoff tool (always available)
+    tool_definitions.append({
+        "type": "function",
+        "function": {
+            "name": "request_human_handoff",
+            "description": "Request to transfer the conversation to a human agent. Use this when the customer explicitly asks for a human, when the issue is too complex for AI, or when escalation is needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "The reason for requesting handoff (e.g., customer_request, complex_issue, escalation, or technical_support)"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "A brief summary of the conversation to help the human agent understand the context"
+                    }
+                },
+                "required": ["reason", "summary"]
+            }
+        }
+    })
+
     for tool in agent.tools:
         if tool.tool_type == "custom":
             tool_definitions.append({
@@ -247,6 +271,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             "5. You ONLY have access to the following tools, and should NEVER make up tools that are not listed here: "
             "6. For example, if a tool requires a 'user\_id', and the user asks to 'get user details', you must respond with: 'I can certainly help you find those details. Could you please provide the user's ID?'\n"
             "7. If a tool the user requests is conceptually unavailable (like 'list all orders' when only 'get order by ID' is available), explain the limitation in **simple, non-technical terms** and offer the alternative tool without mentioning the function names.\n"
+            "8. **HUMAN HANDOFF**: If the user explicitly asks to speak with a human agent, or if the issue becomes too complex for you to handle, use the 'request_human_handoff' tool. Provide a clear summary of the conversation so the human agent can quickly understand the context.\n"
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
             f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
@@ -269,6 +294,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         pass
 
     final_agent_response_text = None
+    tool_name = None
+    tool_result = None
 
     if llm_response.get('type') == 'tool_call':
         tool_name = llm_response.get('tool_name')
@@ -282,7 +309,12 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         await manager.broadcast_to_session(boradcast_session_id, json.dumps(tool_call_msg), "agent")
 
         # --- Tool Execution ---
-        if '__' in tool_name:
+        # Check if this is the built-in handoff tool
+        if tool_name == "request_human_handoff":
+            tool_result = await tool_execution_service.execute_handoff_tool(
+                db=db, session_id=boradcast_session_id, parameters=parameters
+            )
+        elif '__' in tool_name:
             connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
             original_connection_name = connection_name_from_llm.replace('_', ' ')
             db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
@@ -298,7 +330,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                 print(f"Error: Tool '{tool_name}' not found.")
                 return
             tool_result = tool_execution_service.execute_custom_tool(
-                db=db, tool=db_tool, company_id=company_id, session_id=session_id, parameters=parameters
+                db=db, tool=db_tool, company_id=company_id, session_id=boradcast_session_id, parameters=parameters
             )
         
         result_content = tool_result.get('result', tool_result.get('error', 'No output'))
@@ -335,5 +367,17 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         print(f"[AgentResponse] Generated response text: {final_agent_response_text[:100]}...")
     else:
         print(f"[AgentResponse] Final agent response was empty.")
+
+    # Return response with call info if handoff tool was used
+    if tool_name == "request_human_handoff" and tool_result.get('result', {}).get('status') == 'call_initiated':
+        result_data = tool_result.get('result', {})
+        return {
+            "text": final_agent_response_text,
+            "call_initiated": True,
+            "agent_name": result_data.get('agent_name'),
+            "room_name": result_data.get('room_name'),
+            "livekit_url": result_data.get('livekit_url'),
+            "user_token": result_data.get('user_token')
+        }
 
     return final_agent_response_text

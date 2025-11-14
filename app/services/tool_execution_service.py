@@ -3,7 +3,8 @@ import asyncio
 import anyio
 from sqlalchemy.orm import Session
 from app.models.tool import Tool
-from app.services import workflow_service
+from app.models.agent import Agent
+from app.services import workflow_service, agent_assignment_service, conversation_session_service
 from fastmcp.client import Client
 
 def execute_custom_tool(db: Session, tool: Tool, company_id: int, session_id: str, parameters: dict):
@@ -65,4 +66,64 @@ async def execute_mcp_tool(db_tool: Tool, mcp_tool_name: str, parameters: dict):
         return {
             "error": f"An error occurred on MCP server {mcp_server_url} while running tool '{mcp_tool_name}'.",
             "details": str(e)
+        }
+
+
+async def execute_handoff_tool(db: Session, session_id: str, parameters: dict):
+    """
+    Executes the built-in handoff tool to transfer conversation to a human agent.
+
+    Args:
+        db: Database session
+        session_id: Conversation session ID
+        parameters: Tool parameters (reason, summary, priority, pool)
+
+    Returns:
+        Dictionary with handoff result
+    """
+    reason = parameters.get("reason", "customer_request")
+    summary = parameters.get("summary", "")
+    priority = parameters.get("priority", "normal")
+
+    # Get the session to find the agent
+    session = conversation_session_service.get_session(db, session_id)
+    if not session or not session.agent_id:
+        print(f"[HANDOFF TOOL] Session or agent not found for session_id: {session_id}")
+        team_name = "Support"  # Default fallback
+    else:
+        # Get the agent to find the configured handoff team
+        agent = db.query(Agent).filter(Agent.id == session.agent_id).first()
+        if agent and agent.handoff_team_id and agent.handoff_team:
+            team_name = agent.handoff_team.name
+            print(f"[HANDOFF TOOL] Using agent's configured team: {team_name}")
+        else:
+            # Use parameter if provided, otherwise default to "Support"
+            team_name = parameters.get("pool", "Support")
+            print(f"[HANDOFF TOOL] Agent has no configured team, using: {team_name}")
+
+    print(f"[HANDOFF TOOL] Session: {session_id}, Reason: {reason}, Team: {team_name}, Priority: {priority}")
+    print(f"[HANDOFF TOOL] Summary: {summary}")
+
+    try:
+        # Request handoff via assignment service
+        handoff_result = await agent_assignment_service.request_handoff(
+            db=db,
+            session_id=session_id,
+            reason=reason,
+            team_name=team_name,
+            priority=priority
+        )
+
+        # Add summary to context
+        handoff_result["summary"] = summary
+
+        print(f"[HANDOFF TOOL] Result: {handoff_result}")
+        return {"result": handoff_result}
+
+    except Exception as e:
+        print(f"[HANDOFF TOOL] Error: {e}")
+        return {
+            "error": "An error occurred while processing handoff request.",
+            "details": str(e),
+            "traceback": traceback.format_exc()
         }

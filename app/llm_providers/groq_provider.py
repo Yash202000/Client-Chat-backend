@@ -64,10 +64,24 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
                 continue  # retry if invalid tool was detected
 
             # If no tool call, return plain text
-            return {"type": "text", "content": response_message.content}
+            # Check if content contains malformed function syntax (model hallucinating tool calls)
+            content = response_message.content or ""
+            if content and ("<function=" in content or "</function>" in content):
+                print(f"⚠️ Groq model generated malformed function syntax in text. Model: {model_name}")
+                print(f"⚠️ Consider switching to llama-3.3-70b-versatile for proper function calling support.")
+                # Return a generic message instead of the malformed syntax
+                return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?"}
+
+            return {"type": "text", "content": content}
 
         except Exception as e:
+            error_str = str(e)
             print(f"Groq API Error: {e}")
+
+            # Check if it's a tool use failure with Groq
+            if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
+                print(f"⚠️ Tool calling failed with current Groq model. Consider using llama-3.3-70b-versatile or llama-3.1-70b-versatile for better function calling support.")
+
             return {"type": "text", "content": f"LLM provider error: {e}"}
 
     return {

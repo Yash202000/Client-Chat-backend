@@ -23,6 +23,14 @@ class ConversationSession(Base):
     reopen_count = Column(Integer, nullable=False, default=0) # Number of times conversation has been reopened after resolution
     last_reopened_at = Column(DateTime, nullable=True) # Timestamp of most recent reopening
     resolved_at = Column(DateTime, nullable=True) # Timestamp when conversation was marked as resolved
+
+    # Human handoff fields
+    handoff_requested_at = Column(DateTime, nullable=True) # When handoff to human was requested
+    handoff_reason = Column(String, nullable=True) # Reason for handoff (e.g., 'customer_request', 'complex_issue', 'escalation')
+    assigned_pool = Column(String, nullable=True) # Agent pool for assignment (e.g., 'support', 'sales')
+    waiting_for_agent = Column(Boolean, nullable=False, default=False, server_default='false') # Client is waiting for human agent
+    handoff_accepted_at = Column(DateTime, nullable=True) # When agent accepted the handoff
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

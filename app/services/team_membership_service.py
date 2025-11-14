@@ -95,3 +95,66 @@ def is_user_in_team(db: Session, user_id: int, team_id: int) -> bool:
         models_team_membership.TeamMembership.user_id == user_id,
         models_team_membership.TeamMembership.team_id == team_id
     ).first() is not None
+
+
+# Agent pool management methods for handoff functionality
+
+def get_available_team_members(db: Session, team_id: int, company_id: int):
+    """Get all available team members (is_available=True and not overloaded)"""
+    return db.query(models_team_membership.TeamMembership).join(models_user.User).filter(
+        models_team_membership.TeamMembership.team_id == team_id,
+        models_team_membership.TeamMembership.company_id == company_id,
+        models_team_membership.TeamMembership.is_available == True,
+        models_user.User.presence_status.in_(['online', 'available']),
+        models_team_membership.TeamMembership.current_session_count < models_team_membership.TeamMembership.max_concurrent_sessions
+    ).all()
+
+
+def update_member_availability(db: Session, membership_id: int, is_available: bool, company_id: int):
+    """Update agent availability status"""
+    db_membership = get_team_membership(db, membership_id, company_id)
+    if db_membership:
+        db_membership.is_available = is_available
+        db.commit()
+        db.refresh(db_membership)
+    return db_membership
+
+
+def increment_session_count(db: Session, membership_id: int, company_id: int):
+    """Increment the current session count for a team member"""
+    db_membership = get_team_membership(db, membership_id, company_id)
+    if db_membership:
+        db_membership.current_session_count += 1
+        db.commit()
+        db.refresh(db_membership)
+    return db_membership
+
+
+def decrement_session_count(db: Session, membership_id: int, company_id: int):
+    """Decrement the current session count for a team member"""
+    db_membership = get_team_membership(db, membership_id, company_id)
+    if db_membership and db_membership.current_session_count > 0:
+        db_membership.current_session_count -= 1
+        db.commit()
+        db.refresh(db_membership)
+    return db_membership
+
+
+def update_member_priority(db: Session, membership_id: int, priority: int, company_id: int):
+    """Update agent priority for assignment"""
+    db_membership = get_team_membership(db, membership_id, company_id)
+    if db_membership:
+        db_membership.priority = priority
+        db.commit()
+        db.refresh(db_membership)
+    return db_membership
+
+
+def update_member_workload_limits(db: Session, membership_id: int, max_concurrent_sessions: int, company_id: int):
+    """Update maximum concurrent sessions for a team member"""
+    db_membership = get_team_membership(db, membership_id, company_id)
+    if db_membership:
+        db_membership.max_concurrent_sessions = max_concurrent_sessions
+        db.commit()
+        db.refresh(db_membership)
+    return db_membership
