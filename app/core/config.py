@@ -58,6 +58,20 @@ class Settings(BaseSettings):
     WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
     WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
 
+    # LiveKit AI Agents Configuration
+    OPENAI_API_KEY: str = ""
+    DEEPGRAM_API_KEY: str = ""
+    AGENT_LLM_PROVIDER: str = "openai"
+    AGENT_LLM_MODEL: str = "gpt-4o-mini"
+    AGENT_STT_PROVIDER: str = "deepgram"
+    AGENT_STT_LANGUAGE: str = "en"
+    AGENT_TTS_PROVIDER: str = "openai"
+    AGENT_TTS_VOICE: str = "alloy"
+    AGENT_VAD_ENABLED: str = "true"
+    AGENT_ALLOW_INTERRUPTIONS: str = "true"
+    AGENT_GREETING: str = "Hello! I'm your AI voice assistant. How can I help you today?"
+    AGENT_SYSTEM_PROMPT: str = "You are a helpful and friendly voice assistant. Keep your responses concise and natural for voice conversation."
+
     class Config:
         env_file = ".env"
         env_file_encoding = 'utf-8'
