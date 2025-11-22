@@ -13,7 +13,7 @@ import uuid
 
 genai.configure(api_key=settings.GOOGLE_API_KEY)
 
-def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list, api_key: str = None):
+def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list, api_key: str = None, tool_choice: str = "auto"):
     if api_key is None:
         credential = credential_service.get_credential_by_service_name(db, service_name="gemini", company_id=company_id)
         if not credential:

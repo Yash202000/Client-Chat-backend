@@ -40,16 +40,25 @@ def update_contact(
 ):
     return contact_service.update_contact(db=db, contact_id=contact_id, contact=contact, company_id=current_user.company_id)
 
-@router.get("/by_session/{session_id}", response_model=schemas_contact.Contact)
+@router.get("/by_session/{session_id}")
 def get_contact_by_session(
     session_id: str,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
+    """
+    Get contact for a session. Returns null if session has no contact (anonymous sessions).
+    """
     session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == str(session_id),
         models_conversation_session.ConversationSession.company_id == current_user.company_id
     ).first()
-    if not session or not session.contact:
-        raise HTTPException(status_code=404, detail="Contact for this session not found")
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Return null if session has no contact (anonymous session)
+    if not session.contact:
+        return None
+
     return session.contact

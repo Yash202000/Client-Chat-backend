@@ -60,19 +60,20 @@ def get_first_message_for_session(db: Session, session_id: str, company_id: int)
 
 def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCreate, agent_id: int, session_id: str, company_id: int, sender: str, assignee_id: int = None):
 
-    # Get the session to retrieve the contact_id
+    # Get the session to retrieve the contact_id (if available)
     session = db.query(models_conversation_session.ConversationSession).filter(
         models_conversation_session.ConversationSession.conversation_id == session_id,
         models_conversation_session.ConversationSession.company_id == company_id
     ).first()
 
-    if not session or not session.contact_id:
-        raise ValueError(f"Session {session_id} not found or has no associated contact.")
+    if not session:
+        raise ValueError(f"Session {session_id} not found.")
 
     # issue = None
     # if sender == 'user':
     #     issue = tag_issue(message.message)
 
+    # Contact_id can be NULL for anonymous conversations
     db_message = models_chat_message.ChatMessage(
         message=message.message,
         sender=sender,
@@ -81,7 +82,7 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
         company_id=company_id,
         message_type=message.message_type,
         token=message.token, # Add the token here
-        contact_id=session.contact_id,
+        contact_id=session.contact_id,  # Can be NULL for anonymous chats
         assignee_id=assignee_id,  # Store the agent/user who sent this message
         # issue=issue
     )

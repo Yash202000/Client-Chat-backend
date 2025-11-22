@@ -1,4 +1,4 @@
-from groq import Groq
+from openai import OpenAI
 import json
 from sqlalchemy.orm import Session
 from app.services import credential_service
@@ -7,13 +7,13 @@ from app.services.vault_service import vault_service
 def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list = None, api_key: str = None, tool_choice: str = "auto"):
     if api_key is None:
         credential = credential_service.get_credential_by_service_name(
-            db, service_name="groq", company_id=company_id
+            db, service_name="openai", company_id=company_id
         )
         if not credential:
-            raise ValueError("Groq API key not found for this company.")
+            raise ValueError("OpenAI API key not found for this company.")
         api_key = vault_service.decrypt(credential.encrypted_credentials)
 
-    client = Groq(api_key=api_key)
+    client = OpenAI(api_key=api_key)
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(chat_history)
@@ -21,11 +21,15 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
     max_retries = 2
     for attempt in range(max_retries):
         try:
+            # Prepare tool_choice parameter
+            # Can be "auto", "none", or {"type": "function", "function": {"name": "my_function"}}
+            tool_choice_param = tool_choice if tools else None
+
             chat_completion = client.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 tools=tools if tools else None,
-                tool_choice="auto" if tools else "none",
+                tool_choice=tool_choice_param,
             )
             response_message = chat_completion.choices[0].message
 
@@ -41,10 +45,21 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
                             f"You attempted to call '{tool_name}', which is not available. "
                             f"Please choose only from: {', '.join(available_tool_names)}."
                         )
-                        # Add LLM’s bad attempt + corrective instruction
+                        # Add LLM's bad attempt + corrective instruction
                         messages.append({
-                            "role": "system",
+                            "role": "assistant",
                             "content": response_message.content or "",
+                            "tool_calls": [
+                                {
+                                    "id": call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.function.name,
+                                        "arguments": call.function.arguments
+                                    }
+                                }
+                                for call in response_message.tool_calls
+                            ]
                         })
                         messages.append({"role": "system", "content": error_message})
 
@@ -64,23 +79,20 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
                 continue  # retry if invalid tool was detected
 
             # If no tool call, return plain text
-            # Check if content contains malformed function syntax (model hallucinating tool calls)
             content = response_message.content or ""
-            if content and ("<function=" in content or "</function>" in content):
-                print(f"⚠️ Groq model generated malformed function syntax in text. Model: {model_name}")
-                print(f"⚠️ Consider switching to llama-3.3-70b-versatile for proper function calling support.")
-                # Return a generic message instead of the malformed syntax
-                return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?"}
-
             return {"type": "text", "content": content}
 
         except Exception as e:
             error_str = str(e)
-            print(f"Groq API Error: {e}")
+            print(f"OpenAI API Error: {e}")
 
-            # Check if it's a tool use failure with Groq
-            if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
-                print(f"⚠️ Tool calling failed with current Groq model. Consider using llama-3.3-70b-versatile or llama-3.1-70b-versatile for better function calling support.")
+            # Check for specific OpenAI errors
+            if "invalid_api_key" in error_str or "Incorrect API key" in error_str:
+                print(f"⚠️ Invalid OpenAI API key. Please check your credentials.")
+            elif "rate_limit" in error_str:
+                print(f"⚠️ OpenAI rate limit exceeded. Please try again later.")
+            elif "model_not_found" in error_str:
+                print(f"⚠️ Model '{model_name}' not found. Available models: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo")
 
             return {"type": "text", "content": f"LLM provider error: {e}"}
 

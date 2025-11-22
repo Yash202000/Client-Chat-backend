@@ -800,9 +800,6 @@ async def public_websocket_endpoint(
             with get_db_session() as db:
                 workflow_exec_service = WorkflowExecutionService(db)
 
-                # Ensure contact and session exist before creating a message
-                contact = contact_service.get_or_create_contact_for_channel(db, company_id=company_id, channel="web_chat", channel_identifier=session_id)
-
                 # Check if this is a new session
                 existing_session = db.query(models_conversation_session.ConversationSession).filter(
                     models_conversation_session.ConversationSession.conversation_id == session_id,
@@ -810,7 +807,9 @@ async def public_websocket_endpoint(
                 ).first()
                 is_new_session = existing_session is None
 
-                session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id)
+                # Create session without contact for anonymous websocket conversations
+                # Contact will be created only when user provides information or via platform/LLM tools
+                session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=None, channel="web_chat", company_id=company_id, agent_id=agent_id)
 
                 # Broadcast new session creation to all company users
                 if is_new_session:

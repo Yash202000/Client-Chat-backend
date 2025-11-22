@@ -11,7 +11,7 @@ from app.models.agent import Agent
 
 import numpy as np
 import chromadb
-from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provider, groq_provider
+from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provider, groq_provider, openai_provider
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
 from app.core.object_storage import s3_client, chroma_client
@@ -131,6 +131,7 @@ class CustomJsonEncoder(json.JSONEncoder):
 PROVIDER_MAP = {
     "groq": groq_provider,
     "gemini": gemini_provider,
+    "openai": openai_provider,
 }
 
 def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
@@ -161,11 +162,35 @@ def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
 import asyncio
 from fastmcp.client import Client
 
+def _sanitize_schema_for_openai(schema: dict) -> dict:
+    """
+    Removes OpenAI-incompatible schema properties like anyOf, oneOf, allOf, enum, not at the top level.
+    Returns a sanitized copy of the schema.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # Create a copy to avoid modifying the original
+    sanitized = schema.copy()
+
+    # Remove incompatible top-level keys
+    incompatible_keys = ['anyOf', 'oneOf', 'allOf', 'enum', 'not']
+    for key in incompatible_keys:
+        if key in sanitized:
+            print(f"[SCHEMA SANITIZATION] Removing '{key}' from schema for OpenAI compatibility")
+            del sanitized[key]
+
+    return sanitized
+
 async def _get_tools_for_agent(agent):
     """
     Builds a list of tool definitions for the LLM, including custom, MCP, and built-in tools.
+    Uses provider-specific schemas for compatibility.
     """
     tool_definitions = []
+
+    # Determine if we need OpenAI-compatible schemas
+    is_openai = agent.llm_provider == "openai"
 
     # Add built-in handoff tool (always available)
     tool_definitions.append({
@@ -190,14 +215,70 @@ async def _get_tools_for_agent(agent):
         }
     })
 
+    # Add built-in contact management tools with provider-specific schemas
+    contact_params = {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "The contact's full name"
+            },
+            "email": {
+                "type": "string",
+                "description": "The contact's email address"
+            },
+            "phone_number": {
+                "type": "string",
+                "description": "The contact's phone number"
+            }
+        }
+    }
+
+    # OpenAI doesn't support anyOf at top level, so we make all fields optional
+    # The validation will happen in the tool execution function
+    if not is_openai:
+        # For Groq and Gemini, we can use anyOf
+        contact_params["anyOf"] = [
+            {"required": ["name"]},
+            {"required": ["email"]},
+            {"required": ["phone_number"]}
+        ]
+    # For OpenAI, all fields are optional (no required array), validation happens server-side
+
+    tool_definitions.append({
+        "type": "function",
+        "function": {
+            "name": "create_or_update_contact",
+            "description": "Saves or updates contact information for the current conversation. Call this IMMEDIATELY after collecting each piece of information (name, email, or phone). You can provide one, two, or all three fields at once. IMPORTANT: You must collect ALL THREE fields (name, email, phone) from the user - call this tool multiple times if needed to update as you collect more information.",
+            "parameters": contact_params
+        }
+    })
+
+    tool_definitions.append({
+        "type": "function",
+        "function": {
+            "name": "get_contact_info",
+            "description": "Retrieves the contact information for the current conversation if available. Returns null if no contact has been created yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    })
+
     for tool in agent.tools:
         if tool.tool_type == "custom":
+            # Sanitize parameters for OpenAI if needed
+            params = tool.parameters or {}
+            if is_openai:
+                params = _sanitize_schema_for_openai(params)
+
             tool_definitions.append({
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": tool.parameters or {},
+                    "parameters": params,
                 },
             })
         elif tool.tool_type == "mcp" and tool.mcp_server_url:
@@ -208,10 +289,14 @@ async def _get_tools_for_agent(agent):
                     # Simplify the complex MCP schema for the LLM
                     ref_name = mcp_tool.inputSchema.get('properties', {}).get('params', {}).get('$ref', '').split('/')[-1]
                     simple_params_schema = mcp_tool.inputSchema.get('$defs', {}).get(ref_name, {})
-                    
+
                     if not simple_params_schema:
                          # Fallback to the original schema if simplification fails
                         simple_params_schema = mcp_tool.inputSchema
+
+                    # Sanitize MCP schema for OpenAI if needed
+                    if is_openai:
+                        simple_params_schema = _sanitize_schema_for_openai(simple_params_schema)
 
                     tool_description = mcp_tool.description or f"No description available for {mcp_tool.name}."
                     tool_definitions.append({
@@ -256,11 +341,22 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})
 
+    # Check if this is the first message in the conversation (no assistant messages yet)
+    is_first_message = not any(msg.get("role") == "assistant" for msg in formatted_history)
+
+    print(f"[AGENT EXECUTION DEBUG] Session: {boradcast_session_id}")
+    print(f"[AGENT EXECUTION DEBUG] Formatted history length: {len(formatted_history)}")
+    print(f"[AGENT EXECUTION DEBUG] Is first message: {is_first_message}")
+    print(f"[AGENT EXECUTION DEBUG] History roles: {[msg.get('role') for msg in formatted_history]}")
+    print(f"[AGENT EXECUTION DEBUG] LLM Provider: {agent.llm_provider}")
+
     # Note: Typing indicator is now handled at the WebSocket endpoint level
     # to ensure it shows immediately after user message (not here which is later in the flow)
 
     try:
         agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
+
+        # Build base system prompt
         system_prompt = (
             "You are a helpful and precise assistant. Your primary goal is to assist users by using the tools provided. "
             "Follow these rules strictly:\n"
@@ -272,6 +368,34 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             "6. For example, if a tool requires a 'user\_id', and the user asks to 'get user details', you must respond with: 'I can certainly help you find those details. Could you please provide the user's ID?'\n"
             "7. If a tool the user requests is conceptually unavailable (like 'list all orders' when only 'get order by ID' is available), explain the limitation in **simple, non-technical terms** and offer the alternative tool without mentioning the function names.\n"
             "8. **HUMAN HANDOFF**: If the user explicitly asks to speak with a human agent, or if the issue becomes too complex for you to handle, use the 'request_human_handoff' tool. Provide a clear summary of the conversation so the human agent can quickly understand the context.\n"
+        )
+
+        # Add contact collection instruction - emphasize more strongly for first message
+        if is_first_message:
+            system_prompt += (
+                "9. **CONTACT INFORMATION COLLECTION (CRITICAL - THIS IS THE FIRST MESSAGE)**: \n"
+                "   THIS IS THE USER'S FIRST MESSAGE. You MUST immediately call 'get_contact_info' BEFORE responding to anything else.\n"
+                "   Your FIRST action must be to call the 'get_contact_info' tool. DO NOT greet the user or respond to their message until you do this.\n"
+                "   After calling 'get_contact_info':\n"
+                "   a) If we have complete info (name AND email AND phone), greet them by name and proceed with helping them\n"
+                "   b) If ANY field is missing (name, email, OR phone), you MUST collect ALL missing fields one by one:\n"
+                "      - Missing name? Ask: 'To get started, may I have your name?'\n"
+                "      - Missing email? Ask: 'Great! And what's your email address?'\n"
+                "      - Missing phone? Ask: 'Perfect! Lastly, what's your phone number?'\n"
+                "   c) After EACH piece of information is provided, IMMEDIATELY call 'create_or_update_contact' to save it\n"
+                "   d) DO NOT proceed with their actual request until you have collected ALL THREE fields\n"
+                "   e) Only after you have name, email, AND phone number should you ask 'How can I help you today?'\n"
+                "   REMEMBER: Your VERY FIRST ACTION must be to call 'get_contact_info'. No exceptions.\n"
+            )
+        else:
+            system_prompt += (
+                "9. **CONTACT INFORMATION COLLECTION (ONGOING)**: \n"
+                "   Continue collecting any missing contact information (name, email, phone) if not yet complete.\n"
+                "   After EACH piece of information is provided, IMMEDIATELY call 'create_or_update_contact' to save it.\n"
+                "   Only proceed with the user's request once all three fields are collected.\n"
+            )
+
+        system_prompt += (
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
             f"The user's request will be provided next. Current system instructions: {agent.prompt}"
         )
@@ -280,10 +404,22 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
 
         MAX_HISTORY = 10
         formatted_history = formatted_history[-MAX_HISTORY:]
+
+        # For first message, force the AI to call get_contact_info
+        tool_choice_param = "auto"  # Default
+        if is_first_message and agent.llm_provider == "openai":
+            # Force OpenAI to call get_contact_info on first message
+            tool_choice_param = {
+                "type": "function",
+                "function": {"name": "get_contact_info"}
+            }
+            print(f"[AGENT EXECUTION] First message detected - forcing get_contact_info tool call")
+
         llm_response = provider_module.generate_response(
             db=db, company_id=company_id, model_name=agent.model_name,
             system_prompt=system_prompt, chat_history=formatted_history,
-            tools=generic_tools, api_key=agent_api_key
+            tools=generic_tools, api_key=agent_api_key,
+            tool_choice=tool_choice_param
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
@@ -296,6 +432,13 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     final_agent_response_text = None
     tool_name = None
     tool_result = None
+
+    # Handle both single tool call (dict) and multiple tool calls (list)
+    if isinstance(llm_response, list):
+        # Multiple tool calls - process the first one for now
+        # TODO: Handle multiple tool calls in sequence
+        llm_response = llm_response[0]
+        print(f"[Agent Execution] Warning: Multiple tool calls detected, processing first one only")
 
     if llm_response.get('type') == 'tool_call':
         tool_name = llm_response.get('tool_name')
@@ -313,6 +456,14 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         if tool_name == "request_human_handoff":
             tool_result = await tool_execution_service.execute_handoff_tool(
                 db=db, session_id=boradcast_session_id, parameters=parameters
+            )
+        elif tool_name == "create_or_update_contact":
+            tool_result = await tool_execution_service.execute_create_or_update_contact_tool(
+                db=db, session_id=boradcast_session_id, company_id=company_id, parameters=parameters
+            )
+        elif tool_name == "get_contact_info":
+            tool_result = await tool_execution_service.execute_get_contact_info_tool(
+                db=db, session_id=boradcast_session_id, company_id=company_id
             )
         elif '__' in tool_name:
             connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
@@ -334,29 +485,66 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             )
         
         result_content = tool_result.get('result', tool_result.get('error', 'No output'))
-        
-        # --- Get Final Response from LLM ---
-        assistant_message = {"role": "assistant", "content": None, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(parameters)}}]}
-        tool_response_message = {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": json.dumps(result_content, cls=CustomJsonEncoder)}
-        
-        formatted_history.append(assistant_message)
-        formatted_history.append(tool_response_message)
 
-        # This is the new, specific prompt for summarizing the tool's output.
-        final_response_prompt = (
-            "You have just successfully used a tool to retrieve information for the user. "
-            "The user's original query and the data from the tool are in the chat history. "
-            "Your task is to synthesize this information into a concise, natural, and helpful response. "
-            "Do NOT mention the tool name, tool IDs, or the fact that you are processing a tool result. "
-            "Simply provide a direct and clear answer to the user's question based on the data."
-        )
+        # Check if tool provided a formatted response (optimization for contact tools)
+        if 'formatted_response' in tool_result:
+            # Use pre-formatted response directly, skip second LLM call
+            final_agent_response_text = tool_result['formatted_response']
+            print(f"[AGENT EXECUTION] Using pre-formatted response from tool, skipping LLM call")
+            print(f"[AGENT EXECUTION] Formatted response: {final_agent_response_text}")
+        else:
+            # --- Get Final Response from LLM ---
+            assistant_message = {"role": "assistant", "content": None, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(parameters)}}]}
+            tool_response_message = {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": json.dumps(result_content, cls=CustomJsonEncoder)}
 
-        final_response = provider_module.generate_response(
-            db=db, company_id=company_id, model_name=agent.model_name,
-            system_prompt=final_response_prompt, chat_history=formatted_history,
-            tools=[], api_key=agent_api_key
-        )
-        final_agent_response_text = final_response.get('content', 'No response content.')
+            formatted_history.append(assistant_message)
+            formatted_history.append(tool_response_message)
+
+            # Build context-aware prompt based on which tool was called
+            if tool_name == "get_contact_info":
+                # Special handling for contact info tool
+                final_response_prompt = (
+                    "You just called the 'get_contact_info' tool to check what contact information we have for this user. "
+                    "The tool result is in the chat history. "
+                    "Based on the result:\n"
+                    "- If contact is null (None), it means we have NO information. Ask for their name: 'To get started, may I have your name?'\n"
+                    "- If contact exists but name is missing/null, ask: 'To get started, may I have your name?'\n"
+                    "- If contact exists but email is missing/null, ask: 'Great! And what's your email address?'\n"
+                    "- If contact exists but phone_number is missing/null, ask: 'Perfect! Lastly, what's your phone number?'\n"
+                    "- If all three fields exist (name, email, phone_number), greet them warmly by name and ask 'How can I help you today?'\n"
+                    "IMPORTANT: Ask for ONE missing field at a time. Do NOT ask for all fields at once.\n"
+                    "Do NOT mention tools, APIs, or technical details. Keep it natural and conversational."
+                )
+            elif tool_name == "create_or_update_contact":
+                # Special handling for contact creation/update tool
+                final_response_prompt = (
+                    "You just saved contact information using the 'create_or_update_contact' tool. "
+                    "The tool result shows which fields were saved. Look at the contact data in the tool result.\n"
+                    "Now check what's STILL MISSING:\n"
+                    "- If name is null/missing: Ask 'To get started, may I have your name?'\n"
+                    "- If email is null/missing: Ask 'Great! And what's your email address?'\n"
+                    "- If phone_number is null/missing: Ask 'Perfect! Lastly, what's your phone number?'\n"
+                    "- If ALL THREE fields now exist (name, email, phone_number), thank them and ask 'How can I help you today?'\n"
+                    "CRITICAL: You MUST collect all three fields (name, email, phone) before asking how you can help.\n"
+                    "Ask for ONE missing field at a time. Do NOT skip any fields.\n"
+                    "Do NOT mention tools, APIs, or technical details. Keep it natural and conversational."
+                )
+            else:
+                # Standard prompt for other tools
+                final_response_prompt = (
+                    "You have just successfully used a tool to retrieve information for the user. "
+                    "The user's original query and the data from the tool are in the chat history. "
+                    "Your task is to synthesize this information into a concise, natural, and helpful response. "
+                    "Do NOT mention the tool name, tool IDs, or the fact that you are processing a tool result. "
+                    "Simply provide a direct and clear answer to the user's question based on the data."
+                )
+
+            final_response = provider_module.generate_response(
+                db=db, company_id=company_id, model_name=agent.model_name,
+                system_prompt=final_response_prompt, chat_history=formatted_history,
+                tools=[], api_key=agent_api_key
+            )
+            final_agent_response_text = final_response.get('content', 'No response content.')
 
     elif llm_response.get('type') == 'text':
         final_agent_response_text = llm_response.get('content', 'No response content.')

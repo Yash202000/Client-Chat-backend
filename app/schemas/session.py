@@ -1,6 +1,16 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
+class ContactInfo(BaseModel):
+    """Contact information embedded in session response"""
+    id: Optional[int] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 class Session(BaseModel):
     session_id: str = Field(..., alias="conversation_id")
     status: str
@@ -10,7 +20,9 @@ class Session(BaseModel):
     channel: Optional[str] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    contact: Optional[ContactInfo] = None  # Full contact object
     is_client_connected: Optional[bool] = False
+    is_ai_enabled: Optional[bool] = True
 
     class Config:
         populate_by_name = True
