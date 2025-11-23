@@ -44,6 +44,7 @@ class Agent(Base):
     workflows = relationship("Workflow", back_populates="agent")
     widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")
     parent_version = relationship("Agent", remote_side=[id])
+    campaigns = relationship("Campaign", back_populates="agent")
     voice_id = Column(String, nullable=True, default='default')
     tts_provider = Column(String, nullable=False, default='voice_engine')
     stt_provider = Column(String, nullable=False, default='deepgram')

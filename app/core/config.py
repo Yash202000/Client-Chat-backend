@@ -30,6 +30,20 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"
 
+    # SMTP Email settings
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_FROM_NAME: str = "AgentConnect"
+
+    # Twilio SMS settings
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
+
     # MinIO/S3 settings
     minio_endpoint: str
     minio_secure: bool = False

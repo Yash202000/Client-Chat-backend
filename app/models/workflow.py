@@ -55,6 +55,7 @@ class Workflow(Base):
     triggers = relationship("WorkflowTrigger", back_populates="workflow", cascade="all, delete-orphan")
     company_id = Column(Integer, ForeignKey("companies.id"))
     company = relationship("Company", back_populates="workflows")
+    campaigns = relationship("Campaign", back_populates="workflow")
 
 # Add back-population to Company model
 from app.models.company import Company

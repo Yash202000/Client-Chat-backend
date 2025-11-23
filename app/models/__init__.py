@@ -42,3 +42,11 @@ from app.models.ai_tool_category import AIToolCategory
 from app.models.ai_tool_question import AIToolQuestion
 from app.models.intent import Intent, IntentMatch, Entity, ConversationTag
 
+# CRM Models
+from app.models.lead import Lead
+from app.models.campaign import Campaign
+from app.models.campaign_contact import CampaignContact
+from app.models.campaign_message import CampaignMessage
+from app.models.campaign_activity import CampaignActivity
+from app.models.lead_score import LeadScore
+
