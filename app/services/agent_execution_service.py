@@ -415,11 +415,13 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             }
             print(f"[AGENT EXECUTION] First message detected - forcing get_contact_info tool call")
 
-        llm_response = provider_module.generate_response(
+        # Call LLM provider asynchronously (disable streaming when using tools)
+        llm_response = await provider_module.generate_response(
             db=db, company_id=company_id, model_name=agent.model_name,
             system_prompt=system_prompt, chat_history=formatted_history,
             tools=generic_tools, api_key=agent_api_key,
-            tool_choice=tool_choice_param
+            tool_choice=tool_choice_param,
+            stream=False  # Disable streaming when tools are enabled
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
@@ -539,10 +541,12 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                     "Simply provide a direct and clear answer to the user's question based on the data."
                 )
 
-            final_response = provider_module.generate_response(
+            # Call LLM provider asynchronously for final response (disable streaming for tool result processing)
+            final_response = await provider_module.generate_response(
                 db=db, company_id=company_id, model_name=agent.model_name,
                 system_prompt=final_response_prompt, chat_history=formatted_history,
-                tools=[], api_key=agent_api_key
+                tools=[], api_key=agent_api_key,
+                stream=False  # Disable streaming for tool result processing
             )
             final_agent_response_text = final_response.get('content', 'No response content.')
 
@@ -569,3 +573,76 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         }
 
     return final_agent_response_text
+
+
+async def generate_agent_response_stream(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str):
+    """
+    Streaming version of generate_agent_response.
+    Yields tokens as they arrive from the LLM for real-time user experience.
+    Note: Streaming is ONLY supported for text responses (no tool calls).
+    If tools are needed, falls back to non-streaming mode.
+    """
+    agent = agent_service.get_agent(db, agent_id, company_id)
+    if not agent:
+        print(f"Error: Agent not found for agent_id {agent_id}")
+        return
+
+    provider_module = PROVIDER_MAP.get(agent.llm_provider)
+    if not provider_module:
+        print(f"Error: LLM provider '{agent.llm_provider}' not found.")
+        return
+
+    # Get RAG context
+    rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
+
+    generic_tools = await _get_tools_for_agent(agent)
+    db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
+    formatted_history = format_chat_history(db_chat_history)
+    formatted_history.append({"role": "user", "content": user_message})
+
+    is_first_message = not any(msg.get("role") == "assistant" for msg in formatted_history)
+
+    # If tools are present or it's first message (requires tool call), fall back to non-streaming
+    if generic_tools or is_first_message:
+        print(f"[STREAMING] Tools detected or first message - falling back to non-streaming mode")
+        # Call non-streaming version and yield the complete response
+        response = await generate_agent_response(db, agent_id, session_id, boradcast_session_id, company_id, user_message)
+        if response:
+            yield json.dumps({"type": "complete", "content": response})
+        return
+
+    try:
+        agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
+
+        system_prompt = (
+            "You are a helpful and precise assistant. "
+            f"Current system instructions: {agent.prompt}"
+        )
+        if rag_context:
+            system_prompt += f"\n\nHere is some context from the knowledge base that might be relevant:\n{rag_context}"
+
+        MAX_HISTORY = 10
+        formatted_history = formatted_history[-MAX_HISTORY:]
+
+        # Call LLM provider with streaming enabled
+        llm_response = await provider_module.generate_response(
+            db=db, company_id=company_id, model_name=agent.model_name,
+            system_prompt=system_prompt, chat_history=formatted_history,
+            tools=None,  # No tools in streaming mode
+            api_key=agent_api_key,
+            stream=True  # Enable streaming
+        )
+
+        # Check if response is a generator (streaming) or dict (non-streaming fallback)
+        if hasattr(llm_response, '__aiter__'):
+            # Stream tokens as they arrive
+            async for token_json in llm_response:
+                yield token_json
+        else:
+            # Fallback to non-streaming if provider doesn't support streaming
+            content = llm_response.get('content', '')
+            yield json.dumps({"type": "complete", "content": content})
+
+    except Exception as e:
+        print(f"LLM Streaming Error: {e}")
+        yield json.dumps({"type": "error", "content": f"Error: {str(e)}"})

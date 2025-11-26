@@ -1,10 +1,26 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 import json
 from sqlalchemy.orm import Session
 from app.services import credential_service
 from app.services.vault_service import vault_service
+from app.core.config import settings
+from typing import AsyncGenerator, Union, Dict, List
 
-def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list = None, api_key: str = None, tool_choice: str = "auto"):
+async def generate_response(
+    db: Session,
+    company_id: int,
+    model_name: str,
+    system_prompt: str,
+    chat_history: list,
+    tools: list = None,
+    api_key: str = None,
+    tool_choice: str = "auto",
+    stream: bool = None
+) -> Union[Dict, AsyncGenerator[str, None]]:
+    # Use settings default if stream parameter is not explicitly set
+    if stream is None:
+        stream = settings.LLM_STREAMING_ENABLED
+
     if api_key is None:
         credential = credential_service.get_credential_by_service_name(
             db, service_name="openai", company_id=company_id
@@ -13,7 +29,10 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
             raise ValueError("OpenAI API key not found for this company.")
         api_key = vault_service.decrypt(credential.encrypted_credentials)
 
-    client = OpenAI(api_key=api_key)
+    client = AsyncOpenAI(
+        api_key=api_key,
+        timeout=settings.LLM_REQUEST_TIMEOUT
+    )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(chat_history)
@@ -25,7 +44,43 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
             # Can be "auto", "none", or {"type": "function", "function": {"name": "my_function"}}
             tool_choice_param = tool_choice if tools else None
 
-            chat_completion = client.chat.completions.create(
+            # STREAMING MODE: Cannot use tools with streaming currently
+            if stream and not tools:
+                async def stream_response():
+                    full_content = ""
+                    try:
+                        stream_iter = await client.chat.completions.create(
+                            messages=messages,
+                            model=model_name,
+                            stream=True,
+                        )
+
+                        async for chunk in stream_iter:
+                            if chunk.choices[0].delta.content:
+                                token = chunk.choices[0].delta.content
+                                full_content += token
+                                yield json.dumps({"type": "stream", "content": token})
+
+                        # Send final message indicating completion
+                        yield json.dumps({"type": "stream_end", "full_content": full_content})
+
+                    except Exception as e:
+                        error_str = str(e)
+                        print(f"OpenAI Streaming Error: {e}")
+
+                        if "invalid_api_key" in error_str or "Incorrect API key" in error_str:
+                            print(f"⚠️ Invalid OpenAI API key. Please check your credentials.")
+                        elif "rate_limit" in error_str:
+                            print(f"⚠️ OpenAI rate limit exceeded. Please try again later.")
+                        elif "model_not_found" in error_str:
+                            print(f"⚠️ Model '{model_name}' not found. Available models: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo")
+
+                        yield json.dumps({"type": "error", "content": f"LLM provider error: {e}"})
+
+                return stream_response()
+
+            # NON-STREAMING MODE: Original logic with tool support
+            chat_completion = await client.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 tools=tools if tools else None,

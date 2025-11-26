@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
     WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
 
+    # LLM Streaming Configuration
+    LLM_STREAMING_ENABLED: bool = False  # Disabled streaming responses by default
+    LLM_STREAM_TOKEN_BUFFER: int = 1  # Number of tokens to buffer before sending (1 = real-time)
+    LLM_REQUEST_TIMEOUT: int = 120  # Timeout for LLM API calls in seconds
+    HTTP_REQUEST_TIMEOUT: int = 30  # Timeout for workflow HTTP requests in seconds
+
     # LiveKit AI Agents Configuration
     OPENAI_API_KEY: str = ""
     DEEPGRAM_API_KEY: str = ""

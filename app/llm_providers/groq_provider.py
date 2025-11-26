@@ -1,10 +1,26 @@
-from groq import Groq
+from groq import AsyncGroq
 import json
 from sqlalchemy.orm import Session
 from app.services import credential_service
 from app.services.vault_service import vault_service
+from app.core.config import settings
+from typing import AsyncGenerator, Union, Dict, List
 
-def generate_response(db: Session, company_id: int, model_name: str, system_prompt: str, chat_history: list, tools: list = None, api_key: str = None, tool_choice: str = "auto"):
+async def generate_response(
+    db: Session,
+    company_id: int,
+    model_name: str,
+    system_prompt: str,
+    chat_history: list,
+    tools: list = None,
+    api_key: str = None,
+    tool_choice: str = "auto",
+    stream: bool = None
+) -> Union[Dict, AsyncGenerator[str, None]]:
+    # Use settings default if stream parameter is not explicitly set
+    if stream is None:
+        stream = settings.LLM_STREAMING_ENABLED
+
     if api_key is None:
         credential = credential_service.get_credential_by_service_name(
             db, service_name="groq", company_id=company_id
@@ -13,7 +29,10 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
             raise ValueError("Groq API key not found for this company.")
         api_key = vault_service.decrypt(credential.encrypted_credentials)
 
-    client = Groq(api_key=api_key)
+    client = AsyncGroq(
+        api_key=api_key,
+        timeout=settings.LLM_REQUEST_TIMEOUT
+    )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(chat_history)
@@ -21,7 +40,39 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            chat_completion = client.chat.completions.create(
+            # STREAMING MODE: Cannot use tools with streaming currently
+            if stream and not tools:
+                async def stream_response():
+                    full_content = ""
+                    try:
+                        stream_iter = await client.chat.completions.create(
+                            messages=messages,
+                            model=model_name,
+                            stream=True,
+                        )
+
+                        async for chunk in stream_iter:
+                            if chunk.choices[0].delta.content:
+                                token = chunk.choices[0].delta.content
+                                full_content += token
+                                yield json.dumps({"type": "stream", "content": token})
+
+                        # Send final message indicating completion
+                        yield json.dumps({"type": "stream_end", "full_content": full_content})
+
+                    except Exception as e:
+                        error_str = str(e)
+                        print(f"Groq Streaming Error: {e}")
+
+                        if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
+                            print(f"⚠️ Tool calling failed with current Groq model.")
+
+                        yield json.dumps({"type": "error", "content": f"LLM provider error: {e}"})
+
+                return stream_response()
+
+            # NON-STREAMING MODE: Original logic with tool support
+            chat_completion = await client.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 tools=tools if tools else None,
@@ -41,7 +92,7 @@ def generate_response(db: Session, company_id: int, model_name: str, system_prom
                             f"You attempted to call '{tool_name}', which is not available. "
                             f"Please choose only from: {', '.join(available_tool_names)}."
                         )
-                        # Add LLM’s bad attempt + corrective instruction
+                        # Add LLM's bad attempt + corrective instruction
                         messages.append({
                             "role": "system",
                             "content": response_message.content or "",
