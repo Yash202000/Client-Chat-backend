@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func, String
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -9,7 +9,9 @@ from app.schemas.lead import LeadCreate, LeadUpdate, LeadStageUpdate
 
 def get_lead(db: Session, lead_id: int, company_id: int):
     """Get a single lead by ID"""
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         Lead.id == lead_id,
         Lead.company_id == company_id
     ).first()
@@ -17,14 +19,18 @@ def get_lead(db: Session, lead_id: int, company_id: int):
 
 def get_leads(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     """Get all leads for a company with pagination"""
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         Lead.company_id == company_id
     ).order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()
 
 
 def get_leads_by_stage(db: Session, company_id: int, stage: LeadStage, skip: int = 0, limit: int = 100):
     """Get leads filtered by stage"""
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         Lead.company_id == company_id,
         Lead.stage == stage
     ).order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()
@@ -32,7 +38,9 @@ def get_leads_by_stage(db: Session, company_id: int, stage: LeadStage, skip: int
 
 def get_leads_by_assignee(db: Session, company_id: int, assignee_id: int, skip: int = 0, limit: int = 100):
     """Get leads assigned to a specific user"""
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         Lead.company_id == company_id,
         Lead.assignee_id == assignee_id
     ).order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()
@@ -40,7 +48,9 @@ def get_leads_by_assignee(db: Session, company_id: int, assignee_id: int, skip: 
 
 def get_lead_by_contact(db: Session, contact_id: int, company_id: int):
     """Get lead for a specific contact"""
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         Lead.contact_id == contact_id,
         Lead.company_id == company_id
     ).first()
@@ -159,7 +169,7 @@ def get_lead_stats(db: Session, company_id: int) -> Dict[str, Any]:
     avg_score = db.query(func.avg(Lead.score)).filter(
         Lead.company_id == company_id
     ).scalar()
-    stats['average_score'] = float(avg_score) if avg_score else 0
+    stats['avg_score'] = float(avg_score) if avg_score else 0
 
     # Total deal value
     total_value = db.query(func.sum(Lead.deal_value)).filter(
@@ -174,6 +184,17 @@ def get_lead_stats(db: Session, company_id: int) -> Dict[str, Any]:
         Lead.stage == LeadStage.CUSTOMER
     ).scalar()
     stats['won_revenue'] = float(won_revenue) if won_revenue else 0
+
+    # Qualified and unqualified counts
+    stats['qualified_count'] = db.query(func.count(Lead.id)).filter(
+        Lead.company_id == company_id,
+        Lead.qualification_status == QualificationStatus.QUALIFIED
+    ).scalar() or 0
+
+    stats['unqualified_count'] = db.query(func.count(Lead.id)).filter(
+        Lead.company_id == company_id,
+        Lead.qualification_status == QualificationStatus.UNQUALIFIED
+    ).scalar() or 0
 
     return stats
 
@@ -221,6 +242,8 @@ def search_leads(
             )
         )
 
-    return db.query(Lead).filter(
+    return db.query(Lead).options(
+        joinedload(Lead.contact)
+    ).filter(
         and_(*filters)
     ).order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()

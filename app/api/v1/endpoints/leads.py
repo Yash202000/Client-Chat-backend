@@ -12,7 +12,7 @@ from app.models.lead import LeadStage, QualificationStatus
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas_lead.Lead])
+@router.get("/", response_model=List[schemas_lead.LeadWithContact])
 def list_leads(
     skip: int = 0,
     limit: int = 100,
@@ -65,7 +65,7 @@ def get_lead_stats(
     return lead_service.get_lead_stats(db=db, company_id=current_user.company_id)
 
 
-@router.get("/by-stage/{stage}", response_model=List[schemas_lead.Lead])
+@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact])
 def list_leads_by_stage(
     stage: str,
     skip: int = 0,
@@ -90,7 +90,7 @@ def list_leads_by_stage(
     )
 
 
-@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.Lead])
+@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact])
 def list_leads_by_assignee(
     assignee_id: int,
     skip: int = 0,
@@ -140,7 +140,7 @@ def get_available_contacts(
     return available_contacts
 
 
-@router.get("/{lead_id}", response_model=schemas_lead.Lead)
+@router.get("/{lead_id}", response_model=schemas_lead.LeadWithContact)
 def get_lead(
     lead_id: int,
     db: Session = Depends(get_db),
@@ -366,7 +366,7 @@ def delete_lead(
     return {"success": True}
 
 
-@router.get("/by-stage/{stage}", response_model=List[schemas_lead.Lead])
+@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact])
 def get_leads_by_stage(
     stage: str,
     skip: int = 0,
@@ -387,7 +387,7 @@ def get_leads_by_stage(
     return leads
 
 
-@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.Lead])
+@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact])
 def get_leads_by_assignee(
     assignee_id: int,
     skip: int = 0,
@@ -408,7 +408,7 @@ def get_leads_by_assignee(
     return leads
 
 
-@router.get("/high-value", response_model=List[schemas_lead.Lead])
+@router.get("/high-value", response_model=List[schemas_lead.LeadWithContact])
 def get_high_value_leads(
     min_deal_value: float = Query(10000, description="Minimum deal value"),
     skip: int = 0,
@@ -432,7 +432,7 @@ def get_high_value_leads(
     return leads
 
 
-@router.get("/unassigned", response_model=List[schemas_lead.Lead])
+@router.get("/unassigned", response_model=List[schemas_lead.LeadWithContact])
 def get_unassigned_leads(
     skip: int = 0,
     limit: int = 100,

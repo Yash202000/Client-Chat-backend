@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from decimal import Decimal
+from app.schemas.contact import Contact as ContactSchema
 
 
 class LeadBase(BaseModel):
@@ -64,7 +65,7 @@ class Lead(LeadBase):
 
 class LeadWithContact(Lead):
     """Lead schema with contact information included"""
-    contact: Optional[Any] = None  # Will be Contact schema
+    contact: Optional[ContactSchema] = None
 
     class Config:
         from_attributes = True

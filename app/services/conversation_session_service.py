@@ -185,7 +185,8 @@ async def reopen_resolved_session(db: Session, session: ConversationSession, com
         return session  # Already active or in another state
 
     old_status = session.status
-    session.status = 'active'
+    # If session has an assignee, reopen as 'assigned', otherwise as 'active'
+    session.status = 'assigned' if session.assignee_id else 'active'
     db.commit()
     db.refresh(session)
 
@@ -195,14 +196,14 @@ async def reopen_resolved_session(db: Session, session: ConversationSession, com
         json.dumps({
             "type": "session_reopened",
             "session_id": session.conversation_id,
-            "status": "active",
+            "status": session.status,  # Use actual status (assigned or active)
             "previous_status": old_status,
             "assignee_id": session.assignee_id,
             "updated_at": session.updated_at.isoformat()
         })
     )
 
-    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} reopened from {old_status} → active")
+    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} reopened from {old_status} → {session.status}")
 
     return session
 
