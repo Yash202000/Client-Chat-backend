@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments
 
 
 api_router = APIRouter()
@@ -83,3 +83,5 @@ api_router.include_router(intents.router, prefix="/intents", tags=["intents"])
 # CRM routers
 api_router.include_router(leads.router, prefix="/leads", tags=["leads"])
 api_router.include_router(campaigns.router, prefix="/campaigns", tags=["campaigns"])
+api_router.include_router(tags.router, prefix="/tags", tags=["tags"])
+api_router.include_router(segments.router, prefix="/segments", tags=["segments"])

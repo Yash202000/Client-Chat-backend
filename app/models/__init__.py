@@ -49,4 +49,6 @@ from app.models.campaign_contact import CampaignContact
 from app.models.campaign_message import CampaignMessage
 from app.models.campaign_activity import CampaignActivity
 from app.models.lead_score import LeadScore
+from app.models.tag import Tag, lead_tags, contact_tags
+from app.models.segment import Segment, SegmentType
 

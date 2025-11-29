@@ -7,6 +7,8 @@ from app.models.campaign_contact import CampaignContact, EnrollmentStatus
 from app.models.campaign_message import CampaignMessage
 from app.models.contact import Contact, LifecycleStage
 from app.models.lead import Lead, LeadStage
+from app.models.segment import Segment, SegmentType
+from app.models.tag import Tag, lead_tags, contact_tags
 from app.schemas.campaign import CampaignCreate, CampaignUpdate
 
 
@@ -93,14 +95,55 @@ def delete_campaign(db: Session, campaign_id: int, company_id: int):
 
 def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> List[Contact]:
     """
-    Get contacts that match the campaign's target criteria.
-    This implements the contact targeting logic based on the campaign's target_criteria JSONB field.
+    Get contacts that match the campaign's target criteria or segment.
+    Supports:
+    1. Segment-based targeting (segment_id on campaign)
+    2. Criteria-based targeting (target_criteria JSONB field)
+    3. Manual selection (contact_ids/lead_ids in target_criteria)
     """
     campaign = get_campaign(db, campaign_id, company_id)
-    if not campaign or not campaign.target_criteria:
+    if not campaign:
+        return []
+
+    # Priority 1: If campaign has a segment_id, use segment-based targeting
+    if campaign.segment_id:
+        return get_contacts_from_segment(db, campaign.segment_id, company_id, campaign_id)
+
+    # Priority 2: Check target_criteria
+    if not campaign.target_criteria:
         return []
 
     criteria = campaign.target_criteria
+
+    # Handle manual selection
+    if criteria.get('manual_selection'):
+        contact_ids = criteria.get('contact_ids', [])
+        lead_ids = criteria.get('lead_ids', [])
+
+        contacts = []
+        if contact_ids:
+            contacts = db.query(Contact).filter(
+                Contact.id.in_(contact_ids),
+                Contact.company_id == company_id
+            ).all()
+
+        # Also get contacts from leads
+        if lead_ids:
+            lead_contacts = db.query(Contact).join(
+                Lead, Contact.id == Lead.contact_id
+            ).filter(
+                Lead.id.in_(lead_ids),
+                Contact.company_id == company_id
+            ).all()
+            # Merge without duplicates
+            existing_ids = {c.id for c in contacts}
+            for lc in lead_contacts:
+                if lc.id not in existing_ids:
+                    contacts.append(lc)
+
+        return contacts
+
+    # Standard criteria-based targeting
     query = db.query(Contact).filter(Contact.company_id == company_id)
     lead_joined = False  # Track if we've already joined the Lead table
 
@@ -115,21 +158,27 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
 
     # Filter by opt-in status
     if 'opt_in_status' in criteria:
-        query = query.filter(Contact.opt_in_status == criteria['opt_in_status'])
+        statuses = criteria['opt_in_status']
+        if isinstance(statuses, list):
+            query = query.filter(Contact.opt_in_status.in_(statuses))
+        else:
+            query = query.filter(Contact.opt_in_status == statuses)
 
     # Exclude do-not-contact
     if criteria.get('exclude_do_not_contact', True):
         query = query.filter(Contact.do_not_contact == False)
 
     # Filter by lead score (requires join with Lead table)
-    if 'min_lead_score' in criteria or 'max_lead_score' in criteria:
+    if 'score_min' in criteria or 'score_max' in criteria or 'min_lead_score' in criteria or 'max_lead_score' in criteria:
         if not lead_joined:
             query = query.join(Lead, Contact.id == Lead.contact_id)
             lead_joined = True
-        if 'min_lead_score' in criteria:
-            query = query.filter(Lead.score >= criteria['min_lead_score'])
-        if 'max_lead_score' in criteria:
-            query = query.filter(Lead.score <= criteria['max_lead_score'])
+        min_score = criteria.get('score_min') or criteria.get('min_lead_score')
+        max_score = criteria.get('score_max') or criteria.get('max_lead_score')
+        if min_score is not None:
+            query = query.filter(Lead.score >= min_score)
+        if max_score is not None:
+            query = query.filter(Lead.score <= max_score)
 
     # Filter by lead stage
     if 'lead_stages' in criteria:
@@ -139,7 +188,16 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
         stages = [LeadStage(s) for s in criteria['lead_stages']]
         query = query.filter(Lead.stage.in_(stages))
 
-    # Filter by tags (JSON array contains check)
+    # Filter by tag IDs (new format using tag association tables)
+    if 'tag_ids' in criteria and criteria['tag_ids']:
+        tag_ids = criteria['tag_ids']
+        # Get contacts with any of the specified tags
+        tagged_contact_ids = db.query(contact_tags.c.contact_id).filter(
+            contact_tags.c.tag_id.in_(tag_ids)
+        ).distinct().subquery()
+        query = query.filter(Contact.id.in_(tagged_contact_ids))
+
+    # Legacy: Filter by tags (JSON array contains check)
     if 'tags' in criteria and criteria['tags']:
         if not lead_joined:
             query = query.join(Lead, Contact.id == Lead.contact_id)
@@ -157,6 +215,114 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
     # Limit results
     max_contacts = criteria.get('max_contacts', 10000)
     return query.limit(max_contacts).all()
+
+
+def get_contacts_from_segment(db: Session, segment_id: int, company_id: int, campaign_id: int = None) -> List[Contact]:
+    """
+    Get contacts from a segment (dynamic or static).
+    """
+    segment = db.query(Segment).filter(
+        Segment.id == segment_id,
+        Segment.company_id == company_id
+    ).first()
+
+    if not segment:
+        return []
+
+    contacts = []
+
+    # Handle static segments
+    if segment.segment_type == SegmentType.STATIC:
+        contact_ids = segment.static_contact_ids or []
+        lead_ids = segment.static_lead_ids or []
+
+        if contact_ids:
+            contacts = db.query(Contact).filter(
+                Contact.id.in_(contact_ids),
+                Contact.company_id == company_id
+            ).all()
+
+        if lead_ids:
+            lead_contacts = db.query(Contact).join(
+                Lead, Contact.id == Lead.contact_id
+            ).filter(
+                Lead.id.in_(lead_ids),
+                Contact.company_id == company_id
+            ).all()
+            existing_ids = {c.id for c in contacts}
+            for lc in lead_contacts:
+                if lc.id not in existing_ids:
+                    contacts.append(lc)
+
+    # Handle dynamic segments
+    elif segment.segment_type == SegmentType.DYNAMIC and segment.criteria:
+        criteria = segment.criteria
+        query = db.query(Contact).filter(Contact.company_id == company_id)
+        lead_joined = False
+
+        # Include contacts filter
+        include_contacts = criteria.get('include_contacts', True)
+        include_leads = criteria.get('include_leads', True)
+
+        if not include_contacts and include_leads:
+            # Only get contacts that have leads
+            query = query.join(Lead, Contact.id == Lead.contact_id)
+            lead_joined = True
+
+        # Filter by lifecycle stages
+        if 'lifecycle_stages' in criteria and criteria['lifecycle_stages']:
+            stages = [LifecycleStage(s) for s in criteria['lifecycle_stages']]
+            query = query.filter(Contact.lifecycle_stage.in_(stages))
+
+        # Filter by lead sources
+        if 'lead_sources' in criteria and criteria['lead_sources']:
+            query = query.filter(Contact.lead_source.in_(criteria['lead_sources']))
+
+        # Filter by opt-in status
+        if 'opt_in_status' in criteria and criteria['opt_in_status']:
+            query = query.filter(Contact.opt_in_status.in_(criteria['opt_in_status']))
+
+        # Filter by lead stages
+        if 'lead_stages' in criteria and criteria['lead_stages']:
+            if not lead_joined:
+                query = query.join(Lead, Contact.id == Lead.contact_id)
+                lead_joined = True
+            stages = [LeadStage(s) for s in criteria['lead_stages']]
+            query = query.filter(Lead.stage.in_(stages))
+
+        # Filter by lead score range
+        if criteria.get('score_min') is not None or criteria.get('score_max') is not None:
+            if not lead_joined:
+                query = query.join(Lead, Contact.id == Lead.contact_id)
+                lead_joined = True
+            if criteria.get('score_min') is not None:
+                query = query.filter(Lead.score >= criteria['score_min'])
+            if criteria.get('score_max') is not None:
+                query = query.filter(Lead.score <= criteria['score_max'])
+
+        # Filter by tag IDs
+        if 'tag_ids' in criteria and criteria['tag_ids']:
+            tag_ids = criteria['tag_ids']
+            tagged_contact_ids = db.query(contact_tags.c.contact_id).filter(
+                contact_tags.c.tag_id.in_(tag_ids)
+            ).distinct().subquery()
+            query = query.filter(Contact.id.in_(tagged_contact_ids))
+
+        # Exclude do-not-contact
+        query = query.filter(Contact.do_not_contact == False)
+
+        contacts = query.all()
+
+    # Exclude contacts already enrolled in the campaign (if campaign_id provided)
+    if campaign_id and contacts:
+        enrolled_ids = set(
+            row[0] for row in db.query(CampaignContact.contact_id).filter(
+                CampaignContact.campaign_id == campaign_id
+            ).all()
+        )
+        contacts = [c for c in contacts if c.id not in enrolled_ids]
+
+    return contacts
 
 
 def enroll_contacts(

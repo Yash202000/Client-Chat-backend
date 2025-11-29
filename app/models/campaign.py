@@ -62,7 +62,8 @@ class Campaign(Base):
     scheduled_send_time = Column(DateTime, nullable=True)
 
     # Targeting
-    target_criteria = Column(JSONB, nullable=True)  # Filters for contact selection
+    segment_id = Column(Integer, ForeignKey("segments.id"), nullable=True, index=True)  # Reusable segment
+    target_criteria = Column(JSONB, nullable=True)  # Inline filters for contact selection
     # Example: {"lead_stage": ["lead", "mql"], "tags": ["interested"], "score_min": 50}
 
     # Goals and budget

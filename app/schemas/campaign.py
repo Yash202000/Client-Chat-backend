@@ -15,6 +15,7 @@ class CampaignBase(BaseModel):
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     scheduled_send_time: Optional[datetime] = None
+    segment_id: Optional[int] = None  # Link to reusable segment
     target_criteria: Optional[Dict[str, Any]] = None
     goal_type: Optional[str] = None
     goal_value: Optional[int] = None
@@ -38,6 +39,7 @@ class CampaignUpdate(BaseModel):
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     scheduled_send_time: Optional[datetime] = None
+    segment_id: Optional[int] = None  # Link to reusable segment
     target_criteria: Optional[Dict[str, Any]] = None
     goal_type: Optional[str] = None
     goal_value: Optional[int] = None
