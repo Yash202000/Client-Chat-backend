@@ -39,6 +39,9 @@ class CampaignMessage(Base):
     # Message type
     message_type = Column(Enum(MessageType), nullable=False)
 
+    # Template reference (optional - can use template or inline content)
+    template_id = Column(Integer, ForeignKey("templates.id"), nullable=True)
+
     # Email content
     subject = Column(String, nullable=True)  # For email messages
     body = Column(Text, nullable=True)  # Email/SMS text content
@@ -101,5 +104,6 @@ class CampaignMessage(Base):
 
     # Relationships
     campaign = relationship("Campaign", back_populates="messages")
+    template = relationship("Template", foreign_keys=[template_id])
     voice_agent = relationship("Agent", foreign_keys=[voice_agent_id])
     activities = relationship("CampaignActivity", back_populates="message", cascade="all, delete-orphan")

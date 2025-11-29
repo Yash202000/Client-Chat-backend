@@ -199,6 +199,74 @@ def create_campaign_message(
     return db_message
 
 
+@router.put("/{campaign_id}/messages/{message_id}", response_model=CampaignMessage)
+def update_campaign_message(
+    campaign_id: int,
+    message_id: int,
+    message: CampaignMessageUpdate,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Update a campaign message
+    """
+    from app.models.campaign_message import CampaignMessage as CampaignMessageModel
+
+    # Verify campaign belongs to user's company
+    campaign = campaign_service.get_campaign(db=db, campaign_id=campaign_id, company_id=current_user.company_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    # Get the message
+    db_message = db.query(CampaignMessageModel).filter(
+        CampaignMessageModel.id == message_id,
+        CampaignMessageModel.campaign_id == campaign_id
+    ).first()
+
+    if not db_message:
+        raise HTTPException(status_code=404, detail="Campaign message not found")
+
+    # Update the message
+    update_data = message.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_message, field, value)
+
+    db.commit()
+    db.refresh(db_message)
+    return db_message
+
+
+@router.delete("/{campaign_id}/messages/{message_id}")
+def delete_campaign_message(
+    campaign_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Delete a campaign message
+    """
+    from app.models.campaign_message import CampaignMessage as CampaignMessageModel
+
+    # Verify campaign belongs to user's company
+    campaign = campaign_service.get_campaign(db=db, campaign_id=campaign_id, company_id=current_user.company_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    # Get the message
+    db_message = db.query(CampaignMessageModel).filter(
+        CampaignMessageModel.id == message_id,
+        CampaignMessageModel.campaign_id == campaign_id
+    ).first()
+
+    if not db_message:
+        raise HTTPException(status_code=404, detail="Campaign message not found")
+
+    db.delete(db_message)
+    db.commit()
+    return {"status": "deleted"}
+
+
 # Campaign Contacts/Enrollment
 
 

@@ -8,6 +8,7 @@ class CampaignMessageBase(BaseModel):
     sequence_order: int
     name: Optional[str] = None
     message_type: str  # email, sms, whatsapp, voice, ai_conversation
+    template_id: Optional[int] = None  # Reference to reusable template
     subject: Optional[str] = None
     body: Optional[str] = None
     html_body: Optional[str] = None
@@ -42,6 +43,7 @@ class CampaignMessageUpdate(BaseModel):
     sequence_order: Optional[int] = None
     name: Optional[str] = None
     message_type: Optional[str] = None
+    template_id: Optional[int] = None  # Reference to reusable template
     subject: Optional[str] = None
     body: Optional[str] = None
     html_body: Optional[str] = None
