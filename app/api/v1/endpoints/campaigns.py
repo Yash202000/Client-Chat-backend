@@ -338,9 +338,13 @@ def enroll_from_targeting_criteria(
     """
     Automatically enroll contacts based on campaign's target criteria
     """
+    from app.models.campaign_contact import CampaignContact as CampaignContactModel
+
     campaign = campaign_service.get_campaign(db=db, campaign_id=campaign_id, company_id=current_user.company_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+
+    print(f"[ENROLL] Campaign {campaign_id}: segment_id={campaign.segment_id}, target_criteria={campaign.target_criteria}")
 
     # Get targeted contacts
     targeted_contacts = campaign_service.get_targeted_contacts(
@@ -349,11 +353,24 @@ def enroll_from_targeting_criteria(
         company_id=current_user.company_id
     )
 
+    print(f"[ENROLL] Found {len(targeted_contacts) if targeted_contacts else 0} targeted contacts")
+
     if not targeted_contacts:
-        return {"success": True, "enrolled_count": 0, "message": "No contacts match targeting criteria"}
+        # Check if there are existing enrollments
+        existing_count = db.query(CampaignContactModel).filter(
+            CampaignContactModel.campaign_id == campaign_id
+        ).count()
+        return {
+            "success": True,
+            "enrolled_count": 0,
+            "existing_count": existing_count,
+            "message": "No contacts match targeting criteria"
+        }
 
     # Enroll them
     contact_ids = [c.id for c in targeted_contacts]
+    print(f"[ENROLL] Enrolling contact IDs: {contact_ids}")
+
     enrolled = campaign_service.enroll_contacts(
         db=db,
         campaign_id=campaign_id,
@@ -362,9 +379,18 @@ def enroll_from_targeting_criteria(
         enrolled_by_user_id=current_user.id
     )
 
+    print(f"[ENROLL] Successfully enrolled {len(enrolled)} contacts")
+
+    # Get total enrolled (new + existing)
+    total_enrolled = db.query(CampaignContactModel).filter(
+        CampaignContactModel.campaign_id == campaign_id
+    ).count()
+
     return {
         "success": True,
-        "enrolled_count": len(enrolled)
+        "enrolled_count": len(enrolled),
+        "total_enrolled": total_enrolled,
+        "message": f"Enrolled {len(enrolled)} new contacts. Total: {total_enrolled}"
     }
 
 
@@ -397,15 +423,17 @@ def unenroll_contact(
 
 
 @router.post("/{campaign_id}/start")
-def start_campaign(
+async def start_campaign(
     campaign_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     """
-    Start a campaign
+    Start a campaign - if start_date is in the future, messages are scheduled for that time.
+    If start_date is now or in the past, messages are sent immediately.
     """
+    from datetime import datetime
+
     campaign = campaign_service.get_campaign(db=db, campaign_id=campaign_id, company_id=current_user.company_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -417,13 +445,39 @@ def start_campaign(
     )
 
     if success:
-        # Queue initial messages to be sent in background
-        background_tasks.add_task(
-            campaign_execution_service.process_campaign_queue,
-            db,
-            campaign_id,
-            current_user.company_id
-        )
+        # Refresh campaign to get updated data
+        db.refresh(campaign)
+
+        # Only process queue immediately if start_date is now or in the past
+        # Use timezone-aware UTC time for consistent comparison
+        from datetime import timezone
+        current_time = datetime.now(timezone.utc)
+
+        # Normalize campaign.start_date for comparison
+        campaign_start = campaign.start_date
+        if campaign_start and campaign_start.tzinfo is None:
+            campaign_start = campaign_start.replace(tzinfo=timezone.utc)
+
+        if campaign_start and campaign_start > current_time:
+            print(f"[CAMPAIGN START] Campaign scheduled for {campaign.start_date}, not processing queue now")
+            return {
+                "success": success,
+                "status": "scheduled",
+                "scheduled_for": campaign.start_date.isoformat(),
+                "message": f"Campaign scheduled to start at {campaign.start_date.isoformat()}"
+            }
+
+        # Process campaign queue immediately (async)
+        try:
+            await campaign_execution_service.process_campaign_queue(
+                db,
+                campaign_id,
+                current_user.company_id
+            )
+        except Exception as e:
+            print(f"[CAMPAIGN START] Error processing queue: {e}")
+            import traceback
+            traceback.print_exc()
 
     return {"success": success, "status": "active"}
 
@@ -477,6 +531,57 @@ def resume_campaign(
     )
 
     return {"success": True, "status": campaign.status.value}
+
+
+@router.post("/{campaign_id}/relaunch")
+async def relaunch_campaign(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Re-launch a completed campaign - resets enrollments and starts fresh
+    """
+    from datetime import timezone
+    from app.models.campaign_contact import CampaignContact as CampaignContactModel
+    from app.models.campaign_contact import EnrollmentStatus
+
+    campaign = campaign_service.get_campaign(db=db, campaign_id=campaign_id, company_id=current_user.company_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign.status != CampaignStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Only completed campaigns can be re-launched")
+
+    print(f"[RELAUNCH] Re-launching campaign {campaign_id}: {campaign.name}")
+
+    # Reset all enrollments to pending status
+    db.query(CampaignContactModel).filter(
+        CampaignContactModel.campaign_id == campaign_id
+    ).update({
+        'status': EnrollmentStatus.PENDING,
+        'current_step': 0,
+        'current_message_id': None,
+        'next_scheduled_at': None,
+        'completed_at': None,
+        'last_interaction_at': None
+    })
+
+    # Reset campaign status to draft
+    campaign.status = CampaignStatus.DRAFT
+    campaign.end_date = None
+    # Keep start_date if user wants to schedule, or they can update it
+
+    db.commit()
+    db.refresh(campaign)
+
+    print(f"[RELAUNCH] Campaign {campaign_id} reset to draft with enrollments pending")
+
+    return {
+        "success": True,
+        "status": "draft",
+        "message": "Campaign has been reset and is ready to re-launch"
+    }
 
 
 # Campaign Analytics

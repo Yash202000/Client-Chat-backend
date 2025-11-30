@@ -6,7 +6,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Dict, Any
-from app.core.config import settings
 
 
 async def send_email_smtp(
@@ -26,36 +25,32 @@ async def send_email_smtp(
         subject: Email subject
         html_content: HTML email body (optional)
         text_content: Plain text email body (optional)
-        from_email: Sender email (defaults to settings)
-        from_name: Sender name (defaults to settings)
-        smtp_config: Optional SMTP configuration override
+        from_email: Sender email (required)
+        from_name: Sender name (defaults to 'AgentConnect')
+        smtp_config: SMTP configuration (required) - must contain host, port, user, password
 
     Returns:
         Dict with message_id and status
     """
-    # Use provided config or fall back to settings
-    if smtp_config:
-        smtp_host = smtp_config.get('host', settings.SMTP_HOST)
-        smtp_port = smtp_config.get('port', settings.SMTP_PORT)
-        smtp_user = smtp_config.get('user', settings.SMTP_USER)
-        smtp_password = smtp_config.get('password', settings.SMTP_PASSWORD)
-        smtp_use_tls = smtp_config.get('use_tls', settings.SMTP_USE_TLS)
-    else:
-        smtp_host = settings.SMTP_HOST
-        smtp_port = settings.SMTP_PORT
-        smtp_user = settings.SMTP_USER
-        smtp_password = settings.SMTP_PASSWORD
-        smtp_use_tls = settings.SMTP_USE_TLS
+    # SMTP config is required - no global fallback
+    if not smtp_config:
+        raise ValueError("SMTP configuration is required. Please configure SMTP settings in Settings > Email.")
+
+    smtp_host = smtp_config.get('host')
+    smtp_port = smtp_config.get('port', 587)
+    smtp_user = smtp_config.get('user')
+    smtp_password = smtp_config.get('password')
+    smtp_use_tls = smtp_config.get('use_tls', True)
 
     # Validate SMTP configuration
-    if not all([smtp_host, smtp_port, smtp_user, smtp_password]):
-        raise ValueError("SMTP credentials are not configured. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD in settings.")
+    if not all([smtp_host, smtp_user, smtp_password]):
+        raise ValueError("SMTP configuration is incomplete. Please configure SMTP Host, Username, and Password in Settings > Email.")
 
     # Set from email and name
     if not from_email:
-        from_email = getattr(settings, 'SMTP_FROM_EMAIL', smtp_user)
+        from_email = smtp_user
     if not from_name:
-        from_name = getattr(settings, 'SMTP_FROM_NAME', 'AgentConnect')
+        from_name = 'AgentConnect'
 
     # Create message
     msg = MIMEMultipart('alternative')

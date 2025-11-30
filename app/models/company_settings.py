@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -17,5 +17,14 @@ class CompanySettings(Base):
     secondary_color = Column(String, nullable=True)
     custom_domain = Column(String, nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
+
+    # SMTP Email Configuration
+    smtp_host = Column(String, nullable=True)
+    smtp_port = Column(Integer, default=587)
+    smtp_user = Column(String, nullable=True)
+    smtp_password = Column(Text, nullable=True)  # Should be encrypted in production
+    smtp_use_tls = Column(Boolean, default=True)
+    smtp_from_email = Column(String, nullable=True)
+    smtp_from_name = Column(String, nullable=True)
 
     company = relationship("Company")

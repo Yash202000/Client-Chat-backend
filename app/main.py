@@ -65,6 +65,16 @@ from app.initial_data import create_initial_data
 # Initialize scheduler for background tasks
 scheduler = AsyncIOScheduler()
 
+async def run_campaign_scheduler():
+    """Wrapper to run the campaign scheduler with a fresh DB session"""
+    from app.services import campaign_execution_service
+    db = SessionLocal()
+    try:
+        await campaign_execution_service.process_all_scheduled_campaigns(db)
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def on_startup():
     create_initial_data()
@@ -79,12 +89,25 @@ async def on_startup():
             id='websocket_cleanup',
             replace_existing=True
         )
-        scheduler.start()
         print(f"[Startup] WebSocket cleanup scheduler started (interval: {settings.WS_CLEANUP_INTERVAL}s)")
         print(f"[Startup] Preview session timeout: {settings.WS_PREVIEW_SESSION_TIMEOUT}s")
         print(f"[Startup] Regular session timeout: {settings.WS_REGULAR_SESSION_TIMEOUT}s")
     else:
         print("[Startup] WebSocket heartbeat disabled (WS_ENABLE_HEARTBEAT=False)")
+
+    # Add campaign scheduler job - runs every 30 seconds to process scheduled campaigns
+    scheduler.add_job(
+        run_campaign_scheduler,
+        'interval',
+        seconds=30,
+        id='campaign_scheduler',
+        replace_existing=True
+    )
+    print("[Startup] Campaign scheduler started (interval: 30s)")
+
+    # Start the scheduler if not already started
+    if not scheduler.running:
+        scheduler.start()
 
     # Start call timeout service
     asyncio.create_task(call_timeout_service.start())

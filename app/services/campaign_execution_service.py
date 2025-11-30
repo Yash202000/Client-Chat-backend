@@ -3,6 +3,7 @@ Campaign Execution Service
 Orchestrates the sending of campaign messages across multiple channels
 """
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from app.models.campaign import Campaign, CampaignStatus
@@ -110,6 +111,8 @@ async def send_email_message(
     Send an email campaign message using SMTP
     """
     try:
+        from app.models.company_settings import CompanySettings
+
         # Validate contact has email
         if not contact.email:
             print(f"[CAMPAIGN EXECUTION] Contact {contact.id} has no email address")
@@ -132,10 +135,40 @@ async def send_email_message(
         if not html_content and not text_content:
             text_content = personalize_message(message.body or "Campaign message", contact, enrollment.lead)
 
-        # Get SMTP config from campaign settings if available
+        # Get SMTP config from company settings (required)
         smtp_config = None
+        from_email = None
+        from_name = None
+
+        # First check campaign-specific settings
         if campaign.settings and 'smtp_config' in campaign.settings:
             smtp_config = campaign.settings['smtp_config']
+            from_email = campaign.settings.get('from_email')
+            from_name = campaign.settings.get('from_name')
+
+        # Fall back to company settings
+        if not smtp_config:
+            company_settings = db.query(CompanySettings).filter(
+                CompanySettings.company_id == campaign.company_id
+            ).first()
+
+            if company_settings and company_settings.smtp_host:
+                smtp_config = {
+                    'host': company_settings.smtp_host,
+                    'port': company_settings.smtp_port or 587,
+                    'user': company_settings.smtp_user,
+                    'password': company_settings.smtp_password,
+                    'use_tls': company_settings.smtp_use_tls if company_settings.smtp_use_tls is not None else True,
+                }
+                from_email = from_email or company_settings.smtp_from_email
+                from_name = from_name or company_settings.smtp_from_name
+
+        # SMTP config is required - no global fallback
+        if not smtp_config:
+            print(f"[CAMPAIGN EXECUTION] ERROR: No SMTP configuration found for company {campaign.company_id}. Please configure SMTP in Settings > Email.")
+            return False
+
+        print(f"[CAMPAIGN EXECUTION] Sending email to {contact.email} using company SMTP ({smtp_config.get('host')})")
 
         # Send via email service
         result = await email_service.send_email_smtp(
@@ -143,8 +176,8 @@ async def send_email_message(
             subject=subject,
             html_content=html_content,
             text_content=text_content,
-            from_email=campaign.settings.get('from_email') if campaign.settings else None,
-            from_name=campaign.settings.get('from_name') if campaign.settings else None,
+            from_email=from_email,
+            from_name=from_name,
             smtp_config=smtp_config
         )
 
@@ -562,19 +595,30 @@ async def send_campaign_message(
         lead = db.query(Lead).filter(Lead.id == enrollment.lead_id).first()
 
     # Send message based on type
+    # Handle both Enum and string comparisons
+    msg_type = next_message.message_type
+    if isinstance(msg_type, str):
+        msg_type = msg_type.lower()
+    else:
+        msg_type = msg_type.value if hasattr(msg_type, 'value') else str(msg_type).lower()
+
+    print(f"[CAMPAIGN EXECUTION] Sending message type: {msg_type} to contact {contact.id} ({contact.email})")
+
     success = False
-    if next_message.message_type == MessageType.EMAIL:
+    if msg_type == "email":
         success = await send_email_message(db, campaign, next_message, contact, enrollment)
-    elif next_message.message_type == MessageType.SMS:
+    elif msg_type == "sms":
         success = await send_sms_message(db, campaign, next_message, contact, enrollment)
-    elif next_message.message_type == MessageType.WHATSAPP:
+    elif msg_type == "whatsapp":
         success = await send_whatsapp_message(db, campaign, next_message, contact, enrollment)
-    elif next_message.message_type == MessageType.INSTAGRAM:
+    elif msg_type == "instagram":
         success = await send_instagram_message(db, campaign, next_message, contact, enrollment)
-    elif next_message.message_type == MessageType.TELEGRAM:
+    elif msg_type == "telegram":
         success = await send_telegram_message(db, campaign, next_message, contact, enrollment)
-    elif next_message.message_type == MessageType.VOICE:
+    elif msg_type == "voice":
         success = await initiate_voice_call(db, campaign, next_message, contact, enrollment)
+    else:
+        print(f"[CAMPAIGN EXECUTION] Unknown message type: {msg_type}")
 
     if success:
         # Update enrollment progress
@@ -595,6 +639,9 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
     """
     Process all pending campaign messages that are due to be sent
     """
+    import traceback
+
+    print(f"[CAMPAIGN EXECUTION] Starting to process queue for campaign {campaign_id}")
     current_time = datetime.utcnow()
 
     # Get all active enrollments with messages due
@@ -609,36 +656,83 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
         )
     ).all()
 
-    print(f"[CAMPAIGN EXECUTION] Processing {len(due_enrollments)} pending messages for campaign {campaign_id}")
+    print(f"[CAMPAIGN EXECUTION] Found {len(due_enrollments)} pending enrollments for campaign {campaign_id}")
+
+    if len(due_enrollments) == 0:
+        # Debug: check why no enrollments
+        all_enrollments = db.query(CampaignContact).filter(
+            CampaignContact.campaign_id == campaign_id
+        ).all()
+        print(f"[CAMPAIGN EXECUTION] Total enrollments for campaign: {len(all_enrollments)}")
+        for e in all_enrollments:
+            print(f"[CAMPAIGN EXECUTION]   - Enrollment {e.id}: status={e.status}, next_scheduled={e.next_scheduled_at}, current_step={e.current_step}")
 
     # Send messages
     for enrollment in due_enrollments:
         try:
-            await send_campaign_message(db, campaign_id, enrollment.id, company_id)
+            print(f"[CAMPAIGN EXECUTION] Processing enrollment {enrollment.id} for contact {enrollment.contact_id}")
+            result = await send_campaign_message(db, campaign_id, enrollment.id, company_id)
+            print(f"[CAMPAIGN EXECUTION] Result for enrollment {enrollment.id}: {result}")
         except Exception as e:
             print(f"[CAMPAIGN EXECUTION] Error processing enrollment {enrollment.id}: {e}")
+            traceback.print_exc()
 
     # Update campaign metrics
-    campaign_service.update_campaign_metrics(db, campaign_id, company_id)
+    try:
+        campaign_service.update_campaign_metrics(db, campaign_id, company_id)
+    except Exception as e:
+        print(f"[CAMPAIGN EXECUTION] Error updating metrics: {e}")
 
 
 def start_campaign(db: Session, campaign_id: int, company_id: int):
     """
     Start a campaign - activate all pending enrollments and schedule first messages
+
+    If the campaign has a start_date in the future, messages will be scheduled for that time.
+    If start_date is not set or is in the past, messages will be scheduled starting from now.
     """
     campaign = campaign_service.get_campaign(db, campaign_id, company_id)
     if not campaign:
+        print(f"[CAMPAIGN START] Campaign {campaign_id} not found")
         return False
+
+    print(f"[CAMPAIGN START] Starting campaign {campaign_id}: {campaign.name}")
 
     # Update campaign status
     campaign.status = CampaignStatus.ACTIVE
-    campaign.start_date = datetime.utcnow()
 
-    # Activate all pending enrollments
-    pending_enrollments = db.query(CampaignContact).filter(
+    # Determine the effective start time
+    # Use timezone-aware UTC time for consistent comparison
+    from datetime import timezone
+    current_time = datetime.now(timezone.utc)
+
+    # Normalize campaign.start_date to be timezone-aware for comparison
+    campaign_start = campaign.start_date
+    if campaign_start:
+        # If naive datetime, assume it's UTC
+        if campaign_start.tzinfo is None:
+            campaign_start = campaign_start.replace(tzinfo=timezone.utc)
+
+        print(f"[CAMPAIGN START] Comparing: campaign_start={campaign_start}, current_time={current_time}")
+
+    # Use the user's start_date if it's set and in the future, otherwise use current time
+    if campaign_start and campaign_start > current_time:
+        effective_start_time = campaign.start_date  # Keep original for storage
+        print(f"[CAMPAIGN START] Campaign scheduled for future start: {campaign.start_date}")
+    else:
+        # Only set start_date if it wasn't set by user
+        if not campaign.start_date:
+            campaign.start_date = current_time.replace(tzinfo=None)  # Store as naive UTC
+        effective_start_time = current_time.replace(tzinfo=None)
+        print(f"[CAMPAIGN START] Campaign starting immediately at {effective_start_time}")
+
+    # Get all enrollments that need to be activated (PENDING or COMPLETED for re-launch)
+    enrollments_to_activate = db.query(CampaignContact).filter(
         CampaignContact.campaign_id == campaign_id,
-        CampaignContact.status == EnrollmentStatus.PENDING
+        CampaignContact.status.in_([EnrollmentStatus.PENDING, EnrollmentStatus.COMPLETED])
     ).all()
+
+    print(f"[CAMPAIGN START] Found {len(enrollments_to_activate)} enrollments to activate (pending or completed)")
 
     # Get first message
     first_message = db.query(CampaignMessage).filter(
@@ -648,9 +742,25 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
     ).first()
 
     if first_message:
-        for enrollment in pending_enrollments:
+        print(f"[CAMPAIGN START] First message found: {first_message.name or first_message.id}, type: {first_message.message_type}")
+        for enrollment in enrollments_to_activate:
+            # Reset enrollment for fresh start
             enrollment.status = EnrollmentStatus.ACTIVE
-            enrollment.next_scheduled_at = calculate_next_send_time(enrollment, first_message)
+            enrollment.current_step = 0
+            enrollment.current_message_id = None
+            enrollment.completed_at = None
+            # Schedule based on the effective start time (user's start_date or now)
+            enrollment.next_scheduled_at = calculate_next_send_time(enrollment, first_message, effective_start_time)
+            print(f"[CAMPAIGN START] Activated enrollment {enrollment.id} for contact {enrollment.contact_id}, scheduled at: {enrollment.next_scheduled_at}")
+    else:
+        print(f"[CAMPAIGN START] WARNING: No first message (sequence_order=1) found for campaign {campaign_id}")
+        # Check all messages for this campaign
+        all_messages = db.query(CampaignMessage).filter(
+            CampaignMessage.campaign_id == campaign_id
+        ).all()
+        print(f"[CAMPAIGN START] Total messages in campaign: {len(all_messages)}")
+        for msg in all_messages:
+            print(f"[CAMPAIGN START]   - Message {msg.id}: sequence={msg.sequence_order}, type={msg.message_type}, active={msg.is_active}")
 
     campaign.last_run_at = datetime.utcnow()
     db.commit()
@@ -688,3 +798,51 @@ def resume_campaign(db: Session, campaign_id: int, company_id: int):
 
     db.commit()
     return campaign
+
+
+async def process_all_scheduled_campaigns(db: Session):
+    """
+    Background job to process all active campaigns with due messages.
+    This should be called periodically by a scheduler.
+    """
+    from datetime import timezone
+    import traceback
+
+    current_time = datetime.now(timezone.utc)
+    print(f"[CAMPAIGN SCHEDULER] Running scheduled campaign processor at {current_time}")
+
+    try:
+        # Find all active campaigns
+        active_campaigns = db.query(Campaign).filter(
+            Campaign.status == CampaignStatus.ACTIVE
+        ).all()
+
+        if not active_campaigns:
+            print("[CAMPAIGN SCHEDULER] No active campaigns found")
+            return
+
+        print(f"[CAMPAIGN SCHEDULER] Found {len(active_campaigns)} active campaigns")
+
+        for campaign in active_campaigns:
+            try:
+                # Check if there are any due enrollments for this campaign
+                due_count = db.query(CampaignContact).filter(
+                    CampaignContact.campaign_id == campaign.id,
+                    CampaignContact.status == EnrollmentStatus.ACTIVE,
+                    or_(
+                        CampaignContact.next_scheduled_at <= current_time.replace(tzinfo=None),
+                        CampaignContact.next_scheduled_at == None
+                    )
+                ).count()
+
+                if due_count > 0:
+                    print(f"[CAMPAIGN SCHEDULER] Campaign {campaign.id} ({campaign.name}) has {due_count} due messages")
+                    await process_campaign_queue(db, campaign.id, campaign.company_id)
+
+            except Exception as e:
+                print(f"[CAMPAIGN SCHEDULER] Error processing campaign {campaign.id}: {e}")
+                traceback.print_exc()
+
+    except Exception as e:
+        print(f"[CAMPAIGN SCHEDULER] Error in scheduler: {e}")
+        traceback.print_exc()
