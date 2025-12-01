@@ -41,15 +41,28 @@ class GraphExecutionEngine:
         print(f"DEBUG: [GraphEngine] Node type is '{node_type}'.")
 
         if node_type == 'condition':
-            if result and 'output' in result and isinstance(result['output'], bool):
+            if result and 'output' in result:
                 conditional_result = result['output']
-                print(f"DEBUG: [GraphEngine] Conditional result is: {conditional_result}")
-                
-                handle_to_find = 'true' if conditional_result else 'false'
+                print(f"DEBUG: [GraphEngine] Conditional result is: {conditional_result} (type: {type(conditional_result).__name__})")
+
+                # Determine which handle to find based on result type
+                if isinstance(conditional_result, bool):
+                    # Legacy single condition: true/false
+                    handle_to_find = 'true' if conditional_result else 'false'
+                elif isinstance(conditional_result, int):
+                    # Multi-condition: index (0, 1, 2, etc.)
+                    handle_to_find = str(conditional_result)
+                elif isinstance(conditional_result, str):
+                    # Multi-condition: "else" or custom handle name
+                    handle_to_find = conditional_result
+                else:
+                    print(f"WARNING: [GraphEngine] Unexpected conditional result type: {type(conditional_result)}")
+                    return None
+
                 print(f"DEBUG: [GraphEngine] Looking for edge with handle: '{handle_to_find}'")
 
                 edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == handle_to_find), None)
-                
+
                 if edge:
                     print(f"DEBUG: [GraphEngine] Found edge to '{edge['target']}' via handle '{handle_to_find}'.")
                     return edge['target']
@@ -57,7 +70,7 @@ class GraphExecutionEngine:
                     print(f"WARNING: [GraphEngine] No edge found for handle '{handle_to_find}' from node '{current_node_id}'.")
                     return None
             else:
-                print(f"WARNING: [GraphEngine] Conditional node '{current_node_id}' did not produce a valid boolean result: {result}")
+                print(f"WARNING: [GraphEngine] Conditional node '{current_node_id}' did not produce a valid result: {result}")
                 return None
 
         elif result and "error" in result:

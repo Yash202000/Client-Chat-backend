@@ -102,10 +102,20 @@ async def public_voice_websocket_endpoint(
         
         if not groq_api_key:
             logger.warning("Groq API key not found in agent's vault. Falling back to environment variable.")
-            # Don't pass api_key if None, let service use environment variable
-            stt_service = GroqSTTService()
-        else:
-            stt_service = GroqSTTService(api_key=groq_api_key)
+
+        try:
+            stt_service = GroqSTTService(api_key=groq_api_key) if groq_api_key else GroqSTTService()
+        except ValueError as e:
+            # Groq API key not available - try to fall back to OpenAI if available
+            if openai_api_key:
+                logger.warning(f"Groq STT failed ({e}). Falling back to OpenAI STT.")
+                stt_service = OpenAISTTService(api_key=openai_api_key)
+                stt_provider = "openai"  # Update provider for buffer processing
+            else:
+                logger.error(f"Groq STT failed and no OpenAI fallback available: {e}")
+                await websocket.send_text('{"error": "STT service not configured. Please set up Groq or OpenAI credentials."}')
+                await websocket.close(code=1008)
+                return
 
     elif stt_provider == "openai":
         # Use the OpenAI key retrieved earlier (from vault or env)
