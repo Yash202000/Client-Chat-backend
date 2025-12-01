@@ -20,6 +20,7 @@ class AgentBase(BaseModel):
     response_style: Optional[str] = None
     instructions: Optional[str] = None
     credential_id: Optional[int] = None
+    handoff_team_id: Optional[int] = None  # Team to handoff to for human support
     knowledge_base_ids: Optional[List[int]] = None
     embedding_model: Optional[str] = None
     tool_ids: Optional[List[int]] = []
@@ -40,6 +41,7 @@ class AgentUpdate(BaseModel):
     response_style: Optional[str] = None
     instructions: Optional[str] = None
     credential_id: Optional[int] = None
+    handoff_team_id: Optional[int] = None  # Team to handoff to for human support
     is_active: Optional[bool] = None
     knowledge_base_ids: Optional[List[int]] = None
     model_name: Optional[str] = None

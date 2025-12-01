@@ -27,6 +27,7 @@ class Agent(Base):
     instructions = Column(String, nullable=True)
     credential_id = Column(Integer, ForeignKey("credentials.id"), nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"))
+    handoff_team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)  # Team to handoff to for human support
     version_number = Column(Integer, default=1)
     parent_version_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
     status = Column(String, default="active") # e.g., active, draft, archived
@@ -36,12 +37,14 @@ class Agent(Base):
     company = relationship("Company", back_populates="agents")
     messages = relationship("ChatMessage", back_populates="agent")
     credential = relationship("Credential")
+    handoff_team = relationship("Team", foreign_keys=[handoff_team_id])
     knowledge_bases = relationship("KnowledgeBase", secondary=agent_knowledge_bases, back_populates="agents")
     tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")
     workflows = relationship("Workflow", back_populates="agent")
     widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")
     parent_version = relationship("Agent", remote_side=[id])
+    campaigns = relationship("Campaign", back_populates="agent")
     voice_id = Column(String, nullable=True, default='default')
     tts_provider = Column(String, nullable=False, default='voice_engine')
     stt_provider = Column(String, nullable=False, default='deepgram')

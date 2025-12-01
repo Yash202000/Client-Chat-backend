@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"
 
+    # Twilio SMS settings
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
+
     # MinIO/S3 settings
     minio_endpoint: str
     minio_secure: bool = False
@@ -57,6 +62,26 @@ class Settings(BaseSettings):
     WS_REGULAR_SESSION_TIMEOUT: int = 1800  # 30 minutes (1800 seconds)
     WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
     WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
+
+    # LLM Streaming Configuration
+    LLM_STREAMING_ENABLED: bool = False  # Disabled streaming responses by default
+    LLM_STREAM_TOKEN_BUFFER: int = 1  # Number of tokens to buffer before sending (1 = real-time)
+    LLM_REQUEST_TIMEOUT: int = 120  # Timeout for LLM API calls in seconds
+    HTTP_REQUEST_TIMEOUT: int = 30  # Timeout for workflow HTTP requests in seconds
+
+    # LiveKit AI Agents Configuration
+    OPENAI_API_KEY: str = ""
+    DEEPGRAM_API_KEY: str = ""
+    AGENT_LLM_PROVIDER: str = "openai"
+    AGENT_LLM_MODEL: str = "gpt-4o-mini"
+    AGENT_STT_PROVIDER: str = "deepgram"
+    AGENT_STT_LANGUAGE: str = "en"
+    AGENT_TTS_PROVIDER: str = "openai"
+    AGENT_TTS_VOICE: str = "alloy"
+    AGENT_VAD_ENABLED: str = "true"
+    AGENT_ALLOW_INTERRUPTIONS: str = "true"
+    AGENT_GREETING: str = "Hello! I'm your AI voice assistant. How can I help you today?"
+    AGENT_SYSTEM_PROMPT: str = "You are a helpful and friendly voice assistant. Keep your responses concise and natural for voice conversation."
 
     class Config:
         env_file = ".env"

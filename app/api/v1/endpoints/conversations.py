@@ -115,12 +115,25 @@ def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_
 def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     # This endpoint is deprecated in favor of the company-wide /sessions endpoint
     sessions_from_db = chat_service.get_session_details(db, agent_id=agent_id, broadcast_session_id=session_id, company_id=current_user.company_id)
+
+    # Include contact information if available
+    contact_info = None
+    if sessions_from_db.contact:
+        contact_info = schemas_session.ContactInfo(
+            id=sessions_from_db.contact.id,
+            name=sessions_from_db.contact.name,
+            email=sessions_from_db.contact.email,
+            phone_number=sessions_from_db.contact.phone_number
+        )
+
     return schemas_session.Session(
             session_id=sessions_from_db.conversation_id,
             status=sessions_from_db.status,
             assignee_id=sessions_from_db.assignee_id,  # Use assignee_id instead of agent_id
             last_message_timestamp=sessions_from_db.updated_at.isoformat(),
-            first_message_content= ""
+            first_message_content="",
+            contact=contact_info,
+            is_ai_enabled=sessions_from_db.is_ai_enabled
         )
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])

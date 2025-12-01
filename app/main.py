@@ -14,9 +14,11 @@ from app.api.v1.endpoints import ws_updates, comments, gmail, google, published,
 from app.core.dependencies import get_db
 from app.services.connection_manager import manager
 from app.services.websocket_cleanup_service import cleanup_inactive_sessions
+from app.services.call_timeout_service import call_timeout_service
 from app.services import tool_service, widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
 from create_tool import create_api_call_tool
+import asyncio
 
 # Create all database tables
 Base.metadata.create_all(bind=engine)
@@ -63,8 +65,18 @@ from app.initial_data import create_initial_data
 # Initialize scheduler for background tasks
 scheduler = AsyncIOScheduler()
 
+async def run_campaign_scheduler():
+    """Wrapper to run the campaign scheduler with a fresh DB session"""
+    from app.services import campaign_execution_service
+    db = SessionLocal()
+    try:
+        await campaign_execution_service.process_all_scheduled_campaigns(db)
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     create_initial_data()
 
     # Start WebSocket cleanup scheduler if enabled
@@ -77,16 +89,37 @@ def on_startup():
             id='websocket_cleanup',
             replace_existing=True
         )
-        scheduler.start()
         print(f"[Startup] WebSocket cleanup scheduler started (interval: {settings.WS_CLEANUP_INTERVAL}s)")
         print(f"[Startup] Preview session timeout: {settings.WS_PREVIEW_SESSION_TIMEOUT}s")
         print(f"[Startup] Regular session timeout: {settings.WS_REGULAR_SESSION_TIMEOUT}s")
     else:
         print("[Startup] WebSocket heartbeat disabled (WS_ENABLE_HEARTBEAT=False)")
 
+    # Add campaign scheduler job - runs every 30 seconds to process scheduled campaigns
+    scheduler.add_job(
+        run_campaign_scheduler,
+        'interval',
+        seconds=30,
+        id='campaign_scheduler',
+        replace_existing=True
+    )
+    print("[Startup] Campaign scheduler started (interval: 30s)")
+
+    # Start the scheduler if not already started
+    if not scheduler.running:
+        scheduler.start()
+
+    # Start call timeout service
+    asyncio.create_task(call_timeout_service.start())
+    print("[Startup] Call timeout service started (timeout: 30s, check interval: 10s)")
+
 @app.on_event("shutdown")
 async def on_shutdown():
     print("Server is shutting down...")
+
+    # Stop call timeout service
+    call_timeout_service.stop()
+    print("[Shutdown] Call timeout service stopped")
 
     # Shutdown scheduler
     if scheduler.running:

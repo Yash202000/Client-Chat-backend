@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
+from datetime import datetime
 
 class ConversationSessionBase(BaseModel):
     conversation_id: str
@@ -24,6 +25,16 @@ class ConversationSessionUpdate(BaseModel):
     context: Optional[Dict[str, Any]] = None
     status: Optional[str] = None # e.g., active, paused, waiting_for_input, completed
     rating: Optional[int] = None
+    is_ai_enabled: Optional[bool] = None
+    assignee_id: Optional[int] = None
+    contact_id: Optional[int] = None  # Allow updating contact_id when contact is created
+
+    # Handoff fields
+    handoff_requested_at: Optional[datetime] = None
+    handoff_reason: Optional[str] = None
+    assigned_pool: Optional[str] = None
+    waiting_for_agent: Optional[bool] = None
+    handoff_accepted_at: Optional[datetime] = None
 
 class ConversationSession(ConversationSessionBase):
     id: int

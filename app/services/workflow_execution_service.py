@@ -12,8 +12,9 @@ from app.schemas.memory import MemoryCreate
 from app.services.graph_execution_engine import GraphExecutionEngine
 from app.services.llm_tool_service import LLMToolService
 from app.services.workflow_intent_service import WorkflowIntentService
+from app.core.config import settings
 
-import requests
+import httpx
 import numexpr
 
 class WorkflowExecutionService:
@@ -220,23 +221,42 @@ class WorkflowExecutionService:
         except json.JSONDecodeError:
             return {"error": f"Invalid JSON in body: {resolved_body_str}"}
 
+        # Use asyncio to run the async HTTP request
+        import asyncio
         try:
-            response = None
-            if method == "GET":
-                response = requests.get(resolved_url, headers=headers)
-            elif method == "POST":
-                response = requests.post(resolved_url, headers=headers, json=body)
-            elif method == "PUT":
-                response = requests.put(resolved_url, headers=headers, json=body)
-            elif method == "DELETE":
-                response = requests.delete(resolved_url, headers=headers)
-            else:
-                return {"error": f"Unsupported HTTP method: {method}"}
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            return {"output": response.json() if response.headers.get('Content-Type') == 'application/json' else response.text}
-        except requests.exceptions.RequestException as e:
-            return {"error": f"HTTP request failed: {e}"}
+        async def make_request():
+            async with httpx.AsyncClient(timeout=settings.HTTP_REQUEST_TIMEOUT) as client:
+                try:
+                    response = None
+                    if method == "GET":
+                        response = await client.get(resolved_url, headers=headers)
+                    elif method == "POST":
+                        response = await client.post(resolved_url, headers=headers, json=body)
+                    elif method == "PUT":
+                        response = await client.put(resolved_url, headers=headers, json=body)
+                    elif method == "DELETE":
+                        response = await client.delete(resolved_url, headers=headers)
+                    else:
+                        return {"error": f"Unsupported HTTP method: {method}"}
+
+                    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'application/json' in content_type:
+                        return {"output": response.json()}
+                    else:
+                        return {"output": response.text}
+                except httpx.HTTPError as e:
+                    return {"error": f"HTTP request failed: {e}"}
+                except Exception as e:
+                    return {"error": f"Error executing HTTP request: {e}"}
+
+        try:
+            return loop.run_until_complete(make_request())
         except Exception as e:
             return {"error": f"Error executing HTTP request node: {e}"}
 

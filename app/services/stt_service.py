@@ -17,6 +17,13 @@ class GroqSTTService:
         self.api_key = api_key or GROQ_API_KEY
         self.base_url = GROQ_API_URL
 
+        # Validate API key is present
+        if not self.api_key:
+            raise ValueError(
+                "Groq API key is missing. Please set GROQ_API_KEY environment variable "
+                "or provide api_key parameter, or configure agent's Groq credential in vault."
+            )
+
     async def transcribe(self, file: UploadFile, model: Literal["whisper-large-v3-turbo", "whisper-large-v3"] = "whisper-large-v3-turbo") -> dict:
         """
         Convert audio to text using Groq's transcription service.

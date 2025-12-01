@@ -1,7 +1,7 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service
+from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service, widget_settings_service, agent_assignment_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message
 import json
@@ -64,8 +64,9 @@ async def public_voice_websocket_endpoint(
     stt_service = None
     if stt_provider == "groq":
         groq_api_key = None
-        # Check if the agent has a specific credential for Groq
-        if agent.credential and agent.credential.service == 'groq':
+        print(agent.credential)
+        # Check if the agent has a specific credential for Groq (case-insensitive)
+        if agent.credential and agent.credential.service.lower() == 'groq':
             logger.info("Found Groq credential associated with the agent.")
             try:
                 # The credential service returns the raw decrypted key for simple services like Groq
@@ -80,8 +81,10 @@ async def public_voice_websocket_endpoint(
         
         if not groq_api_key:
             logger.warning("Groq API key not found in agent's vault. Falling back to environment variable.")
-
-        stt_service = GroqSTTService(api_key=groq_api_key)
+            # Don't pass api_key if None, let service use environment variable
+            stt_service = GroqSTTService()
+        else:
+            stt_service = GroqSTTService(api_key=groq_api_key)
 
     elif stt_provider == "deepgram":
         stt_service = STTService(websocket)
@@ -96,6 +99,11 @@ async def public_voice_websocket_endpoint(
     transcript_queue = asyncio.Queue()
     audio_buffer = bytearray()
     last_audio_time = None
+
+    # Handoff state management
+    handoff_requested = False
+    waiting_for_agent = False
+    handoff_data = None
 
     async def handle_transcription():
         logger.info("Starting transcription handler")
@@ -116,24 +124,49 @@ async def public_voice_websocket_endpoint(
         # Groq does not use a persistent connection for transcription
 
     async def handle_audio_from_client():
-        nonlocal audio_buffer, last_audio_time
+        nonlocal audio_buffer, last_audio_time, handoff_requested, handoff_data
         logger.info("Starting audio from client handler")
         try:
             while True:
-                audio_chunk = await websocket.receive_bytes()
-                last_audio_time = asyncio.get_event_loop().time()
-                if stt_provider == "deepgram":
-                    if stt_service.deepgram_ws and not stt_service.deepgram_ws.closed:
-                        await stt_service.deepgram_ws.send_bytes(audio_chunk)
-                    else:
-                        break
-                elif stt_provider == "groq":
-                    audio_buffer.extend(audio_chunk)
+                # Receive both text and binary messages
+                message = await websocket.receive()
+
+                # Handle text messages (handoff requests)
+                if "text" in message:
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("type") == "request_handoff":
+                            logger.info(f"Manual handoff requested: {data}")
+                            handoff_requested = True
+                            handoff_data = {
+                                "reason": data.get("reason", "customer_request"),
+                                "summary": data.get("summary", "User requested human agent via button"),
+                                "priority": data.get("priority", "normal"),
+                                "pool": data.get("pool", "support")
+                            }
+                            # Put a special marker in the queue to trigger handoff processing
+                            await transcript_queue.put("__HANDOFF_REQUEST__")
+                    except json.JSONDecodeError:
+                        logger.error("Invalid JSON in text message")
+                    except Exception as e:
+                        logger.error(f"Error processing text message: {e}")
+
+                # Handle binary messages (audio chunks)
+                elif "bytes" in message:
+                    audio_chunk = message["bytes"]
+                    last_audio_time = asyncio.get_event_loop().time()
+                    if stt_provider == "deepgram":
+                        if stt_service.deepgram_ws and not stt_service.deepgram_ws.closed:
+                            await stt_service.deepgram_ws.send_bytes(audio_chunk)
+                        else:
+                            break
+                    elif stt_provider == "groq":
+                        audio_buffer.extend(audio_chunk)
 
         except WebSocketDisconnect:
             logger.info("Client disconnected from audio stream")
         except Exception as e:
-            logger.error(f"Error receiving audio from client: {e}")
+            logger.error(f"Error receiving from client: {e}")
         logger.info("Audio from client handler finished")
 
     async def process_groq_buffer():
@@ -153,7 +186,7 @@ async def public_voice_websocket_endpoint(
                         content_type="audio/wav",
                         read=read_audio_data
                     )
-                    
+
                     transcript_result = await stt_service.transcribe(mock_audio_file)
                     transcript = transcript_result.get("text")
                     if transcript:
@@ -166,6 +199,79 @@ async def public_voice_websocket_endpoint(
                     last_audio_time = None
         logger.info("Groq buffer processor finished")
 
+    async def handle_waiting_for_agent():
+        """Sends periodic waiting messages while customer waits for agent"""
+        nonlocal waiting_for_agent
+        logger.info("Starting waiting for agent handler")
+        wait_messages = [
+            "Please hold while I connect you to an agent...",
+            "Thank you for your patience. An agent will be with you shortly.",
+            "Still connecting you to the next available agent..."
+        ]
+        message_index = 0
+
+        while waiting_for_agent:
+            await asyncio.sleep(10)  # Send message every 10 seconds
+            if not waiting_for_agent:  # Check again after sleep
+                break
+
+            message_text = wait_messages[message_index % len(wait_messages)]
+            message_index += 1
+
+            # Send waiting message via WebSocket
+            await manager.broadcast_to_session(
+                session_id,
+                json.dumps({"message_type": "waiting", "message": message_text}),
+                "agent"
+            )
+
+            # Optionally convert to speech
+            if tts_provider:
+                try:
+                    audio_stream = tts_service.text_to_speech_stream(message_text, final_voice_id, tts_provider)
+                    async for audio_chunk in audio_stream:
+                        await websocket.send_bytes(audio_chunk)
+                except Exception as e:
+                    logger.error(f"Error sending wait message audio: {e}")
+
+        logger.info("Waiting for agent handler finished")
+
+    async def transition_to_livekit(agent_user_id: int):
+        """Transitions the voice session to LiveKit for human agent connection"""
+        nonlocal waiting_for_agent
+        logger.info(f"[LIVEKIT TRANSITION] Starting transition for session {session_id} with agent {agent_user_id}")
+
+        try:
+            # Stop waiting state
+            waiting_for_agent = False
+
+            # Generate LiveKit tokens
+            from app.api.v1.endpoints.video_calls import get_livekit_token
+            from app.core.config import settings
+
+            room_name = f"handoff_{session_id}_{agent_user_id}"
+
+            # Token for user
+            user_token = get_livekit_token(room_name, f"User-{session_id}")
+
+            # Send transition message to user
+            transition_message = {
+                "type": "transition_to_livekit",
+                "room_name": room_name,
+                "livekit_token": user_token,
+                "livekit_url": settings.LIVEKIT_URL,
+                "agent_id": agent_user_id
+            }
+
+            await websocket.send_text(json.dumps(transition_message))
+            logger.info(f"[LIVEKIT TRANSITION] Sent transition message to user")
+
+            # Give client time to process before closing WebSocket
+            await asyncio.sleep(2)
+
+        except Exception as e:
+            logger.error(f"[LIVEKIT TRANSITION] Error: {e}")
+
 
     transcription_task = asyncio.create_task(handle_transcription())
     client_audio_task = asyncio.create_task(handle_audio_from_client())
@@ -176,34 +282,104 @@ async def public_voice_websocket_endpoint(
 
     logger.info("All tasks created")
 
+    waiting_task = None
+
     try:
         while True:
             transcript = await transcript_queue.get()
             logger.info(f"Processing transcript: {transcript}")
-            
+
+            # Check if this is a manual handoff request
+            if transcript == "__HANDOFF_REQUEST__":
+                logger.info("[HANDOFF] Manual handoff request detected")
+                if handoff_data:
+                    # Process the handoff request
+                    handoff_result = await agent_assignment_service.request_handoff(
+                        db=db,
+                        session_id=session_id,
+                        reason=handoff_data["reason"],
+                        pool_name=handoff_data["pool"],
+                        priority=handoff_data["priority"]
+                    )
+
+                    logger.info(f"[HANDOFF] Result: {handoff_result}")
+
+                    if handoff_result["status"] == "agent_found":
+                        # Agent available - start waiting state
+                        waiting_for_agent = True
+                        waiting_task = asyncio.create_task(handle_waiting_for_agent())
+
+                        # Notify assigned agent via WebSocket
+                        await manager.broadcast(
+                            json.dumps({
+                                "type": "handoff_request",
+                                "session_id": session_id,
+                                "agent_id": agent_id,
+                                "summary": handoff_data["summary"],
+                                "reason": handoff_data["reason"],
+                                "assigned_agent_id": handoff_result["agent_id"]
+                            }),
+                            str(company_id)  # Broadcast to company channel
+                        )
+                    elif handoff_result["status"] == "no_agents_available":
+                        # No agents - collect callback info
+                        logger.info("[HANDOFF] No agents available, collecting callback info")
+                        # TODO: Implement callback collection via LLM
+
+                transcript_queue.task_done()
+                continue
+
             if transcript:
+                # Skip AI processing if waiting for agent
+                if waiting_for_agent:
+                    logger.info("[HANDOFF] Skipping AI processing - waiting for agent")
+                    transcript_queue.task_done()
+                    continue
+
                 # 1. Save and broadcast the user's transcribed message
                 user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
                 db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
                 await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_user_message).json(), "user")
 
-                # 2. Generate the agent's response
-                agent_response_text = await agent_execution_service.generate_agent_response(
-                    db, agent_id, session_id, company_id, transcript
-                )
-                logger.info(f"LLM response: {agent_response_text}")
+                # Check and send typing indicator before agent processing
+                typing_indicator_sent = False
+                widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
+                if widget_settings and widget_settings.typing_indicator_enabled:
+                    await manager.broadcast_to_session(
+                        session_id,
+                        json.dumps({"message_type": "typing", "is_typing": True, "sender": "agent"}),
+                        "agent"
+                    )
+                    typing_indicator_sent = True
+                    logger.info(f"[Voice] Typing indicator ON for session: {session_id}")
 
-                # 3. Save and broadcast the agent's text message
-                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
-                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                try:
+                    # 2. Generate the agent's response
+                    agent_response_text = await agent_execution_service.generate_agent_response(
+                        db, agent_id, session_id, session_id, company_id, transcript
+                    )
+                    logger.info(f"LLM response: {agent_response_text}")
 
-                # 4. Convert the agent's response to speech and stream it
-                audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
-                logger.info("Streaming TTS audio to client...")
-                async for audio_chunk in audio_stream:
-                    await websocket.send_bytes(audio_chunk)
-                
+                    # 3. Save and broadcast the agent's text message
+                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
+                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+
+                    # 4. Convert the agent's response to speech and stream it
+                    audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
+                    logger.info("Streaming TTS audio to client...")
+                    async for audio_chunk in audio_stream:
+                        await websocket.send_bytes(audio_chunk)
+                finally:
+                    # Turn off typing indicator after processing completes
+                    if typing_indicator_sent:
+                        await manager.broadcast_to_session(
+                            session_id,
+                            json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
+                            "agent"
+                        )
+                        logger.info(f"[Voice] Typing indicator OFF for session: {session_id}")
+
                 transcript_queue.task_done()
             logger.info("Finished processing transcript")
 
@@ -217,6 +393,8 @@ async def public_voice_websocket_endpoint(
         client_audio_task.cancel()
         if groq_buffer_task:
             groq_buffer_task.cancel()
+        if waiting_task:
+            waiting_task.cancel()
         await tts_service.close()
         manager.disconnect(websocket, session_id)
         logger.info(f"Cleaned up resources for voice session #{session_id}")

@@ -28,6 +28,10 @@ from app.models.workflow_trigger import WorkflowTrigger, TriggerChannel
 from app.models.chat_channel import ChatChannel
 from app.models.channel_membership import ChannelMembership
 from app.models.internal_chat_message import InternalChatMessage
+from app.models.chat_attachment import ChatAttachment
+from app.models.message_reaction import MessageReaction
+from app.models.message_mention import MessageMention
+from app.models.notification import Notification
 from app.models.video_call import VideoCall
 from app.models.published_widget_settings import PublishedWidgetSettings
 from app.models.ai_image import AIImage
@@ -37,4 +41,14 @@ from app.models.ai_tool import AITool
 from app.models.ai_tool_category import AIToolCategory
 from app.models.ai_tool_question import AIToolQuestion
 from app.models.intent import Intent, IntentMatch, Entity, ConversationTag
+
+# CRM Models
+from app.models.lead import Lead
+from app.models.campaign import Campaign
+from app.models.campaign_contact import CampaignContact
+from app.models.campaign_message import CampaignMessage
+from app.models.campaign_activity import CampaignActivity
+from app.models.lead_score import LeadScore
+from app.models.tag import Tag, lead_tags, contact_tags
+from app.models.segment import Segment, SegmentType
 

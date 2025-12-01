@@ -16,7 +16,7 @@ class ChatMessage(ChatMessageBase):
     timestamp: datetime
     agent_id: Optional[int]
     company_id: int
-    contact_id: int
+    contact_id: Optional[int] = None  # Can be NULL for anonymous conversations
     token: Optional[str] = None
     status: Optional[str] = None
     assignee_id: Optional[int] = None

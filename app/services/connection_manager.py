@@ -125,6 +125,19 @@ class ConnectionManager:
         print(f"[broadcast_to_company] Broadcasting to company {company_id} (channel: '{channel_id}')")
         await self.broadcast(message, channel_id)
 
+    async def broadcast_to_user(self, user_id: int, message: str):
+        """
+        Broadcast a message to a specific user across all their active sessions.
+        Useful for notifications like incoming calls.
+
+        Args:
+            user_id: The user ID to send the message to
+            message: The message to send
+        """
+        user_channel = f"user_{user_id}"
+        print(f"[broadcast_to_user] Broadcasting to user {user_id} (channel: '{user_channel}')")
+        await self.broadcast(message, user_channel)
+
     async def disconnect_all(self):
         print("[ConnectionManager] Disconnecting all clients...")
         for session_id in list(self.active_connections.keys()):

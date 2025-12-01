@@ -12,6 +12,14 @@ class CompanySettingsBase(BaseModel):
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     custom_domain: Optional[str] = None
+    # SMTP Settings
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: Optional[bool] = True
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
 
 class CompanySettingsCreate(CompanySettingsBase):
     pass
@@ -26,9 +34,29 @@ class CompanySettingsUpdate(BaseModel):
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     custom_domain: Optional[str] = None
+    # SMTP Settings
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
 
 class CompanySettings(CompanySettingsBase):
     id: int
 
     class Config:
         orm_mode = True
+
+
+class SMTPTestRequest(BaseModel):
+    """Request to test SMTP configuration"""
+    to_email: str
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None

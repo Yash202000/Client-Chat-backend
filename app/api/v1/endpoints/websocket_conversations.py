@@ -99,6 +99,9 @@ async def internal_chat_websocket_endpoint(
     if not current_user:
         return
 
+    # Note: User-specific channels are available but incoming calls use company channel
+    # This provides better reliability as agents are always connected to company channel
+
     # Update presence with temporary DB session
     with get_db_session() as db:
         user_service.update_user_presence(db, user_id=current_user.id, status="online")
@@ -655,13 +658,48 @@ async def websocket_endpoint(
                         if not workflow:
                             # If no specific workflow matches, provide a generic response
                             print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
-                            agent_response_text = await agent_execution_service.generate_agent_response(
-                                db, agent_id, session_id, company_id, message_data['message']
-                            )
-                            agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                            db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
-                            await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                            print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+
+                            # Check if streaming is enabled
+                            should_stream = settings.LLM_STREAMING_ENABLED
+                            if widget_settings and hasattr(widget_settings, 'streaming_enabled'):
+                                should_stream = widget_settings.streaming_enabled
+
+                            if should_stream:
+                                # STREAMING MODE: Stream tokens as they arrive
+                                print(f"[websocket_conversations] Using streaming mode for session: {session_id}")
+                                full_response = ""
+                                async for token_json in agent_execution_service.generate_agent_response_stream(
+                                    db, agent_id, session_id, session_id, company_id, message_data['message']
+                                ):
+                                    # Forward streaming tokens to client
+                                    await manager.broadcast_to_session(session_id, token_json, "agent")
+
+                                    # Parse to accumulate full response
+                                    try:
+                                        token_data = json.loads(token_json)
+                                        if token_data.get('type') == 'stream':
+                                            full_response += token_data.get('content', '')
+                                        elif token_data.get('type') in ['stream_end', 'complete']:
+                                            full_response = token_data.get('full_content', full_response) or token_data.get('content', full_response)
+                                    except:
+                                        pass
+
+                                # Save the complete message to database
+                                if full_response:
+                                    agent_message = schemas_chat_message.ChatMessageCreate(message=full_response, message_type="message")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                    print(f"[websocket_conversations] Saved streamed response to database for session: {session_id}")
+                            else:
+                                # NON-STREAMING MODE: Original behavior
+                                print(f"[websocket_conversations] Using non-streaming mode for session: {session_id}")
+                                agent_response_text = await agent_execution_service.generate_agent_response(
+                                    db, agent_id, session_id, session_id, company_id, message_data['message']
+                                )
+                                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                                print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+
                             continue
 
                         # 3. Execute the matched workflow with the current state (conversation_id)
@@ -797,9 +835,6 @@ async def public_websocket_endpoint(
             with get_db_session() as db:
                 workflow_exec_service = WorkflowExecutionService(db)
 
-                # Ensure contact and session exist before creating a message
-                contact = contact_service.get_or_create_contact_for_channel(db, company_id=company_id, channel="web_chat", channel_identifier=session_id)
-
                 # Check if this is a new session
                 existing_session = db.query(models_conversation_session.ConversationSession).filter(
                     models_conversation_session.ConversationSession.conversation_id == session_id,
@@ -807,7 +842,9 @@ async def public_websocket_endpoint(
                 ).first()
                 is_new_session = existing_session is None
 
-                session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=contact.id, channel="web_chat", company_id=company_id, agent_id=agent_id)
+                # Create session without contact for anonymous websocket conversations
+                # Contact will be created only when user provides information or via platform/LLM tools
+                session = conversation_session_service.get_or_create_session(db, conversation_id=session_id, workflow_id=None, contact_id=None, channel="web_chat", company_id=company_id, agent_id=agent_id)
 
                 # Broadcast new session creation to all company users
                 if is_new_session:
@@ -965,7 +1002,33 @@ async def public_websocket_endpoint(
 
                         # If no workflow was found or resumed, fallback to the default agent response
                         if not execution_result:
-                            await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                            agent_response = await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
+                            if agent_response:
+                                # Handle dict response (with call info) or string response
+                                if isinstance(agent_response, dict):
+                                    agent_response_text = agent_response.get('text', '')
+                                    call_initiated = agent_response.get('call_initiated', False)
+                                else:
+                                    agent_response_text = agent_response
+                                    call_initiated = False
+
+                                agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+
+                                # Build message dict for broadcast
+                                message_dict = schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump(mode='json')
+
+                                # Add call info to broadcast if call was initiated
+                                if call_initiated and isinstance(agent_response, dict):
+                                    message_dict.update({
+                                        'call_initiated': True,
+                                        'agent_name': agent_response.get('agent_name'),
+                                        'room_name': agent_response.get('room_name'),
+                                        'livekit_url': agent_response.get('livekit_url'),
+                                        'user_token': agent_response.get('user_token')
+                                    })
+
+                                await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
                     finally:
                         # Turn off typing indicator after AI processing completes
                         if typing_indicator_sent:

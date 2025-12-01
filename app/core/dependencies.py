@@ -63,7 +63,7 @@ async def get_current_user(
 
     if user is None:
         raise credentials_exception
-    return schemas_user.User.from_orm(user)
+    return schemas_user.User.model_validate(user)
 
 async def get_current_user_from_ws(websocket: WebSocket, db: Session = Depends(get_db), token: Optional[str] = Query(None)) -> models_user.User:
     if token is None:

@@ -37,6 +37,7 @@ class User(Base):
     # Relationships for internal chat
     channel_memberships = relationship("ChannelMembership", back_populates="user")
     sent_messages = relationship("InternalChatMessage", back_populates="sender")
+    notifications = relationship("Notification", foreign_keys="[Notification.user_id]", back_populates="user")
 
     # Presence status for chat
     presence_status = Column(String, default="offline") # online, offline, busy
