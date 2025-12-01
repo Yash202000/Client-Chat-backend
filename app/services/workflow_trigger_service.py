@@ -247,7 +247,7 @@ def delete_triggers_for_workflow(
     return len(triggers) > 0
 
 
-def find_workflow_for_channel_message(
+async def find_workflow_for_channel_message(
     db: Session,
     channel: TriggerChannel,
     company_id: int,
@@ -257,10 +257,9 @@ def find_workflow_for_channel_message(
     """
     Find the most appropriate workflow for a message received on a specific channel.
 
-    This function:
-    1. Gets all active triggers for the channel
-    2. For each workflow with a trigger, checks if the message matches any intent
-    3. Returns the workflow with the highest confidence match
+    HYBRID APPROACH:
+    1. If workflow has a trigger node for this channel → Execute immediately
+    2. If no trigger exists → Use intent detection to find matching workflow
 
     Args:
         db: Database session
@@ -273,41 +272,81 @@ def find_workflow_for_channel_message(
         Workflow object if a match is found, None otherwise
     """
     from app.services.workflow_intent_service import WorkflowIntentService
+    import logging
 
-    # Get all active triggers for this channel
+    logger = logging.getLogger(__name__)
+
+    print(f"[TRIGGER SERVICE] Looking for triggers - channel={channel}, company_id={company_id}")
+
+    # PRIORITY 1: Check for direct channel triggers
     triggers = get_triggers_by_channel(db, channel, company_id)
 
-    if not triggers:
+    print(f"[TRIGGER SERVICE] Found {len(triggers) if triggers else 0} triggers for channel {channel}")
+
+    if triggers:
+        logger.info(f"Found {len(triggers)} direct triggers for channel {channel}")
+
+        # Return the first active workflow with a trigger for this channel
+        for trigger in triggers:
+            workflow = db.query(Workflow).filter(
+                Workflow.id == trigger.workflow_id,
+                Workflow.is_active == True
+            ).first()
+
+            if workflow:
+                print(f"[TRIGGER SERVICE] ✓ Direct trigger match - workflow {workflow.id}: {workflow.name}")
+                logger.info(f"Direct trigger match - executing workflow {workflow.id}: {workflow.name}")
+                return workflow
+            else:
+                print(f"[TRIGGER SERVICE] Trigger {trigger.id} has inactive/missing workflow")
+
+    print(f"[TRIGGER SERVICE] No direct triggers matched, trying intent detection...")
+    logger.debug(f"No direct triggers for channel {channel}, trying intent detection...")
+
+    # PRIORITY 2: Use intent detection (for workflows without specific channel triggers)
+    # Get all active workflows for company that have intent detection enabled
+    workflows_with_intent = db.query(Workflow).filter(
+        Workflow.company_id == company_id,
+        Workflow.is_active == True,
+        Workflow.intent_config.isnot(None)
+    ).all()
+
+    if not workflows_with_intent:
+        logger.debug("No workflows with intent config found")
         return None
 
-    # For now, we'll use intent detection to find the best workflow
-    # Later this could be enhanced with priority, filters, etc.
     intent_service = WorkflowIntentService(db)
     best_match = None
     best_confidence = 0.0
 
-    for trigger in triggers:
-        workflow = db.query(Workflow).filter(
-            Workflow.id == trigger.workflow_id,
-            Workflow.is_active == True
-        ).first()
-
-        if not workflow or not workflow.intent_config:
-            continue
-
+    for workflow in workflows_with_intent:
         intent_config = workflow.intent_config if isinstance(workflow.intent_config, dict) else {}
+
         if not intent_config.get('enabled', False):
             continue
 
-        # Check if message matches any intent for this workflow
-        result = intent_service.detect_intent(
-            workflow_id=workflow.id,
-            company_id=company_id,
-            message=message
-        )
+        try:
+            result = await intent_service.detect_intent_for_workflow(
+                message=message,
+                workflow=workflow,
+                conversation_id=session_data.get('session_id', '') if session_data else '',
+                company_id=company_id
+            )
 
-        if result['matched'] and result['confidence'] > best_confidence:
-            best_confidence = result['confidence']
-            best_match = workflow
+            if result:
+                intent_dict, confidence, entities, matched_method = result
+                logger.info(f"Intent matched: {intent_dict.get('name')} confidence={confidence} workflow={workflow.id}")
 
-    return best_match
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_match = workflow
+        except Exception as e:
+            logger.error(f"Intent detection failed for workflow {workflow.id}: {e}")
+            continue
+
+    if best_match:
+        logger.info(f"Returning intent-matched workflow: {best_match.id}")
+        return best_match
+
+    logger.debug("No workflow matched via intent detection")
+    return None

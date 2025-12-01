@@ -178,11 +178,19 @@ class WorkflowExecutionService:
 
         result = False
         if operator == "equals":
-            result = actual_value == comparison_value
+            # Case-insensitive string comparison for better voice input handling
+            if isinstance(actual_value, str) and isinstance(comparison_value, str):
+                result = actual_value.lower().strip() == comparison_value.lower().strip()
+            else:
+                result = actual_value == comparison_value
         elif operator == "not_equals":
-            result = actual_value != comparison_value
+            if isinstance(actual_value, str) and isinstance(comparison_value, str):
+                result = actual_value.lower().strip() != comparison_value.lower().strip()
+            else:
+                result = actual_value != comparison_value
         elif operator == "contains":
-            result = str(comparison_value) in str(actual_value)
+            # Case-insensitive contains check for better voice input handling
+            result = str(comparison_value).lower() in str(actual_value).lower()
         elif operator == "greater_than":
             try:
                 result = float(actual_value) > float(comparison_value)
@@ -845,8 +853,16 @@ class WorkflowExecutionService:
         context['last_workflow_completed_at'] = datetime.now().isoformat()
         context['last_workflow_id'] = workflow_obj.id
 
+        # Update session context
         session_update = ConversationSessionUpdate(status='active', context=context)
         conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+        # Clear workflow_id and next_step_id directly so next message triggers fresh workflow search
+        session.workflow_id = None
+        session.next_step_id = None
+        self.db.commit()
+        self.db.refresh(session)
+        print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
         final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

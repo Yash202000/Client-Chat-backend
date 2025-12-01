@@ -21,6 +21,7 @@ class ConversationSessionCreate(BaseModel):
 
 
 class ConversationSessionUpdate(BaseModel):
+    workflow_id: Optional[int] = None
     next_step_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
     status: Optional[str] = None # e.g., active, paused, waiting_for_input, completed

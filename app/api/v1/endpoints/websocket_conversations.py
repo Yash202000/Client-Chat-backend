@@ -639,13 +639,21 @@ async def websocket_endpoint(
                     execution_result = None
                     try:
                         # Try trigger-based workflow finding first (new system)
-                        workflow = workflow_trigger_service.find_workflow_for_channel_message(
-                            db=db,
-                            channel=TriggerChannel.WEBSOCKET,
-                            company_id=company_id,
-                            message=user_message,
-                            session_data={"session_id": session_id, "agent_id": agent_id}
-                        )
+                        print(f"[websocket_conversations] Calling trigger service for company_id={company_id}, channel=WEBSOCKET")
+                        try:
+                            workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                                db=db,
+                                channel=TriggerChannel.WEBSOCKET,
+                                company_id=company_id,
+                                message=user_message,
+                                session_data={"session_id": session_id, "agent_id": agent_id}
+                            )
+                            print(f"[websocket_conversations] Trigger service returned: {workflow.name if workflow else None}")
+                        except Exception as trigger_error:
+                            print(f"[websocket_conversations] ERROR in trigger service: {trigger_error}")
+                            import traceback
+                            traceback.print_exc()
+                            workflow = None
 
                         # Fallback to old similarity search if no trigger-based workflow found
                         if not workflow:
@@ -994,7 +1002,29 @@ async def public_websocket_endpoint(
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
-                            workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
+                            print(f"[websocket_conversations] Looking for workflow - company_id={company_id}")
+
+                            # Try trigger-based workflow finding first (new system)
+                            try:
+                                workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                                    db=db,
+                                    channel=TriggerChannel.WEBSOCKET,
+                                    company_id=company_id,
+                                    message=message_for_storage,
+                                    session_data={"session_id": session_id, "agent_id": agent_id}
+                                )
+                                print(f"[websocket_conversations] Trigger service returned: {workflow.name if workflow else None}")
+                            except Exception as trigger_error:
+                                print(f"[websocket_conversations] ERROR in trigger service: {trigger_error}")
+                                import traceback
+                                traceback.print_exc()
+                                workflow = None
+
+                            # Fallback to old similarity search if no trigger-based workflow found
+                            if not workflow:
+                                print(f"[websocket_conversations] Falling back to similarity search")
+                                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
+
                             if workflow:
                                 execution_result = await workflow_exec_service.execute_workflow(
                                     user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id

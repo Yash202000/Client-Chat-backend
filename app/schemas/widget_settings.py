@@ -29,6 +29,10 @@ class WidgetSettingsBase(BaseModel):
     communication_mode: Optional[str] = 'chat'
     meta: Optional[Dict[str, Any]] = None  # Flexible JSON field for additional customizations
     agent_id: int
+    # Voice settings (from agent, not persisted in widget_settings)
+    voice_id: Optional[str] = None
+    stt_provider: Optional[str] = None
+    tts_provider: Optional[str] = None
 
 class WidgetSettingsCreate(WidgetSettingsBase):
     pass
