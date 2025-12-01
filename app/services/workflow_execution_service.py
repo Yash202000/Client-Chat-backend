@@ -787,7 +787,7 @@ class WorkflowExecutionService:
                     }
                 }
 
-            elif node_type == "output":
+            elif node_type == "response":
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
