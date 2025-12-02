@@ -8,16 +8,18 @@ import json
 from app.core.dependencies import get_db
 from app.core.config import settings
 from app.services import (
-    contact_service, 
-    conversation_session_service, 
-    chat_service, 
+    contact_service,
+    conversation_session_service,
+    chat_service,
     workflow_service,
-    integration_service, 
+    workflow_trigger_service,
+    integration_service,
     messaging_service,
     agent_service,
     agent_execution_service
 )
 from app.services.workflow_execution_service import WorkflowExecutionService
+from app.models.workflow_trigger import TriggerChannel
 from app.services.connection_manager import manager
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import websocket as schemas_websocket, chat_message as schemas_chat_message
@@ -104,7 +106,18 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                     return Response(status_code=200)
 
-                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
+                # Try trigger-based workflow finding first (new system)
+                workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                    db=db,
+                    channel=TriggerChannel.WHATSAPP,
+                    company_id=company_id,
+                    message=message_text,
+                    session_data={"session_id": session.conversation_id}
+                )
+
+                # Fallback to old similarity search if no trigger-based workflow found
+                if not workflow:
+                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
 
                 if not workflow:
                     print(f"No matching workflow found for message: '{message_text}'. Using default agent response.")

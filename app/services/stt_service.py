@@ -12,6 +12,41 @@ DEEPGRAM_URL = "https://api.deepgram.com/v1/listen?model=nova-2&interim_results=
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_API_URL = "https://api.groq.com/openai/v1/audio"
 
+# OpenAI configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_URL = "https://api.openai.com/v1/audio"
+
+
+class OpenAISTTService:
+    """OpenAI Whisper-based Speech-to-Text service."""
+
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or OPENAI_API_KEY
+        self.base_url = OPENAI_API_URL
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenAI API key is missing. Please set OPENAI_API_KEY environment variable "
+                "or provide api_key parameter."
+            )
+
+    async def transcribe(self, file, model: str = "whisper-1") -> dict:
+        """
+        Convert audio to text using OpenAI's Whisper transcription service.
+        """
+        url = f"{self.base_url}/transcriptions"
+        async with aiohttp.ClientSession() as session:
+            form = aiohttp.FormData()
+            form.add_field("file", await file.read(), filename=file.filename, content_type=file.content_type)
+            form.add_field("model", model)
+
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+
+            async with session.post(url, data=form, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+
+
 class GroqSTTService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or GROQ_API_KEY

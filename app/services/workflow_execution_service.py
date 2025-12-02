@@ -154,52 +154,94 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error retrieving knowledge: {e}"}
 
-    def _execute_conditional_node(self, node_data: dict, context: dict, results: dict):
-        variable_placeholder = node_data.get("variable", "")
-        operator = node_data.get("operator", "equals")
-        comparison_value = node_data.get("value", "")
-
+    def _evaluate_single_condition(self, variable_placeholder: str, operator: str, comparison_value: str, context: dict, results: dict) -> bool:
+        """Evaluate a single condition and return True/False."""
         # Resolve the variable placeholder to get the actual value from the context or results
         actual_value = self._resolve_placeholders(variable_placeholder, context, results)
 
-        print(f"DEBUG: Executing conditional node:")
-        print(f"  - Variable '{variable_placeholder}' resolved to: '{actual_value}' (type: {type(actual_value)})")
-        print(f"  - Operator: '{operator}'")
-        print(f"  - Comparison Value: '{comparison_value}' (type: {type(comparison_value)})")
+        print(f"    - Variable '{variable_placeholder}' resolved to: '{actual_value}' (type: {type(actual_value)})")
+        print(f"    - Operator: '{operator}', Comparison Value: '{comparison_value}'")
 
         # Coerce types for comparison where possible
         try:
-            # Try to convert comparison_value to the type of actual_value if it's a number
             if isinstance(actual_value, (int, float)):
                 comparison_value = type(actual_value)(comparison_value)
         except (ValueError, TypeError):
-            # If conversion fails, proceed with string comparison
             pass
 
         result = False
         if operator == "equals":
-            result = actual_value == comparison_value
+            if isinstance(actual_value, str) and isinstance(comparison_value, str):
+                result = actual_value.lower().strip() == comparison_value.lower().strip()
+            else:
+                result = actual_value == comparison_value
         elif operator == "not_equals":
-            result = actual_value != comparison_value
+            if isinstance(actual_value, str) and isinstance(comparison_value, str):
+                result = actual_value.lower().strip() != comparison_value.lower().strip()
+            else:
+                result = actual_value != comparison_value
         elif operator == "contains":
-            result = str(comparison_value) in str(actual_value)
+            result = str(comparison_value).lower() in str(actual_value).lower()
         elif operator == "greater_than":
             try:
                 result = float(actual_value) > float(comparison_value)
             except (ValueError, TypeError):
-                result = False # Cannot compare non-numeric values
+                result = False
         elif operator == "less_than":
             try:
                 result = float(actual_value) < float(comparison_value)
             except (ValueError, TypeError):
-                result = False # Cannot compare non-numeric values
+                result = False
         elif operator == "is_set":
             result = actual_value is not None and actual_value != ''
         elif operator == "is_not_set":
             result = actual_value is None or actual_value == ''
-        
-        print(f"  - Condition evaluated to: {result}")
-        return {"output": result}
+
+        print(f"    - Result: {result}")
+        return result
+
+    def _execute_conditional_node(self, node_data: dict, context: dict, results: dict):
+        """
+        Execute a conditional node with support for multiple conditions (if/elseif/else).
+
+        Supports two formats:
+        1. Legacy single condition: {"variable": "...", "operator": "...", "value": "..."}
+           - Returns {"output": True/False} for true/false handles
+
+        2. Multi-condition: {"conditions": [{"variable": "...", "operator": "...", "value": "..."}, ...]}
+           - Returns {"output": index} for the first matching condition (handle "0", "1", "2", etc.)
+           - Returns {"output": "else"} if no condition matches (handle "else")
+        """
+        conditions = node_data.get("conditions", [])
+
+        # Check if using new multi-condition format
+        if conditions and isinstance(conditions, list) and len(conditions) > 0:
+            print(f"DEBUG: Executing multi-condition node with {len(conditions)} conditions:")
+
+            for index, condition in enumerate(conditions):
+                variable = condition.get("variable", "")
+                operator = condition.get("operator", "equals")
+                value = condition.get("value", "")
+
+                print(f"  Condition {index} (handle '{index}'):")
+                if self._evaluate_single_condition(variable, operator, value, context, results):
+                    print(f"  ✓ Condition {index} matched! Routing to handle '{index}'")
+                    return {"output": index}  # Return index for routing
+
+            # No condition matched, return else
+            print(f"  ✗ No conditions matched. Routing to 'else' handle")
+            return {"output": "else"}
+
+        else:
+            # Legacy single condition format (backward compatible)
+            variable_placeholder = node_data.get("variable", "")
+            operator = node_data.get("operator", "equals")
+            comparison_value = node_data.get("value", "")
+
+            print(f"DEBUG: Executing single conditional node:")
+            result = self._evaluate_single_condition(variable_placeholder, operator, comparison_value, context, results)
+            print(f"  - Condition evaluated to: {result}")
+            return {"output": result}
 
     def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
         url = node_data.get("url", "")
@@ -745,7 +787,7 @@ class WorkflowExecutionService:
                     }
                 }
 
-            elif node_type == "output":
+            elif node_type == "response":
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
@@ -845,8 +887,16 @@ class WorkflowExecutionService:
         context['last_workflow_completed_at'] = datetime.now().isoformat()
         context['last_workflow_id'] = workflow_obj.id
 
+        # Update session context
         session_update = ConversationSessionUpdate(status='active', context=context)
         conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+        # Clear workflow_id and next_step_id directly so next message triggers fresh workflow search
+        session.workflow_id = None
+        session.next_step_id = None
+        self.db.commit()
+        self.db.refresh(session)
+        print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
         final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

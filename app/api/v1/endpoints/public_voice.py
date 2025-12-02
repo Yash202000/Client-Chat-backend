@@ -1,15 +1,16 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
-from app.services import chat_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service, widget_settings_service, agent_assignment_service
+from app.services import chat_service, workflow_service, workflow_trigger_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, credential_service, widget_settings_service, agent_assignment_service
 from app.services.workflow_execution_service import WorkflowExecutionService
+from app.models.workflow_trigger import TriggerChannel
 from app.schemas import chat_message as schemas_chat_message
 import json
 from typing import List, Dict, Any
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.models import user as models_user, conversation_session as models_conversation_session
 from app.services.connection_manager import manager
-from app.services.stt_service import STTService, GroqSTTService
+from app.services.stt_service import STTService, GroqSTTService, OpenAISTTService
 from app.services.tts_service import TTSService
 from fastapi import UploadFile
 import io
@@ -32,6 +33,7 @@ async def public_voice_websocket_endpoint(
     session_id: str,
     user_type: str = Query(...),
     voice_id: str = Query("21m00Tcm4TlvDq8ikWAM"), # Default voice
+    stt_provider_param: str = Query(None, alias="stt_provider"), # Optional override from frontend
     db: Session = Depends(get_db)
 ):
     logger.info(f"New public voice connection for session {session_id}")
@@ -55,12 +57,31 @@ async def public_voice_websocket_endpoint(
             tts_provider = agent.tts_provider
         if agent.stt_provider:
             stt_provider = agent.stt_provider
-    
+
+    # Allow frontend to override STT provider via query parameter
+    if stt_provider_param:
+        stt_provider = stt_provider_param
+        logger.info(f"STT provider overridden by frontend to: {stt_provider}")
+
     logger.info(f"STT Provider: {stt_provider}, TTS Provider: {tts_provider}, Voice ID: {final_voice_id}")
 
     await manager.connect(websocket, session_id, user_type)
     logger.info(f"WebSocket connected to manager for session {session_id}")
-    
+
+    # Get OpenAI API key from vault if available (used for both STT and TTS)
+    openai_api_key = None
+    if agent.credential and agent.credential.service.lower() == 'openai':
+        logger.info("Found OpenAI credential associated with the agent.")
+        try:
+            decrypted_key = credential_service.get_decrypted_credential(db, agent.credential.id, company_id)
+            if decrypted_key and isinstance(decrypted_key, str):
+                openai_api_key = decrypted_key
+                logger.info("Using OpenAI API key from Vault for STT/TTS.")
+            else:
+                logger.warning("OpenAI credential found but the decrypted key is not a valid string.")
+        except Exception as e:
+            logger.error(f"Failed to decrypt OpenAI credential: {e}")
+
     stt_service = None
     if stt_provider == "groq":
         groq_api_key = None
@@ -81,10 +102,28 @@ async def public_voice_websocket_endpoint(
         
         if not groq_api_key:
             logger.warning("Groq API key not found in agent's vault. Falling back to environment variable.")
-            # Don't pass api_key if None, let service use environment variable
-            stt_service = GroqSTTService()
+
+        try:
+            stt_service = GroqSTTService(api_key=groq_api_key) if groq_api_key else GroqSTTService()
+        except ValueError as e:
+            # Groq API key not available - try to fall back to OpenAI if available
+            if openai_api_key:
+                logger.warning(f"Groq STT failed ({e}). Falling back to OpenAI STT.")
+                stt_service = OpenAISTTService(api_key=openai_api_key)
+                stt_provider = "openai"  # Update provider for buffer processing
+            else:
+                logger.error(f"Groq STT failed and no OpenAI fallback available: {e}")
+                await websocket.send_text('{"error": "STT service not configured. Please set up Groq or OpenAI credentials."}')
+                await websocket.close(code=1008)
+                return
+
+    elif stt_provider == "openai":
+        # Use the OpenAI key retrieved earlier (from vault or env)
+        if openai_api_key:
+            stt_service = OpenAISTTService(api_key=openai_api_key)
         else:
-            stt_service = GroqSTTService(api_key=groq_api_key)
+            logger.warning("OpenAI API key not found in vault. Falling back to environment variable.")
+            stt_service = OpenAISTTService()
 
     elif stt_provider == "deepgram":
         stt_service = STTService(websocket)
@@ -93,8 +132,8 @@ async def public_voice_websocket_endpoint(
         await websocket.close(code=1008)
         return
 
-    tts_service = TTSService()
-    logger.info("STT and TTS services initialized")
+    tts_service = TTSService(openai_api_key=openai_api_key)
+    logger.info(f"STT and TTS services initialized (OpenAI key from vault: {bool(openai_api_key)})")
     
     transcript_queue = asyncio.Queue()
     audio_buffer = bytearray()
@@ -154,14 +193,16 @@ async def public_voice_websocket_endpoint(
                 # Handle binary messages (audio chunks)
                 elif "bytes" in message:
                     audio_chunk = message["bytes"]
+                    logger.info(f"[AUDIO] Received audio chunk: {len(audio_chunk)} bytes, provider: {stt_provider}")
                     last_audio_time = asyncio.get_event_loop().time()
                     if stt_provider == "deepgram":
                         if stt_service.deepgram_ws and not stt_service.deepgram_ws.closed:
                             await stt_service.deepgram_ws.send_bytes(audio_chunk)
                         else:
                             break
-                    elif stt_provider == "groq":
+                    elif stt_provider in ("groq", "openai"):
                         audio_buffer.extend(audio_chunk)
+                        logger.info(f"[AUDIO] Buffer size now: {len(audio_buffer)} bytes")
 
         except WebSocketDisconnect:
             logger.info("Client disconnected from audio stream")
@@ -169,35 +210,47 @@ async def public_voice_websocket_endpoint(
             logger.error(f"Error receiving from client: {e}")
         logger.info("Audio from client handler finished")
 
-    async def process_groq_buffer():
+    async def process_batch_stt_buffer():
+        """Process buffered audio for batch STT providers (Groq, OpenAI)."""
         nonlocal audio_buffer, last_audio_time
-        logger.info("Starting Groq buffer processor")
+        logger.info(f"Starting batch STT buffer processor for {stt_provider}")
         while True:
             await asyncio.sleep(0.5) # Check every 500ms
-            if audio_buffer and last_audio_time and (asyncio.get_event_loop().time() - last_audio_time > 1.0): # 1 second pause
-                logger.info("Pause detected, processing audio buffer")
+            current_time = asyncio.get_event_loop().time()
+            if audio_buffer:
+                time_since_last = current_time - last_audio_time if last_audio_time else 0
+                logger.debug(f"[{stt_provider.upper()}] Buffer check: {len(audio_buffer)} bytes, time since last audio: {time_since_last:.2f}s")
+            if audio_buffer and last_audio_time and (current_time - last_audio_time > 1.0): # 1 second pause
+                logger.info(f"[{stt_provider.upper()}] Pause detected, processing audio buffer of {len(audio_buffer)} bytes")
                 try:
                     # Create a duck-typed object that mimics UploadFile for the STT service
                     async def read_audio_data():
                         return bytes(audio_buffer)
 
+                    # Browser sends audio/webm format from MediaRecorder
                     mock_audio_file = SimpleNamespace(
-                        filename="audio.wav",
-                        content_type="audio/wav",
+                        filename="audio.webm",
+                        content_type="audio/webm",
                         read=read_audio_data
                     )
 
+                    logger.info(f"[{stt_provider.upper()}] Calling transcription API...")
                     transcript_result = await stt_service.transcribe(mock_audio_file)
+                    logger.info(f"[{stt_provider.upper()}] API response: {transcript_result}")
                     transcript = transcript_result.get("text")
                     if transcript:
-                        logger.info(f"STT transcription result: {transcript}")
+                        logger.info(f"[{stt_provider.upper()}] Transcription result: {transcript}")
                         await transcript_queue.put(transcript)
+                    else:
+                        logger.warning(f"[{stt_provider.upper()}] Empty or no transcript in response")
                 except Exception as e:
-                    logger.error(f"Error during Groq transcription: {e}")
+                    logger.error(f"[{stt_provider.upper()}] Error during transcription: {e}")
+                    import traceback
+                    traceback.print_exc()
                 finally:
                     audio_buffer.clear()
                     last_audio_time = None
-        logger.info("Groq buffer processor finished")
+        logger.info(f"Batch STT buffer processor finished for {stt_provider}")
 
     async def handle_waiting_for_agent():
         """Sends periodic waiting messages while customer waits for agent"""
@@ -276,9 +329,9 @@ async def public_voice_websocket_endpoint(
     transcription_task = asyncio.create_task(handle_transcription())
     client_audio_task = asyncio.create_task(handle_audio_from_client())
     
-    groq_buffer_task = None
-    if stt_provider == "groq":
-        groq_buffer_task = asyncio.create_task(process_groq_buffer())
+    batch_stt_task = None
+    if stt_provider in ("groq", "openai"):
+        batch_stt_task = asyncio.create_task(process_batch_stt_buffer())
 
     logger.info("All tasks created")
 
@@ -339,7 +392,7 @@ async def public_voice_websocket_endpoint(
                 # 1. Save and broadcast the user's transcribed message
                 user_message = schemas_chat_message.ChatMessageCreate(message=transcript, message_type='message')
                 db_user_message = chat_service.create_chat_message(db, user_message, agent_id, session_id, company_id, "user")
-                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_user_message).json(), "user")
+                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_user_message).model_dump_json(), "user")
 
                 # Check and send typing indicator before agent processing
                 typing_indicator_sent = False
@@ -354,16 +407,72 @@ async def public_voice_websocket_endpoint(
                     logger.info(f"[Voice] Typing indicator ON for session: {session_id}")
 
                 try:
-                    # 2. Generate the agent's response
-                    agent_response_text = await agent_execution_service.generate_agent_response(
-                        db, agent_id, session_id, session_id, company_id, transcript
-                    )
+                    # 2. Check for workflow triggers first
+                    agent_response_text = None
+                    workflow_executed = False
+
+                    try:
+                        workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                            db=db,
+                            channel=TriggerChannel.WEBSOCKET,
+                            company_id=company_id,
+                            message=transcript,
+                            session_data={"session_id": session_id, "agent_id": agent_id}
+                        )
+                        logger.info(f"[Voice] Trigger service returned: {workflow.name if workflow else None}")
+
+                        if workflow:
+                            # Execute workflow instead of direct agent response
+                            workflow_exec_service = WorkflowExecutionService(db)
+                            execution_result = await workflow_exec_service.execute_workflow(
+                                user_message=transcript,
+                                company_id=company_id,
+                                workflow=workflow,
+                                conversation_id=session_id
+                            )
+                            if execution_result:
+                                status = execution_result.get("status")
+                                logger.info(f"[Voice] Workflow execution result status: {status}")
+
+                                if status == "completed":
+                                    agent_response_text = execution_result.get("response", "Workflow completed.")
+                                    workflow_executed = True
+                                    logger.info(f"[Voice] Workflow completed: {agent_response_text}")
+
+                                elif status == "paused_for_prompt":
+                                    # Extract prompt text and options from the result
+                                    prompt_data = execution_result.get("prompt", {})
+                                    prompt_text = prompt_data.get("text", "")
+                                    options = prompt_data.get("options", [])
+                                    # Format response with options for voice
+                                    if options:
+                                        options_text = ", ".join(options)
+                                        agent_response_text = f"{prompt_text} Your options are: {options_text}"
+                                    else:
+                                        agent_response_text = prompt_text
+                                    workflow_executed = True
+                                    logger.info(f"[Voice] Workflow paused for prompt: {agent_response_text}")
+
+                                elif status in ("paused_for_input", "paused_for_form"):
+                                    agent_response_text = execution_result.get("response", "Please provide your input.")
+                                    workflow_executed = True
+                                    logger.info(f"[Voice] Workflow {status}: {agent_response_text}")
+                    except Exception as trigger_error:
+                        logger.error(f"[Voice] Error in trigger service: {trigger_error}")
+                        import traceback
+                        traceback.print_exc()
+
+                    # 3. Fallback to agent response if no workflow executed
+                    if not workflow_executed:
+                        agent_response_text = await agent_execution_service.generate_agent_response(
+                            db, agent_id, session_id, session_id, company_id, transcript
+                        )
                     logger.info(f"LLM response: {agent_response_text}")
 
                     # 3. Save and broadcast the agent's text message
                     agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type='message')
                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent")
-                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
                     # 4. Convert the agent's response to speech and stream it
                     audio_stream = tts_service.text_to_speech_stream(agent_response_text, final_voice_id, tts_provider)
@@ -391,8 +500,8 @@ async def public_voice_websocket_endpoint(
         logger.info("Cleaning up tasks and resources")
         transcription_task.cancel()
         client_audio_task.cancel()
-        if groq_buffer_task:
-            groq_buffer_task.cancel()
+        if batch_stt_task:
+            batch_stt_task.cancel()
         if waiting_task:
             waiting_task.cancel()
         await tts_service.close()
