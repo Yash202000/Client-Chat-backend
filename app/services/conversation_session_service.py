@@ -55,7 +55,7 @@ def update_session(db: Session, conversation_id: str, session_update: Conversati
     """
     db_session = get_session(db, conversation_id)
     if db_session:
-        update_data = session_update.dict(exclude_unset=True)
+        update_data = session_update.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(db_session, key, value)
         db.commit()

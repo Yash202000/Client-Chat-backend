@@ -61,6 +61,7 @@ async def read_root():
 
 
 from app.initial_data import create_initial_data
+from app.services.builtin_tools_service import seed_builtin_tools
 
 # Initialize scheduler for background tasks
 scheduler = AsyncIOScheduler()
@@ -78,6 +79,13 @@ async def run_campaign_scheduler():
 @app.on_event("startup")
 async def on_startup():
     create_initial_data()
+
+    # Seed built-in tools (idempotent)
+    db = SessionLocal()
+    try:
+        seed_builtin_tools(db)
+    finally:
+        db.close()
 
     # Start WebSocket cleanup scheduler if enabled
     if settings.WS_ENABLE_HEARTBEAT:

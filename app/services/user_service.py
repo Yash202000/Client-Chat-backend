@@ -49,7 +49,7 @@ def update_user(db: Session, db_obj: models_user.User, obj_in: schemas_user.User
     if isinstance(obj_in, dict):
         update_data = obj_in
     else:
-        update_data = obj_in.dict(exclude_unset=True)
+        update_data = obj_in.model_dump(exclude_unset=True)
 
     if update_data.get("password"):
         hashed_password = get_password_hash(update_data["password"])

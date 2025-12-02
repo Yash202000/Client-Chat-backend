@@ -77,7 +77,7 @@ def create_team_membership(db: Session, membership: schemas_team_membership.Team
 def update_team_membership(db: Session, membership_id: int, membership: schemas_team_membership.TeamMembershipUpdate, company_id: int):
     db_membership = get_team_membership(db, membership_id, company_id)
     if db_membership:
-        for key, value in membership.dict(exclude_unset=True).items():
+        for key, value in membership.model_dump(exclude_unset=True).items():
             setattr(db_membership, key, value)
         db.commit()
         db.refresh(db_membership)

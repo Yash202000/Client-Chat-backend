@@ -1,37 +1,49 @@
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from app.models import tool as models_tool
 from app.schemas import tool as schemas_tool
 from . import vault_service
 
 def get_tool(db: Session, tool_id: int, company_id: int):
+    """Get a tool by ID, including global builtin tools (company_id=None)"""
     db_tool = db.query(models_tool.Tool).filter(
         models_tool.Tool.id == tool_id,
-        models_tool.Tool.company_id == company_id
+        or_(
+            models_tool.Tool.company_id == company_id,
+            models_tool.Tool.company_id.is_(None)  # Include global builtin tools
+        )
     ).first()
     if db_tool and db_tool.configuration:
         db_tool.configuration = vault_service.decrypt_dict(db_tool.configuration)
     return db_tool
 
 def get_tool_by_name(db: Session, name: str, company_id: int):
+    """Get a tool by name, including global builtin tools (company_id=None)"""
     db_tool = db.query(models_tool.Tool).filter(
         func.trim(func.lower(models_tool.Tool.name)) == name.lower().strip(),
-        models_tool.Tool.company_id == company_id
+        or_(
+            models_tool.Tool.company_id == company_id,
+            models_tool.Tool.company_id.is_(None)  # Include global builtin tools
+        )
     ).first()
     if db_tool and db_tool.configuration:
         db_tool.configuration = vault_service.decrypt_dict(db_tool.configuration)
     return db_tool
 
 def get_tools(db: Session, company_id: int, tool_type: str = None, skip: int = 0, limit: int = 100):
+    """Get all tools for a company, including global builtin tools (company_id=None)"""
     query = db.query(models_tool.Tool).filter(
-        models_tool.Tool.company_id == company_id
+        or_(
+            models_tool.Tool.company_id == company_id,
+            models_tool.Tool.company_id.is_(None)  # Include global builtin tools
+        )
     )
-    
+
     if tool_type:
         query = query.filter(models_tool.Tool.tool_type == tool_type)
-        
+
     tools = query.offset(skip).limit(limit).all()
-    
+
     for tool in tools:
         if tool.configuration:
             tool.configuration = vault_service.decrypt_dict(tool.configuration)

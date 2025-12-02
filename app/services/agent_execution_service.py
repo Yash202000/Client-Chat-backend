@@ -186,88 +186,40 @@ async def _get_tools_for_agent(agent):
     """
     Builds a list of tool definitions for the LLM, including custom, MCP, and built-in tools.
     Uses provider-specific schemas for compatibility.
+    Built-in tools are now configurable per agent (added from agent.tools).
     """
     tool_definitions = []
 
     # Determine if we need OpenAI-compatible schemas
     is_openai = agent.llm_provider == "openai"
 
-    # Add built-in handoff tool (always available)
-    tool_definitions.append({
-        "type": "function",
-        "function": {
-            "name": "request_human_handoff",
-            "description": "Request to transfer the conversation to a human agent. Use this when the customer explicitly asks for a human, when the issue is too complex for AI, or when escalation is needed.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "The reason for requesting handoff (e.g., customer_request, complex_issue, escalation, or technical_support)"
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "A brief summary of the conversation to help the human agent understand the context"
-                    }
-                },
-                "required": ["reason", "summary"]
-            }
-        }
-    })
-
-    # Add built-in contact management tools with provider-specific schemas
-    contact_params = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "The contact's full name"
-            },
-            "email": {
-                "type": "string",
-                "description": "The contact's email address"
-            },
-            "phone_number": {
-                "type": "string",
-                "description": "The contact's phone number"
-            }
-        }
-    }
-
-    # OpenAI doesn't support anyOf at top level, so we make all fields optional
-    # The validation will happen in the tool execution function
-    if not is_openai:
-        # For Groq and Gemini, we can use anyOf
-        contact_params["anyOf"] = [
-            {"required": ["name"]},
-            {"required": ["email"]},
-            {"required": ["phone_number"]}
-        ]
-    # For OpenAI, all fields are optional (no required array), validation happens server-side
-
-    tool_definitions.append({
-        "type": "function",
-        "function": {
-            "name": "create_or_update_contact",
-            "description": "Saves or updates contact information for the current conversation. Call this IMMEDIATELY after collecting each piece of information (name, email, or phone). You can provide one, two, or all three fields at once. IMPORTANT: You must collect ALL THREE fields (name, email, phone) from the user - call this tool multiple times if needed to update as you collect more information.",
-            "parameters": contact_params
-        }
-    })
-
-    tool_definitions.append({
-        "type": "function",
-        "function": {
-            "name": "get_contact_info",
-            "description": "Retrieves the contact information for the current conversation if available. Returns null if no contact has been created yet.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
-    })
-
     for tool in agent.tools:
-        if tool.tool_type == "custom":
+        if tool.tool_type == "builtin":
+            # Built-in tools - use stored parameters with provider-specific adjustments
+            params = tool.parameters or {"type": "object", "properties": {}}
+
+            # Special handling for create_or_update_contact with OpenAI
+            if tool.name == "create_or_update_contact" and not is_openai:
+                # For Groq and Gemini, we can use anyOf
+                params = dict(params)  # Make a copy
+                params["anyOf"] = [
+                    {"required": ["name"]},
+                    {"required": ["email"]},
+                    {"required": ["phone_number"]}
+                ]
+
+            if is_openai:
+                params = _sanitize_schema_for_openai(params)
+
+            tool_definitions.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": params,
+                },
+            })
+        elif tool.tool_type == "custom":
             # Sanitize parameters for OpenAI if needed
             params = tool.parameters or {}
             if is_openai:
@@ -454,37 +406,17 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         await manager.broadcast_to_session(boradcast_session_id, json.dumps(tool_call_msg), "agent")
 
         # --- Tool Execution ---
-        # Check if this is the built-in handoff tool
-        if tool_name == "request_human_handoff":
-            tool_result = await tool_execution_service.execute_handoff_tool(
-                db=db, session_id=boradcast_session_id, parameters=parameters
-            )
-        elif tool_name == "create_or_update_contact":
-            tool_result = await tool_execution_service.execute_create_or_update_contact_tool(
-                db=db, session_id=boradcast_session_id, company_id=company_id, parameters=parameters
-            )
-        elif tool_name == "get_contact_info":
-            tool_result = await tool_execution_service.execute_get_contact_info_tool(
-                db=db, session_id=boradcast_session_id, company_id=company_id
-            )
-        elif '__' in tool_name:
-            connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
-            original_connection_name = connection_name_from_llm.replace('_', ' ')
-            db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
-            if not db_tool or not db_tool.mcp_server_url:
-                print(f"Error: MCP connection '{original_connection_name}' not found.")
-                return
-            tool_result = await tool_execution_service.execute_mcp_tool(
-                db_tool=db_tool, mcp_tool_name=mcp_tool_name, parameters=parameters
-            )
-        else:
-            db_tool = tool_service.get_tool_by_name(db, tool_name, company_id)
-            if not db_tool:
-                print(f"Error: Tool '{tool_name}' not found.")
-                return
-            tool_result = tool_execution_service.execute_custom_tool(
-                db=db, tool=db_tool, company_id=company_id, session_id=boradcast_session_id, parameters=parameters
-            )
+        tool_result = await tool_execution_service.execute_tool(
+            db=db,
+            tool_name=tool_name,
+            parameters=parameters,
+            session_id=boradcast_session_id,
+            company_id=company_id
+        )
+
+        if tool_result is None or "error" in tool_result and "not found" in tool_result.get("error", ""):
+            print(f"[AGENT EXECUTION] Tool '{tool_name}' not found or failed to execute.")
+            return
         
         result_content = tool_result.get('result', tool_result.get('error', 'No output'))
 

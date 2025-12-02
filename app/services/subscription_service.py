@@ -21,7 +21,7 @@ def create_subscription_plan(db: Session, plan: schemas_subscription_plan.Subscr
 def update_subscription_plan(db: Session, plan_id: int, plan: schemas_subscription_plan.SubscriptionPlanUpdate):
     db_plan = db.query(models_subscription_plan.SubscriptionPlan).filter(models_subscription_plan.SubscriptionPlan.id == plan_id).first()
     if db_plan:
-        for key, value in plan.dict(exclude_unset=True).items():
+        for key, value in plan.model_dump(exclude_unset=True).items():
             setattr(db_plan, key, value)
         db.commit()
         db.refresh(db_plan)

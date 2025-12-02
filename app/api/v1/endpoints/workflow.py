@@ -77,6 +77,16 @@ def activate_workflow_version(version_id: int, db: Session = Depends(get_db), cu
         raise HTTPException(status_code=404, detail="Workflow version not found")
     return activated_version
 
+@router.put("/versions/{version_id}/deactivate", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
+def deactivate_workflow_version(version_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    """
+    Deactivates a specific workflow version.
+    """
+    deactivated_version = workflow_service.deactivate_version(db=db, version_id=version_id, company_id=current_user.company_id)
+    if deactivated_version is None:
+        raise HTTPException(status_code=404, detail="Workflow version not found")
+    return deactivated_version
+
 # --- Intent Configuration Endpoints ---
 
 @router.get("/{workflow_id}/intent-config", dependencies=[Depends(require_permission("workflow:read"))])

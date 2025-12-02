@@ -48,7 +48,7 @@ def get_credentials(db: Session, company_id: int, skip: int = 0, limit: int = 10
 def update_credential(db: Session, credential_id: int, credential: schemas_credential.CredentialUpdate, company_id: int):
     db_credential = get_credential(db, credential_id, company_id)
     if db_credential:
-        update_data = credential.dict(exclude_unset=True)
+        update_data = credential.model_dump(exclude_unset=True)
         if 'credentials' in update_data:
             db_credential.encrypted_credentials = vault_service.encrypt(update_data['credentials'])
             del update_data['credentials'] # Don't try to set this attribute directly

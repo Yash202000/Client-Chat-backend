@@ -18,7 +18,7 @@ def create_team(db: Session, team: schemas_team.TeamCreate, company_id: int):
 def update_team(db: Session, team_id: int, team: schemas_team.TeamUpdate, company_id: int):
     db_team = get_team(db, team_id, company_id)
     if db_team:
-        update_data = team.dict(exclude_unset=True)
+        update_data = team.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(db_team, key, value)
         db.commit()

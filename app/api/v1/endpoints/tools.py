@@ -61,6 +61,13 @@ def update_tool(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
+    # Check if tool exists and if it's a builtin tool
+    existing_tool = tool_service.get_tool(db, tool_id, current_user.company_id)
+    if existing_tool is None:
+        raise HTTPException(status_code=404, detail="Tool not found")
+    if existing_tool.is_pre_built or existing_tool.tool_type == "builtin":
+        raise HTTPException(status_code=403, detail="Built-in tools cannot be modified")
+
     db_tool = tool_service.update_tool(db, tool_id, tool, current_user.company_id)
     if db_tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
@@ -72,6 +79,13 @@ def delete_tool(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
+    # Check if tool exists and if it's a builtin tool
+    existing_tool = tool_service.get_tool(db, tool_id, current_user.company_id)
+    if existing_tool is None:
+        raise HTTPException(status_code=404, detail="Tool not found")
+    if existing_tool.is_pre_built or existing_tool.tool_type == "builtin":
+        raise HTTPException(status_code=403, detail="Built-in tools cannot be deleted")
+
     db_tool = tool_service.delete_tool(db, tool_id, current_user.company_id)
     if db_tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")

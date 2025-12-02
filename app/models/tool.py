@@ -30,5 +30,8 @@ class Tool(Base):
     company_id = Column(Integer, ForeignKey("companies.id"))
     configuration = Column(JSON, nullable=True)
 
+    # Follow-up questions configuration for guided data collection
+    follow_up_config = Column(JSON, nullable=True)
+
     company = relationship("Company", back_populates="tools")
     agents = relationship("Agent", secondary=agent_tools, back_populates="tools")
