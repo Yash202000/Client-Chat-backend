@@ -45,7 +45,7 @@ def update_integration(db: Session, db_integration: models_integration.Integrati
     """
     Updates an integration's details. If new credentials are provided, they are encrypted.
     """
-    update_data = integration_in.dict(exclude_unset=True)
+    update_data = integration_in.model_dump(exclude_unset=True)
     
     if "credentials" in update_data and update_data["credentials"]:
         credentials_json = json.dumps(update_data["credentials"])

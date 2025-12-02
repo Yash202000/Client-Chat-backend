@@ -23,7 +23,7 @@ def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100)
     ).offset(skip).limit(limit).all()
 
 def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, company_id: int):
-    workflow_data = workflow.dict(exclude_unset=True)
+    workflow_data = workflow.model_dump(exclude_unset=True)
 
     if 'steps' not in workflow_data or workflow_data['steps'] is None:
         workflow_data['steps'] = {}
@@ -100,13 +100,28 @@ def set_active_version(db: Session, version_id: int, company_id: int):
     new_active_version.is_active = True
     db.commit()
     db.refresh(new_active_version)
-    
+
     return new_active_version
+
+def deactivate_version(db: Session, version_id: int, company_id: int):
+    """
+    Deactivates a specific workflow version.
+    """
+    workflow_version = get_workflow(db, version_id, company_id)
+
+    if not workflow_version:
+        return None
+
+    workflow_version.is_active = False
+    db.commit()
+    db.refresh(workflow_version)
+
+    return workflow_version
 
 def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.WorkflowUpdate, company_id: int):
     db_workflow = get_workflow(db, workflow_id, company_id)
     if db_workflow:
-        update_data = workflow.dict(exclude_unset=True)
+        update_data = workflow.model_dump(exclude_unset=True)
         visual_steps_updated = False
         visual_steps_data = None
 

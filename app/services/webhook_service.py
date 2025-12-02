@@ -18,7 +18,7 @@ def create_webhook(db: Session, webhook: schemas_webhook.WebhookCreate, company_
 def update_webhook(db: Session, webhook_id: int, webhook: schemas_webhook.WebhookUpdate, company_id: int):
     db_webhook = get_webhook(db, webhook_id, company_id)
     if db_webhook:
-        for key, value in webhook.dict(exclude_unset=True).items():
+        for key, value in webhook.model_dump(exclude_unset=True).items():
             setattr(db_webhook, key, value)
         db.commit()
         db.refresh(db_webhook)

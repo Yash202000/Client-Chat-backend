@@ -19,7 +19,7 @@ def get_multi_processing_templates(db: Session, *, company_id: int, skip: int = 
     return db.query(ProcessingTemplate).filter(ProcessingTemplate.company_id == company_id).offset(skip).limit(limit).all()
 
 def update_processing_template(db: Session, *, db_obj: ProcessingTemplate, obj_in: ProcessingTemplateUpdate) -> ProcessingTemplate:
-    update_data = obj_in.dict(exclude_unset=True)
+    update_data = obj_in.model_dump(exclude_unset=True)
     for field in update_data:
         setattr(db_obj, field, update_data[field])
     db.add(db_obj)

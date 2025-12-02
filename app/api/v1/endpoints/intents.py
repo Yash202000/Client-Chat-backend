@@ -120,7 +120,7 @@ def update_intent(
         raise HTTPException(status_code=404, detail="Intent not found")
 
     # Update fields
-    update_data = intent_update.dict(exclude_unset=True)
+    update_data = intent_update.model_dump(exclude_unset=True)
     entity_ids = update_data.pop("entity_ids", None)
 
     for field, value in update_data.items():
@@ -324,7 +324,7 @@ def update_entity(
     if not db_entity:
         raise HTTPException(status_code=404, detail="Entity not found")
 
-    update_data = entity_update.dict(exclude_unset=True)
+    update_data = entity_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_entity, field, value)
 

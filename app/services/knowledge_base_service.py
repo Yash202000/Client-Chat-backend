@@ -117,7 +117,7 @@ def create_knowledge_base(db: Session, knowledge_base: schemas_knowledge_base.Kn
 def update_knowledge_base(db: Session, knowledge_base_id: int, knowledge_base: schemas_knowledge_base.KnowledgeBaseUpdate, company_id: int):
     db_knowledge_base = get_knowledge_base(db, knowledge_base_id, company_id)
     if db_knowledge_base:
-        update_data = knowledge_base.dict(exclude_unset=True)
+        update_data = knowledge_base.model_dump(exclude_unset=True)
         if 'content' in update_data:
             chunks = _chunk_content(update_data['content'])
             db_knowledge_base.embeddings = [vectorization_service.get_embedding(chunk).tolist() for chunk in chunks]

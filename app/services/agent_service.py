@@ -1,5 +1,6 @@
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from app.models import agent as models_agent, tool as models_tool, credential as models_credential, knowledge_base as models_knowledge_base
 from app.schemas import agent as schemas_agent
 from fastapi import HTTPException
@@ -45,7 +46,10 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         for tool_id in agent.tool_ids:
             tool = db.query(models_tool.Tool).filter(
                 models_tool.Tool.id == tool_id,
-                models_tool.Tool.company_id == company_id
+                or_(
+                    models_tool.Tool.company_id == company_id,
+                    models_tool.Tool.company_id.is_(None)  # Include global builtin tools
+                )
             ).first()
             if tool:
                 db_agent.tools.append(tool)
@@ -69,7 +73,7 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
 def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, company_id: int):
     db_agent = db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools), joinedload(models_agent.Agent.knowledge_bases)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
     if db_agent:
-        update_data = agent.dict(exclude_unset=True)
+        update_data = agent.model_dump(exclude_unset=True)
         
         # Handle tool_ids separately
         tool_ids = update_data.pop("tool_ids", None)
@@ -78,7 +82,10 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
             for tool_id in tool_ids:
                 tool = db.query(models_tool.Tool).filter(
                     models_tool.Tool.id == tool_id,
-                    models_tool.Tool.company_id == company_id
+                    or_(
+                        models_tool.Tool.company_id == company_id,
+                        models_tool.Tool.company_id.is_(None)  # Include global builtin tools
+                    )
                 ).first()
                 if tool:
                     db_agent.tools.append(tool)
