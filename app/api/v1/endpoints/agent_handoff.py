@@ -23,6 +23,10 @@ class HandoffRejectRequest(BaseModel):
     reason: str = "agent_unavailable"
 
 
+class HandoffEndRequest(BaseModel):
+    session_id: str
+
+
 @router.post("/accept")
 async def accept_handoff(
     request: HandoffAcceptRequest,
@@ -176,3 +180,52 @@ def get_pending_handoffs(
         })
 
     return {"handoffs": handoffs, "count": len(handoffs)}
+
+
+@router.post("/end")
+async def end_handoff(
+    request: HandoffEndRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Agent ends a handoff call. Decrements their session count to free up capacity.
+    """
+    logger.info(f"[HANDOFF END] Agent {current_user.id} ending handoff for session {request.session_id}")
+
+    # Get the session
+    session = conversation_session_service.get_session(db, request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Only allow the assigned agent to end the call
+    if session.assignee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not assigned to this session")
+
+    # Release agent (decrement session count) if assigned to a pool/team
+    if session.assigned_pool:
+        await agent_assignment_service.release_agent_from_session(
+            db=db,
+            session_id=request.session_id,
+            agent_user_id=current_user.id,
+            team_name=session.assigned_pool,
+            company_id=current_user.company_id
+        )
+        logger.info(f"[HANDOFF END] Released agent {current_user.id} from pool {session.assigned_pool}")
+
+    # Notify widget that call ended
+    await manager.broadcast_to_session(
+        request.session_id,
+        json.dumps({
+            "type": "call_ended",
+            "ended_by": "agent",
+            "agent_id": current_user.id
+        }),
+        "agent"
+    )
+
+    return {
+        "status": "ended",
+        "session_id": request.session_id,
+        "message": "Handoff call ended successfully"
+    }
