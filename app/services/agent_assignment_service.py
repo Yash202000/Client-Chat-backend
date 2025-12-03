@@ -40,6 +40,7 @@ def find_available_agent(db: Session, team_name: str, company_id: int) -> Option
         return None
 
     # Query for available team members
+    print(team.id, company_id, TeamMembership.is_available, User.presence_status,TeamMembership.current_session_count < TeamMembership.max_concurrent_sessions)
     available_membership = db.query(TeamMembership).join(User).filter(
         and_(
             TeamMembership.team_id == team.id,

@@ -127,6 +127,10 @@ async def execute_tool(
     """
     print(f"[TOOL EXECUTION] Executing tool: {tool_name}")
 
+    # Check if tool_name is None or empty
+    if not tool_name:
+        return {"error": "Tool name is required but was not provided."}
+
     # Check if it's a builtin tool
     if tool_name in BUILTIN_TOOL_REGISTRY:
         executor = BUILTIN_TOOL_REGISTRY[tool_name]

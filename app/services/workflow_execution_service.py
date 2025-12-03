@@ -62,40 +62,54 @@ class WorkflowExecutionService:
         return result
 
     def _resolve_placeholders(self, value: str, context: dict, results: dict):
-        """Resolves placeholders like {{context.variable}} or {{step_id.output}}."""
+        """Resolves placeholders like {{context.variable}}, {{context.obj.key}}, or {{step_id.output}}."""
         if not isinstance(value, str) or '{{' not in value:
             return value
 
         print(f"DEBUG: Resolving placeholders in: '{value}' with context: {context}")
+
+        def drill_down(obj, keys):
+            """Helper to drill down into nested objects/dicts."""
+            for key in keys:
+                if isinstance(obj, dict):
+                    obj = obj.get(key, '')
+                else:
+                    return ''
+            return obj
 
         def replace_func(match):
             placeholder = match.group(1).strip()
             print(f"  - Found placeholder: {placeholder}")
             path = placeholder.split(".")
             source = path[0]
-            
+
             resolved_value = ''
             if source == "context":
-                key = path[1]
-                resolved_value = context.get(key, '')
-                print(f"    - Source: context, Key: {key}, Value: '{resolved_value}'")
+                # Support nested paths like context.customer_data.reason
+                remaining_path = path[1:]  # ['customer_data', 'reason']
+                resolved_value = drill_down(context, remaining_path)
+                print(f"    - Source: context, Path: {remaining_path}, Value: '{resolved_value}'")
             else:
                 # Handle results from previous nodes
                 step_result = results.get(source)
                 print(f"    - Source: results, Step: {source}, Result: {step_result}")
                 if step_result:
-                    # Drill down to find the actual output value
-                    output_value = step_result.get("output")
-                    if isinstance(output_value, dict):
-                        # Handle nested results like from an LLM call
-                        resolved_value = output_value.get("content", '')
-                    elif output_value is None:
-                        resolved_value = ''
-                    else:
-                        resolved_value = output_value
+                    # Start with the step result and drill down
+                    remaining_path = path[1:]  # e.g., ['output'] or ['output', 'content']
+                    resolved_value = drill_down(step_result, remaining_path) if remaining_path else step_result
+
+                    # If no specific path given, try to get the output
+                    if not remaining_path:
+                        output_value = step_result.get("output")
+                        if isinstance(output_value, dict):
+                            resolved_value = output_value.get("content", '')
+                        elif output_value is None:
+                            resolved_value = ''
+                        else:
+                            resolved_value = output_value
                 print(f"    - Resolved value: '{resolved_value}'")
 
-            return str(resolved_value)
+            return str(resolved_value) if resolved_value is not None else ''
 
         resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
         print(f"DEBUG: Final resolved string: '{resolved_string}'")
@@ -741,10 +755,14 @@ class WorkflowExecutionService:
                 context[initial_input_variable] = user_message
                 result = {"output": "Start node processed"} # Indicate success, no real output
             elif node_type == "tool":
-                tool_name = node_data.get("tool_name")
-                raw_params = node_data.get("parameters", {})
-                resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
-                result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
+                # Support multiple keys for backwards compatibility: tool_name, tool, name
+                tool_name = node_data.get("tool_name") or node_data.get("tool") or node_data.get("name")
+                if not tool_name:
+                    result = {"error": f"Tool node '{current_node_id}' has no tool configured. Please select a tool in the properties panel."}
+                else:
+                    raw_params = node_data.get("parameters", {}) or node_data.get("params", {})
+                    resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
+                    result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
 
             elif node_type == "http_request":
                 result = self._execute_http_request_node(node_data, context, results)
