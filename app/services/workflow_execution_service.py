@@ -23,11 +23,15 @@ class WorkflowExecutionService:
         self.llm_tool_service = LLMToolService(db)
         self.workflow_intent_service = WorkflowIntentService(db)
 
-    def _execute_tool(self, tool_name: str, params: dict, company_id: int = None):
+    async def _execute_tool(self, tool_name: str, params: dict, company_id: int = None, session_id: str = None):
+        """
+        Execute a tool using the unified tool execution service.
+        Supports builtin, custom, and MCP tools.
+        """
         # The "listen" tool is a special case that signals a pause.
         if tool_name == "listen_for_input":
             return {"status": "paused_for_input"}
-        
+
         # The "prompt" tool signals a pause and sends data to the frontend.
         if tool_name == "prompt_for_input":
             return {
@@ -38,26 +42,24 @@ class WorkflowExecutionService:
                 }
             }
 
-        if tool_name == "llm_tool":
-            # ... (existing llm_tool logic)
-            return {"output": "LLM response"} # Placeholder
+        # Use unified tool execution for all tool types (builtin, custom, MCP)
+        from app.services import tool_execution_service
 
-        tool = self.db.query(Tool).filter(Tool.name == tool_name).first()
-        if not tool:
+        result = await tool_execution_service.execute_tool(
+            db=self.db,
+            tool_name=tool_name,
+            parameters=params,
+            session_id=session_id,
+            company_id=company_id
+        )
+
+        if result is None:
             return {"error": f"Tool '{tool_name}' not found."}
 
-        execution_scope = {"db": self.db}
-        try:
-            exec(tool.code, execution_scope)
-            tool_function = execution_scope.get("run")
-            if not callable(tool_function):
-                return {"error": "Tool code does not define a callable 'run' function"}
-            
-            config = {"db": self.db}
-            result = tool_function(params=params, config=config)
-            return {"output": result}
-        except Exception as e:
-            return {"error": f"Error executing tool {tool_name}: {e}"}
+        # Normalize result format for workflow engine
+        if "result" in result:
+            return {"output": result["result"]}
+        return result
 
     def _resolve_placeholders(self, value: str, context: dict, results: dict):
         """Resolves placeholders like {{context.variable}} or {{step_id.output}}."""
@@ -742,7 +744,7 @@ class WorkflowExecutionService:
                 tool_name = node_data.get("tool_name")
                 raw_params = node_data.get("parameters", {})
                 resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
-                result = self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id)
+                result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
 
             elif node_type == "http_request":
                 result = self._execute_http_request_node(node_data, context, results)
