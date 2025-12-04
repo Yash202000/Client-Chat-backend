@@ -13,7 +13,8 @@ from fastmcp.client import Client
 from app.services.builtin_tools import (
     execute_handoff_tool,
     execute_create_or_update_contact_tool,
-    execute_get_contact_info_tool
+    execute_get_contact_info_tool,
+    execute_translate_tool
 )
 
 # Registry of builtin tools - maps tool name to executor function
@@ -22,6 +23,7 @@ BUILTIN_TOOL_REGISTRY = {
     "request_human_handoff": execute_handoff_tool,
     "create_or_update_contact": execute_create_or_update_contact_tool,
     "get_contact_info": execute_get_contact_info_tool,
+    "translate": execute_translate_tool,
 }
 
 
@@ -143,6 +145,8 @@ async def execute_tool(
                 return await executor(db=db, session_id=session_id, company_id=company_id)
             else:
                 return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
+        elif tool_name == "translate":
+            return await executor(db=db, session_id=session_id, parameters=parameters, company_id=company_id)
 
     # Check if it's an MCP tool (contains '__' separator)
     if '__' in tool_name:

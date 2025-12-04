@@ -109,6 +109,50 @@ BUILTIN_TOOLS = [
             },
             "completion_message_template": "Hello, {{name}}! How can I help you today?"
         }
+    },
+    {
+        "name": "translate",
+        "description": "Translates text from any language to a target language. Supports LLM-based translation (default) or Google Translate API. Use this when the user needs text translated to another language.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to translate"
+                },
+                "target_language": {
+                    "type": "string",
+                    "enum": ["en", "ar", "es", "fr", "de", "zh", "ja", "ko", "pt", "ru", "hi", "it", "nl", "tr", "pl", "vi", "th", "id"],
+                    "description": "Target language code"
+                },
+                "source_language": {
+                    "type": "string",
+                    "enum": ["auto", "en", "ar", "es", "fr", "de", "zh", "ja", "ko", "pt", "ru", "hi", "it", "nl", "tr", "pl", "vi", "th", "id"],
+                    "description": "Source language code. Select 'auto' for auto-detection."
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": ["llm", "google"],
+                    "description": "Translation provider: 'llm' uses the configured LLM (default), 'google' uses Google Translate API"
+                },
+                "llm_model": {
+                    "type": "string",
+                    "enum": [
+                        "groq/llama-3.3-70b-versatile",
+                        "groq/llama-3.1-8b-instant",
+                        "openai/gpt-4o",
+                        "openai/gpt-4o-mini",
+                        "gemini/gemini-1.5-pro",
+                        "gemini/gemini-1.5-flash"
+                    ],
+                    "description": "LLM model to use for translation (only applies when provider is 'llm')"
+                }
+            },
+            "required": ["text", "target_language"]
+        },
+        "follow_up_config": None
     }
 ]
 
