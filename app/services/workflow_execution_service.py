@@ -328,7 +328,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error executing HTTP request node: {e}"}
 
-    def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
+    async def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
         prompt = node_data.get("prompt", "")
         resolved_prompt = self._resolve_placeholders(prompt, context, results)
 
@@ -348,7 +348,7 @@ class WorkflowExecutionService:
         # 3. Get the tools associated with the agent
         agent_tools = workflow.agent.tools if workflow.agent else []
 
-        llm_response = self.llm_tool_service.execute(
+        llm_response = await self.llm_tool_service.execute(
             model=node_data.get("model"),
             system_prompt=system_prompt,
             chat_history=chat_history,
@@ -358,7 +358,13 @@ class WorkflowExecutionService:
             company_id=company_id
         )
 
-        return {"output": llm_response}
+        # Extract the content from the LLM response
+        if isinstance(llm_response, dict):
+            response_text = llm_response.get("content", "")
+        else:
+            response_text = str(llm_response)
+
+        return {"output": response_text}
 
     # ============================================================
     # NEW CHAT-SPECIFIC NODE EXECUTION METHODS
@@ -779,7 +785,7 @@ class WorkflowExecutionService:
                 result = self._execute_http_request_node(node_data, context, results)
 
             elif node_type == "llm":
-                result = self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
+                result = await self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
 
             elif node_type == "data_manipulation":
                 result = self._execute_data_manipulation_node(node_data, context, results)
