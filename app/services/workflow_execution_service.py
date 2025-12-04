@@ -744,6 +744,7 @@ class WorkflowExecutionService:
             memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
         last_executed_node_id = None
+        response_messages = []  # Collect all response node outputs
         while current_node_id:
             node = graph_engine.nodes[current_node_id]
             node_type = node.get("type")
@@ -811,6 +812,30 @@ class WorkflowExecutionService:
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
+                # Broadcast intermediate response messages immediately
+                if resolved_output:
+                    response_messages.append(resolved_output)
+                    # Check if there's a next node - if so, broadcast this as intermediate message
+                    next_check = graph_engine.get_next_node(current_node_id, result)
+                    if next_check:  # There's more nodes after this response
+                        # Import here to avoid circular import
+                        from app.api.v1.endpoints.websocket_conversations import manager as ws_manager
+                        from app.services import chat_service
+                        from app.schemas import chat_message as schemas_chat_message
+
+                        # Save to database and broadcast properly formatted message
+                        agent_message = schemas_chat_message.ChatMessageCreate(message=resolved_output, message_type="message")
+                        db_agent_message = chat_service.create_chat_message(
+                            self.db, agent_message,
+                            workflow_obj.agent.id, conversation_id,
+                            workflow_obj.agent.company_id, "agent",
+                            assignee_id=None
+                        )
+                        await ws_manager.broadcast_to_session(
+                            str(conversation_id),
+                            schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(),
+                            "agent"
+                        )
 
             # ============================================================
             # NEW CHAT-SPECIFIC NODES
@@ -918,5 +943,10 @@ class WorkflowExecutionService:
         self.db.refresh(session)
         print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
-        final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+        # Return only the last response message (intermediate ones were already broadcasted)
+        if response_messages:
+            final_output = response_messages[-1]  # Last message only
+        else:
+            final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}
