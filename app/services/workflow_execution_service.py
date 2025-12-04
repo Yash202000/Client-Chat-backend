@@ -116,23 +116,43 @@ class WorkflowExecutionService:
         return resolved_string
 
     def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
+        from types import SimpleNamespace
+
         expression = node_data.get("expression", "")
         output_variable = node_data.get("output_variable", "output")
 
+        # Helper function to convert nested dicts to SimpleNamespace for dot notation access
+        def dict_to_namespace(d):
+            if isinstance(d, dict):
+                return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+            elif isinstance(d, list):
+                return [dict_to_namespace(item) for item in d]
+            return d
+
+        # Create namespace versions for dot notation access
+        context_ns = dict_to_namespace(context)
+        results_ns = dict_to_namespace(results)
+
         # Create a safe execution environment for eval
+        # Allow both dict access (context['key']) and dot notation (context.key)
         safe_globals = {"__builtins__": None}
-        safe_locals = {"context": context, "results": results}
+        safe_locals = {
+            "context": context_ns,  # Dot notation access
+            "ctx": context,         # Dict access alternative
+            "results": results_ns,  # Dot notation access
+            "res": results          # Dict access alternative
+        }
 
         try:
             # Resolve placeholders in the expression before evaluation
             resolved_expression = self._resolve_placeholders(expression, context, results)
-            
+
             # Evaluate the expression
             manipulated_data = eval(resolved_expression, safe_globals, safe_locals)
-            
+
             # Store the result in the context
             context[output_variable] = manipulated_data
-            
+
             return {"output": manipulated_data}
         except Exception as e:
             return {"error": f"Error manipulating data: {e}"}
@@ -269,7 +289,7 @@ class WorkflowExecutionService:
             print(f"  - Condition evaluated to: {result}")
             return {"output": result}
 
-    def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
         url = node_data.get("url", "")
         method = node_data.get("method", "GET").upper()
         headers_str = node_data.get("headers", "{}")
@@ -285,48 +305,38 @@ class WorkflowExecutionService:
             return {"error": f"Invalid JSON in headers: {resolved_headers_str}"}
 
         try:
-            body = json.loads(resolved_body_str) if method in ["POST", "PUT"] else None
+            body = json.loads(resolved_body_str) if method in ["POST", "PUT", "PATCH"] else None
         except json.JSONDecodeError:
             return {"error": f"Invalid JSON in body: {resolved_body_str}"}
 
-        # Use asyncio to run the async HTTP request
-        import asyncio
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        async def make_request():
             async with httpx.AsyncClient(timeout=settings.HTTP_REQUEST_TIMEOUT) as client:
-                try:
-                    response = None
-                    if method == "GET":
-                        response = await client.get(resolved_url, headers=headers)
-                    elif method == "POST":
-                        response = await client.post(resolved_url, headers=headers, json=body)
-                    elif method == "PUT":
-                        response = await client.put(resolved_url, headers=headers, json=body)
-                    elif method == "DELETE":
-                        response = await client.delete(resolved_url, headers=headers)
-                    else:
-                        return {"error": f"Unsupported HTTP method: {method}"}
+                response = None
+                if method == "GET":
+                    response = await client.get(resolved_url, headers=headers)
+                elif method == "POST":
+                    response = await client.post(resolved_url, headers=headers, json=body)
+                elif method == "PUT":
+                    response = await client.put(resolved_url, headers=headers, json=body)
+                elif method == "PATCH":
+                    response = await client.patch(resolved_url, headers=headers, json=body)
+                elif method == "DELETE":
+                    response = await client.delete(resolved_url, headers=headers)
+                else:
+                    return {"error": f"Unsupported HTTP method: {method}"}
 
-                    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'application/json' in content_type:
-                        return {"output": response.json()}
-                    else:
-                        return {"output": response.text}
-                except httpx.HTTPError as e:
-                    return {"error": f"HTTP request failed: {e}"}
-                except Exception as e:
-                    return {"error": f"Error executing HTTP request: {e}"}
-
-        try:
-            return loop.run_until_complete(make_request())
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' in content_type:
+                    return {"output": response.json()}
+                else:
+                    return {"output": response.text}
+        except httpx.HTTPStatusError as e:
+            return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
+        except httpx.RequestError as e:
+            return {"error": f"HTTP request failed: {e}"}
         except Exception as e:
-            return {"error": f"Error executing HTTP request node: {e}"}
+            return {"error": f"Error executing HTTP request: {e}"}
 
     async def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
         prompt = node_data.get("prompt", "")
@@ -782,7 +792,7 @@ class WorkflowExecutionService:
                     result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
 
             elif node_type == "http_request":
-                result = self._execute_http_request_node(node_data, context, results)
+                result = await self._execute_http_request_node(node_data, context, results)
 
             elif node_type == "llm":
                 result = await self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
