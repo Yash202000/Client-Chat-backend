@@ -153,7 +153,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error executing code: {e}"}
 
-    def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow):
         knowledge_base_id = node_data.get("knowledge_base_id")
         query = node_data.get("query", "")
         resolved_query = self._resolve_placeholders(query, context, results)
@@ -162,11 +162,21 @@ class WorkflowExecutionService:
             return {"error": "Knowledge Base ID is required for knowledge retrieval node."}
 
         try:
-            # Assuming knowledge_base_service.query_knowledge_base exists and returns relevant documents
-            retrieved_docs = knowledge_base_service.query_knowledge_base(self.db, knowledge_base_id, resolved_query)
-            # Format the retrieved documents as a string or a list of strings
-            formatted_docs = "\n\n".join([doc.content for doc in retrieved_docs]) # Adjust based on actual doc structure
-            return {"output": formatted_docs}
+            # Find relevant chunks from knowledge base (pass agent for correct embedding model)
+            retrieved_chunks = knowledge_base_service.find_relevant_chunks(
+                self.db, knowledge_base_id, company_id, resolved_query, top_k=5,
+                agent=workflow.agent if workflow else None
+            )
+
+            if not retrieved_chunks:
+                return {"output": "I couldn't find any relevant information for your query."}
+
+            # Format chunks as human-readable text (without LLM call)
+            # Join chunks with separators for readability
+            formatted_response = "\n\n---\n\n".join(retrieved_chunks)
+
+            return {"output": formatted_response}
+
         except Exception as e:
             return {"error": f"Error retrieving knowledge: {e}"}
 
@@ -778,7 +788,7 @@ class WorkflowExecutionService:
                 result = self._execute_code_node(node_data, context, results)
 
             elif node_type == "knowledge":
-                result = self._execute_knowledge_retrieval_node(node_data, context, results)
+                result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj)
 
             elif node_type == "condition":
                 result = self._execute_conditional_node(node_data, context, results)

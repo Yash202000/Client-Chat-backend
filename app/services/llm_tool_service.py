@@ -73,7 +73,7 @@ class LLMToolService:
         max_retries = 2
 
         for attempt in range(max_retries):
-            response = provider_module(
+            response = await provider_module(
                 db=self.db, company_id=company_id, model_name=model_name,
                 system_prompt=final_system_prompt, chat_history=full_chat_history,
                 tools=formatted_tools
