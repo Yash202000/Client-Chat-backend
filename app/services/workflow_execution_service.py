@@ -342,8 +342,14 @@ class WorkflowExecutionService:
         prompt = node_data.get("prompt", "")
         resolved_prompt = self._resolve_placeholders(prompt, context, results)
 
-        # 1. Get the system prompt from the agent associated with the workflow
-        system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
+        # 1. Get the system prompt - use custom if provided, otherwise fall back to agent's prompt
+        custom_system_prompt = node_data.get("system_prompt", "")
+        if custom_system_prompt:
+            # Resolve any placeholders in the custom system prompt
+            system_prompt = self._resolve_placeholders(custom_system_prompt, context, results)
+        else:
+            # Fall back to agent's system prompt
+            system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
 
         # 2. Get the chat history
         chat_history = []
