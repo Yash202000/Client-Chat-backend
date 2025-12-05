@@ -48,19 +48,21 @@ class WorkflowIntentService:
 
         # Stage 1: Keyword matching (very fast)
         keyword_match = self._keyword_match(message, trigger_intents)
-        if keyword_match and keyword_match[1] >= 0.9:  # High confidence (90%+)
-            print(f"✓ Keyword match: {keyword_match[0]['name']} ({keyword_match[1]:.2f})")
-            return await self._finalize_intent_match(
-                keyword_match[0], message, conversation_id, keyword_match[1], "keyword", workflow, company_id
-            )
+        if keyword_match:
+            if keyword_match[1] >= 0.5:  # At least 50% of keywords matched
+                print(f"✓ Keyword match: {keyword_match[0]['name']} ({keyword_match[1]:.2f})")
+                return await self._finalize_intent_match(
+                    keyword_match[0], message, conversation_id, keyword_match[1], "keyword", workflow, company_id
+                )
 
         # Stage 2: Phrase similarity (medium speed)
         phrase_match = self._phrase_similarity_match(message, trigger_intents)
-        if phrase_match and phrase_match[1] >= 0.8:  # Good confidence (80%+)
-            print(f"✓ Phrase similarity match: {phrase_match[0]['name']} ({phrase_match[1]:.2f})")
-            return await self._finalize_intent_match(
-                phrase_match[0], message, conversation_id, phrase_match[1], "similarity", workflow, company_id
-            )
+        if phrase_match:
+            if phrase_match[1] >= 0.6:  # At least 60% phrase overlap
+                print(f"✓ Phrase similarity match: {phrase_match[0]['name']} ({phrase_match[1]:.2f})")
+                return await self._finalize_intent_match(
+                    phrase_match[0], message, conversation_id, phrase_match[1], "similarity", workflow, company_id
+                )
 
         # Stage 3: LLM classification (accurate but slower)
         llm_match = await self._llm_classify_intent(message, trigger_intents)

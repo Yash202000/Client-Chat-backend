@@ -1,5 +1,6 @@
 import json
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 from app.models import workflow as models_workflow, agent as models_agent
 from app.schemas import workflow as schemas_workflow
 from app.services import vectorization_service, workflow_trigger_service
@@ -133,7 +134,9 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
                     visual_steps_data = value
             else:
                 setattr(db_workflow, key, value)
-
+                # Flag JSONB columns as modified so SQLAlchemy detects the change
+                if key == 'intent_config':
+                    flag_modified(db_workflow, 'intent_config')
         db.commit()
         db.refresh(db_workflow)
 

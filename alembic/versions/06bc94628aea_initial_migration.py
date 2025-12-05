@@ -655,7 +655,7 @@ def upgrade() -> None:
     op.create_table('intent_matches',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('conversation_id', sa.String(length=255), nullable=False),
-    sa.Column('intent_id', sa.Integer(), nullable=False),
+    sa.Column('intent_id', sa.Integer(), nullable=True),  # Nullable for workflow-based intents
     sa.Column('message_text', sa.Text(), nullable=True),
     sa.Column('confidence_score', sa.Float(), nullable=True),
     sa.Column('matched_method', sa.String(length=50), nullable=True),
