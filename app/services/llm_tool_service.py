@@ -1,6 +1,7 @@
 
 from app.llm_providers.gemini_provider import generate_response as ggr
 from app.llm_providers.groq_provider import generate_response as grg
+from app.llm_providers.openai_provider import generate_response as oai
 from app.services import knowledge_base_service
 from sqlalchemy.orm import Session
 from fastmcp.client import Client
@@ -69,14 +70,20 @@ class LLMToolService:
 
         # 4. --- Execute with Validation and Retry Loop ---
         provider_name, model_name = model.split('/')
-        provider_module = grg if provider_name == "groq" else ggr
+        if provider_name == "groq":
+            provider_module = grg
+        elif provider_name == "openai":
+            provider_module = oai
+        else:
+            provider_module = ggr  # default to gemini
         max_retries = 2
 
         for attempt in range(max_retries):
-            response = provider_module(
+            response = await provider_module(
                 db=self.db, company_id=company_id, model_name=model_name,
                 system_prompt=final_system_prompt, chat_history=full_chat_history,
-                tools=formatted_tools
+                tools=formatted_tools,
+                stream=False  # Disable streaming for workflow execution
             )
 
             if response.get('type') == 'tool_call':

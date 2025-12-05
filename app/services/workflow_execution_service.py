@@ -62,63 +62,97 @@ class WorkflowExecutionService:
         return result
 
     def _resolve_placeholders(self, value: str, context: dict, results: dict):
-        """Resolves placeholders like {{context.variable}} or {{step_id.output}}."""
+        """Resolves placeholders like {{context.variable}}, {{context.obj.key}}, or {{step_id.output}}."""
         if not isinstance(value, str) or '{{' not in value:
             return value
 
         print(f"DEBUG: Resolving placeholders in: '{value}' with context: {context}")
+
+        def drill_down(obj, keys):
+            """Helper to drill down into nested objects/dicts."""
+            for key in keys:
+                if isinstance(obj, dict):
+                    obj = obj.get(key, '')
+                else:
+                    return ''
+            return obj
 
         def replace_func(match):
             placeholder = match.group(1).strip()
             print(f"  - Found placeholder: {placeholder}")
             path = placeholder.split(".")
             source = path[0]
-            
+
             resolved_value = ''
             if source == "context":
-                key = path[1]
-                resolved_value = context.get(key, '')
-                print(f"    - Source: context, Key: {key}, Value: '{resolved_value}'")
+                # Support nested paths like context.customer_data.reason
+                remaining_path = path[1:]  # ['customer_data', 'reason']
+                resolved_value = drill_down(context, remaining_path)
+                print(f"    - Source: context, Path: {remaining_path}, Value: '{resolved_value}'")
             else:
                 # Handle results from previous nodes
                 step_result = results.get(source)
                 print(f"    - Source: results, Step: {source}, Result: {step_result}")
                 if step_result:
-                    # Drill down to find the actual output value
-                    output_value = step_result.get("output")
-                    if isinstance(output_value, dict):
-                        # Handle nested results like from an LLM call
-                        resolved_value = output_value.get("content", '')
-                    elif output_value is None:
-                        resolved_value = ''
-                    else:
-                        resolved_value = output_value
+                    # Start with the step result and drill down
+                    remaining_path = path[1:]  # e.g., ['output'] or ['output', 'content']
+                    resolved_value = drill_down(step_result, remaining_path) if remaining_path else step_result
+
+                    # If no specific path given, try to get the output
+                    if not remaining_path:
+                        output_value = step_result.get("output")
+                        if isinstance(output_value, dict):
+                            resolved_value = output_value.get("content", '')
+                        elif output_value is None:
+                            resolved_value = ''
+                        else:
+                            resolved_value = output_value
                 print(f"    - Resolved value: '{resolved_value}'")
 
-            return str(resolved_value)
+            return str(resolved_value) if resolved_value is not None else ''
 
         resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
         print(f"DEBUG: Final resolved string: '{resolved_string}'")
         return resolved_string
 
     def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
+        from types import SimpleNamespace
+
         expression = node_data.get("expression", "")
         output_variable = node_data.get("output_variable", "output")
 
+        # Helper function to convert nested dicts to SimpleNamespace for dot notation access
+        def dict_to_namespace(d):
+            if isinstance(d, dict):
+                return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+            elif isinstance(d, list):
+                return [dict_to_namespace(item) for item in d]
+            return d
+
+        # Create namespace versions for dot notation access
+        context_ns = dict_to_namespace(context)
+        results_ns = dict_to_namespace(results)
+
         # Create a safe execution environment for eval
+        # Allow both dict access (context['key']) and dot notation (context.key)
         safe_globals = {"__builtins__": None}
-        safe_locals = {"context": context, "results": results}
+        safe_locals = {
+            "context": context_ns,  # Dot notation access
+            "ctx": context,         # Dict access alternative
+            "results": results_ns,  # Dot notation access
+            "res": results          # Dict access alternative
+        }
 
         try:
             # Resolve placeholders in the expression before evaluation
             resolved_expression = self._resolve_placeholders(expression, context, results)
-            
+
             # Evaluate the expression
             manipulated_data = eval(resolved_expression, safe_globals, safe_locals)
-            
+
             # Store the result in the context
             context[output_variable] = manipulated_data
-            
+
             return {"output": manipulated_data}
         except Exception as e:
             return {"error": f"Error manipulating data: {e}"}
@@ -139,7 +173,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error executing code: {e}"}
 
-    def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow):
         knowledge_base_id = node_data.get("knowledge_base_id")
         query = node_data.get("query", "")
         resolved_query = self._resolve_placeholders(query, context, results)
@@ -148,11 +182,21 @@ class WorkflowExecutionService:
             return {"error": "Knowledge Base ID is required for knowledge retrieval node."}
 
         try:
-            # Assuming knowledge_base_service.query_knowledge_base exists and returns relevant documents
-            retrieved_docs = knowledge_base_service.query_knowledge_base(self.db, knowledge_base_id, resolved_query)
-            # Format the retrieved documents as a string or a list of strings
-            formatted_docs = "\n\n".join([doc.content for doc in retrieved_docs]) # Adjust based on actual doc structure
-            return {"output": formatted_docs}
+            # Find relevant chunks from knowledge base (pass agent for correct embedding model)
+            retrieved_chunks = knowledge_base_service.find_relevant_chunks(
+                self.db, knowledge_base_id, company_id, resolved_query, top_k=5,
+                agent=workflow.agent if workflow else None
+            )
+
+            if not retrieved_chunks:
+                return {"output": "I couldn't find any relevant information for your query."}
+
+            # Format chunks as human-readable text (without LLM call)
+            # Join chunks with separators for readability
+            formatted_response = "\n\n---\n\n".join(retrieved_chunks)
+
+            return {"output": formatted_response}
+
         except Exception as e:
             return {"error": f"Error retrieving knowledge: {e}"}
 
@@ -245,7 +289,7 @@ class WorkflowExecutionService:
             print(f"  - Condition evaluated to: {result}")
             return {"output": result}
 
-    def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
         url = node_data.get("url", "")
         method = node_data.get("method", "GET").upper()
         headers_str = node_data.get("headers", "{}")
@@ -261,55 +305,51 @@ class WorkflowExecutionService:
             return {"error": f"Invalid JSON in headers: {resolved_headers_str}"}
 
         try:
-            body = json.loads(resolved_body_str) if method in ["POST", "PUT"] else None
+            body = json.loads(resolved_body_str) if method in ["POST", "PUT", "PATCH"] else None
         except json.JSONDecodeError:
             return {"error": f"Invalid JSON in body: {resolved_body_str}"}
 
-        # Use asyncio to run the async HTTP request
-        import asyncio
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        async def make_request():
             async with httpx.AsyncClient(timeout=settings.HTTP_REQUEST_TIMEOUT) as client:
-                try:
-                    response = None
-                    if method == "GET":
-                        response = await client.get(resolved_url, headers=headers)
-                    elif method == "POST":
-                        response = await client.post(resolved_url, headers=headers, json=body)
-                    elif method == "PUT":
-                        response = await client.put(resolved_url, headers=headers, json=body)
-                    elif method == "DELETE":
-                        response = await client.delete(resolved_url, headers=headers)
-                    else:
-                        return {"error": f"Unsupported HTTP method: {method}"}
+                response = None
+                if method == "GET":
+                    response = await client.get(resolved_url, headers=headers)
+                elif method == "POST":
+                    response = await client.post(resolved_url, headers=headers, json=body)
+                elif method == "PUT":
+                    response = await client.put(resolved_url, headers=headers, json=body)
+                elif method == "PATCH":
+                    response = await client.patch(resolved_url, headers=headers, json=body)
+                elif method == "DELETE":
+                    response = await client.delete(resolved_url, headers=headers)
+                else:
+                    return {"error": f"Unsupported HTTP method: {method}"}
 
-                    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'application/json' in content_type:
-                        return {"output": response.json()}
-                    else:
-                        return {"output": response.text}
-                except httpx.HTTPError as e:
-                    return {"error": f"HTTP request failed: {e}"}
-                except Exception as e:
-                    return {"error": f"Error executing HTTP request: {e}"}
-
-        try:
-            return loop.run_until_complete(make_request())
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' in content_type:
+                    return {"output": response.json()}
+                else:
+                    return {"output": response.text}
+        except httpx.HTTPStatusError as e:
+            return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
+        except httpx.RequestError as e:
+            return {"error": f"HTTP request failed: {e}"}
         except Exception as e:
-            return {"error": f"Error executing HTTP request node: {e}"}
+            return {"error": f"Error executing HTTP request: {e}"}
 
-    def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
+    async def _execute_llm_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow, conversation_id: str):
         prompt = node_data.get("prompt", "")
         resolved_prompt = self._resolve_placeholders(prompt, context, results)
 
-        # 1. Get the system prompt from the agent associated with the workflow
-        system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
+        # 1. Get the system prompt - use custom if provided, otherwise fall back to agent's prompt
+        custom_system_prompt = node_data.get("system_prompt", "")
+        if custom_system_prompt:
+            # Resolve any placeholders in the custom system prompt
+            system_prompt = self._resolve_placeholders(custom_system_prompt, context, results)
+        else:
+            # Fall back to agent's system prompt
+            system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
 
         # 2. Get the chat history
         chat_history = []
@@ -324,7 +364,7 @@ class WorkflowExecutionService:
         # 3. Get the tools associated with the agent
         agent_tools = workflow.agent.tools if workflow.agent else []
 
-        llm_response = self.llm_tool_service.execute(
+        llm_response = await self.llm_tool_service.execute(
             model=node_data.get("model"),
             system_prompt=system_prompt,
             chat_history=chat_history,
@@ -334,7 +374,13 @@ class WorkflowExecutionService:
             company_id=company_id
         )
 
-        return {"output": llm_response}
+        # Extract the content from the LLM response
+        if isinstance(llm_response, dict):
+            response_text = llm_response.get("content", "")
+        else:
+            response_text = str(llm_response)
+
+        return {"output": response_text}
 
     # ============================================================
     # NEW CHAT-SPECIFIC NODE EXECUTION METHODS
@@ -730,6 +776,7 @@ class WorkflowExecutionService:
             memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
         last_executed_node_id = None
+        response_messages = []  # Collect all response node outputs
         while current_node_id:
             node = graph_engine.nodes[current_node_id]
             node_type = node.get("type")
@@ -741,16 +788,20 @@ class WorkflowExecutionService:
                 context[initial_input_variable] = user_message
                 result = {"output": "Start node processed"} # Indicate success, no real output
             elif node_type == "tool":
-                tool_name = node_data.get("tool_name")
-                raw_params = node_data.get("parameters", {})
-                resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
-                result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
+                # Support multiple keys for backwards compatibility: tool_name, tool, name
+                tool_name = node_data.get("tool_name") or node_data.get("tool") or node_data.get("name")
+                if not tool_name:
+                    result = {"error": f"Tool node '{current_node_id}' has no tool configured. Please select a tool in the properties panel."}
+                else:
+                    raw_params = node_data.get("parameters", {}) or node_data.get("params", {})
+                    resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
+                    result = await self._execute_tool(tool_name, resolved_params, company_id=workflow.agent.company_id, session_id=conversation_id)
 
             elif node_type == "http_request":
-                result = self._execute_http_request_node(node_data, context, results)
+                result = await self._execute_http_request_node(node_data, context, results)
 
             elif node_type == "llm":
-                result = self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
+                result = await self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
 
             elif node_type == "data_manipulation":
                 result = self._execute_data_manipulation_node(node_data, context, results)
@@ -759,7 +810,7 @@ class WorkflowExecutionService:
                 result = self._execute_code_node(node_data, context, results)
 
             elif node_type == "knowledge":
-                result = self._execute_knowledge_retrieval_node(node_data, context, results)
+                result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj)
 
             elif node_type == "condition":
                 result = self._execute_conditional_node(node_data, context, results)
@@ -793,6 +844,30 @@ class WorkflowExecutionService:
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
+                # Broadcast intermediate response messages immediately
+                if resolved_output:
+                    response_messages.append(resolved_output)
+                    # Check if there's a next node - if so, broadcast this as intermediate message
+                    next_check = graph_engine.get_next_node(current_node_id, result)
+                    if next_check:  # There's more nodes after this response
+                        # Import here to avoid circular import
+                        from app.api.v1.endpoints.websocket_conversations import manager as ws_manager
+                        from app.services import chat_service
+                        from app.schemas import chat_message as schemas_chat_message
+
+                        # Save to database and broadcast properly formatted message
+                        agent_message = schemas_chat_message.ChatMessageCreate(message=resolved_output, message_type="message")
+                        db_agent_message = chat_service.create_chat_message(
+                            self.db, agent_message,
+                            workflow_obj.agent.id, conversation_id,
+                            workflow_obj.agent.company_id, "agent",
+                            assignee_id=None
+                        )
+                        await ws_manager.broadcast_to_session(
+                            str(conversation_id),
+                            schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(),
+                            "agent"
+                        )
 
             # ============================================================
             # NEW CHAT-SPECIFIC NODES
@@ -900,5 +975,10 @@ class WorkflowExecutionService:
         self.db.refresh(session)
         print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
-        final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+        # Return only the last response message (intermediate ones were already broadcasted)
+        if response_messages:
+            final_output = response_messages[-1]  # Last message only
+        else:
+            final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

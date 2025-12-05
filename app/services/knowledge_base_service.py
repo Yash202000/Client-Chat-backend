@@ -158,30 +158,74 @@ def delete_knowledge_base(db: Session, knowledge_base_id: int, company_id: int):
         db.commit()
     return db_knowledge_base
 
-def find_relevant_chunks(db: Session, knowledge_base_id: int, company_id: int, query: str, top_k: int = 3):
+def find_relevant_chunks(db: Session, knowledge_base_id: int, company_id: int, query: str, top_k: int = 3, agent=None):
+    """
+    Find relevant chunks from a knowledge base using Chroma or FAISS vector stores.
+    Uses NVIDIA embeddings by default to match how knowledge bases are indexed.
+    """
+    from app.core.config import settings
+    from app.services.faiss_vector_database import VectorDatabase
+    from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
+    import chromadb
+
     kb = get_knowledge_base(db, knowledge_base_id, company_id)
-    if not kb or not kb.embeddings:
+    if not kb:
         return []
 
-    query_embedding = vectorization_service.get_embedding(query)
-    content_chunks = _chunk_content(kb.content)
-    
-    # Ensure embeddings are treated as a list of 1D arrays
-    if not kb.embeddings or not isinstance(kb.embeddings[0], list):
-        # If embeddings are missing or stored as a single list of floats, re-embed chunks
-        chunk_embeddings = [vectorization_service.get_embedding(chunk) for chunk in content_chunks]
-        # Optionally, update the KB with these new embeddings for future use
-        # kb.embeddings = [e.tolist() for e in chunk_embeddings]
-        # db.add(kb); db.commit(); db.refresh(kb)
-    else:
-        chunk_embeddings = [np.array(e) for e in kb.embeddings]
+    retrieved_chunks = []
 
-    similarities = [vectorization_service.cosine_similarity(query_embedding, chunk_embedding) for chunk_embedding in chunk_embeddings]
-    
-    # Get the indices of the top-k most similar chunks
-    top_k_indices = np.argsort(similarities)[-top_k:][::-1]
-    
-    return [content_chunks[i] for i in top_k_indices]
+    # Use NVIDIA embeddings (same as knowledge base indexing) or agent's embedding model
+    def get_query_embedding(text: str):
+        if agent and hasattr(agent, 'embedding_model'):
+            from app.services.agent_execution_service import _get_embeddings
+            embeddings = _get_embeddings(agent, [text])
+            return embeddings[0].tolist()
+        else:
+            # Default to NVIDIA embeddings (matches knowledge_base_processing_service)
+            nvidia_embeddings = NVIDIAEmbeddings()
+            return nvidia_embeddings.embed_query(text)
+
+    try:
+        if kb.type == "local" and kb.chroma_collection_name:
+            # Query the local ChromaDB collection
+            query_embedding = get_query_embedding(query)
+            collection = chroma_client.get_collection(name=kb.chroma_collection_name)
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k
+            )
+            if results and results.get('documents') and results['documents'][0]:
+                retrieved_chunks = results['documents'][0]
+
+        elif kb.type == "local" and kb.faiss_index_id:
+            # Query the local FAISS index
+            embeddings_instance = NVIDIAEmbeddings()
+            faiss_db_path = os.path.join(settings.FAISS_INDEX_DIR, str(company_id), kb.faiss_index_id)
+            faiss_db = VectorDatabase(embeddings=embeddings_instance, db_path=faiss_db_path, index_name=kb.faiss_index_id)
+            if faiss_db.load_index():
+                results = faiss_db.similarity_search(query, k=top_k)
+                retrieved_chunks = [doc.page_content for doc in results]
+
+        elif kb.type == "remote" and kb.provider == "chroma" and kb.connection_details:
+            # Query a remote ChromaDB instance
+            query_embedding = get_query_embedding(query)
+            client = chromadb.HttpClient(
+                host=kb.connection_details.get("host"),
+                port=kb.connection_details.get("port")
+            )
+            collection = client.get_collection(name=kb.connection_details.get("collection_name"))
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k
+            )
+            if results and results.get('documents') and results['documents'][0]:
+                retrieved_chunks = results['documents'][0]
+
+    except Exception as e:
+        print(f"Error querying knowledge base {kb.name} (ID: {kb.id}): {e}")
+        return []
+
+    return retrieved_chunks
 
 import os
 from io import BytesIO
