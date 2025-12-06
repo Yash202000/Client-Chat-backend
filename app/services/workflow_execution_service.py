@@ -750,6 +750,87 @@ class WorkflowExecutionService:
             print(f"✗ Error setting status: {e}")
             return {"error": f"Failed to set status: {e}"}
 
+    async def _execute_question_classifier_node(self, node_data: dict, context: dict, results: dict, company_id: int):
+        """
+        Classifies user question into predefined classes using LLM.
+        Returns the class name to determine which edge to follow.
+        """
+        model = node_data.get("model", "groq/llama-3.1-8b-instant")
+        classes = node_data.get("classes", [])  # [{name: "billing", description: "..."}, ...]
+        input_variable = node_data.get("input_variable", "user_message")
+        output_variable = node_data.get("output_variable", "classification")
+
+        # Get the question to classify from context
+        question = context.get(input_variable, "")
+
+        if not question:
+            print(f"✗ Question classifier: No input found in '{input_variable}'")
+            return {"output": "default", "classification": None}
+
+        if not classes:
+            print(f"✗ Question classifier: No classes configured")
+            return {"output": "default", "classification": None}
+
+        # Build classification prompt
+        class_names = [cls["name"] for cls in classes]
+        class_descriptions = "\n".join([
+            f"- {cls['name']}: {cls.get('description', 'No description provided')}"
+            for cls in classes
+        ])
+
+        prompt = f"""Classify the following question into exactly one of these categories:
+
+{class_descriptions}
+
+Question: "{question}"
+
+Instructions:
+- Respond with ONLY the category name, nothing else
+- Choose the most relevant category
+- If no category fits well, respond with "default"
+
+Category:"""
+
+        print(f"✓ Question classifier: Classifying '{question[:50]}...' into classes: {class_names}")
+
+        try:
+            # Call LLM using existing llm_tool_service
+            llm_response = await self.llm_tool_service.execute(
+                model=model,
+                system_prompt="You are a classification assistant. Your only job is to classify questions into predefined categories. Always respond with just the category name, nothing else.",
+                user_prompt=prompt,
+                company_id=company_id
+            )
+
+            # Extract classification from response
+            if isinstance(llm_response, dict):
+                classification = llm_response.get("content", "").strip()
+            else:
+                classification = str(llm_response).strip()
+
+            # Normalize and match to configured class
+            classification_lower = classification.lower().strip()
+            class_names_lower = [cls["name"].lower() for cls in classes]
+
+            matched_class = None
+            for cls in classes:
+                if cls["name"].lower() == classification_lower:
+                    matched_class = cls["name"]
+                    break
+
+            if matched_class:
+                print(f"✓ Question classifier: Classified as '{matched_class}'")
+                context[output_variable] = matched_class
+                return {"output": matched_class, "classification": matched_class}
+            else:
+                print(f"ℹ Question classifier: LLM returned '{classification}' which doesn't match any class, using default")
+                context[output_variable] = "default"
+                return {"output": "default", "classification": None}
+
+        except Exception as e:
+            print(f"✗ Question classifier error: {e}")
+            return {"output": "default", "classification": None, "error": str(e)}
+
     async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
@@ -1002,6 +1083,12 @@ class WorkflowExecutionService:
                 # Sets conversation status
                 result = self._execute_set_status_node(
                     node_data, context, results, conversation_id
+                )
+
+            elif node_type == "question_classifier":
+                # Classifies question using LLM and routes accordingly
+                result = await self._execute_question_classifier_node(
+                    node_data, context, results, workflow_obj.agent.company_id
                 )
 
             results[current_node_id] = result

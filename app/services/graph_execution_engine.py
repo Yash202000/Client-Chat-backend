@@ -73,6 +73,35 @@ class GraphExecutionEngine:
                 print(f"WARNING: [GraphEngine] Conditional node '{current_node_id}' did not produce a valid result: {result}")
                 return None
 
+        elif node_type == 'question_classifier':
+            # Routes based on LLM classification result
+            if result and 'output' in result:
+                class_output = result['output']
+                print(f"DEBUG: [GraphEngine] Question classifier output: '{class_output}'")
+
+                # Look for edge with sourceHandle matching the classification result
+                edge = next((e for e in self.edges
+                            if e['source'] == current_node_id
+                            and e.get('sourceHandle') == class_output), None)
+
+                if edge:
+                    print(f"DEBUG: [GraphEngine] Found edge to '{edge['target']}' via handle '{class_output}'.")
+                    return edge['target']
+
+                # If no matching class edge, try default
+                default_edge = next((e for e in self.edges
+                                    if e['source'] == current_node_id
+                                    and e.get('sourceHandle') == 'default'), None)
+                if default_edge:
+                    print(f"DEBUG: [GraphEngine] No edge for '{class_output}', using default to '{default_edge['target']}'.")
+                    return default_edge['target']
+
+                print(f"WARNING: [GraphEngine] No edge found for question classifier output '{class_output}' or default.")
+                return None
+            else:
+                print(f"WARNING: [GraphEngine] Question classifier node '{current_node_id}' did not produce valid result: {result}")
+                return None
+
         elif result and "error" in result:
             print(f"DEBUG: [GraphEngine] Node '{current_node_id}' produced an error. Looking for error path.")
             error_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'error'), None)

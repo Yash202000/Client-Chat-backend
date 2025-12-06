@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 from app.core.dependencies import get_db
 from app.models import conversation_session as models_conversation_session
 from app.models import agent as models_agent
@@ -32,6 +32,46 @@ def get_overall_metrics(
 
     total_conversations = query.count()
 
+    # Active conversations (not resolved or archived)
+    active_conversations = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == current_user.company_id,
+        ~models_conversation_session.ConversationSession.status.in_(['resolved', 'archived'])
+    )
+    if start_date:
+        active_conversations = active_conversations.filter(models_conversation_session.ConversationSession.created_at >= start_date)
+    if end_datetime:
+        active_conversations = active_conversations.filter(models_conversation_session.ConversationSession.created_at <= end_datetime)
+    active_conversations_count = active_conversations.count()
+
+    # Resolved conversations count
+    resolved_conversations = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == current_user.company_id,
+        models_conversation_session.ConversationSession.status == 'resolved'
+    )
+    if start_date:
+        resolved_conversations = resolved_conversations.filter(models_conversation_session.ConversationSession.created_at >= start_date)
+    if end_datetime:
+        resolved_conversations = resolved_conversations.filter(models_conversation_session.ConversationSession.created_at <= end_datetime)
+    resolved_conversations_count = resolved_conversations.count()
+
+    # Resolution rate
+    resolution_rate = round((resolved_conversations_count / total_conversations) * 100, 2) if total_conversations > 0 else 0
+
+    # Unattended conversations (no assignee or waiting for agent)
+    unattended_conversations = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == current_user.company_id,
+        or_(
+            models_conversation_session.ConversationSession.assignee_id.is_(None),
+            models_conversation_session.ConversationSession.waiting_for_agent == True
+        ),
+        ~models_conversation_session.ConversationSession.status.in_(['resolved', 'archived'])
+    )
+    if start_date:
+        unattended_conversations = unattended_conversations.filter(models_conversation_session.ConversationSession.created_at >= start_date)
+    if end_datetime:
+        unattended_conversations = unattended_conversations.filter(models_conversation_session.ConversationSession.created_at <= end_datetime)
+    unattended_conversations_count = unattended_conversations.count()
+
     avg_satisfaction_query = db.query(func.avg(models_chat_message.ChatMessage.feedback_rating))
     avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.company_id == current_user.company_id)
     if start_date:
@@ -39,13 +79,33 @@ def get_overall_metrics(
     if end_datetime:
         avg_satisfaction_query = avg_satisfaction_query.filter(models_chat_message.ChatMessage.timestamp <= end_datetime)
     avg_satisfaction = avg_satisfaction_query.scalar() or 0
-    
+
     active_agents = db.query(models_agent.Agent).filter(models_agent.Agent.is_active == True).count()
+
+    # Agent availability (users who are online)
+    available_users = db.query(User).filter(
+        User.company_id == current_user.company_id,
+        User.is_active == True,
+        User.presence_status == 'online'
+    ).count()
+
+    total_users = db.query(User).filter(
+        User.company_id == current_user.company_id,
+        User.is_active == True
+    ).count()
+
+    agent_availability_rate = round((available_users / total_users) * 100, 2) if total_users > 0 else 0
 
     return {
         "total_sessions": total_conversations,
         "customer_satisfaction": round(avg_satisfaction, 2),
         "active_agents": active_agents,
+        "active_conversations": active_conversations_count,
+        "resolution_rate": f"{resolution_rate}%",
+        "available_users": available_users,
+        "total_users": total_users,
+        "agent_availability_rate": f"{agent_availability_rate}%",
+        "unattended_conversations": unattended_conversations_count,
     }
 
 @router.get("/agent-performance")

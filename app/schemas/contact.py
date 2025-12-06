@@ -1,6 +1,16 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
+
+
+class ContactTagSchema(BaseModel):
+    """Schema for tag info embedded in contact response."""
+    id: int
+    name: str
+    color: str
+
+    class Config:
+        from_attributes = True
 
 
 class ContactBase(BaseModel):
@@ -34,6 +44,7 @@ class Contact(ContactBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     last_contacted_at: Optional[datetime] = None
+    tags: Optional[List[ContactTagSchema]] = []
 
     class Config:
         from_attributes = True
