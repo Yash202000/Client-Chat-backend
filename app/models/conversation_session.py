@@ -23,6 +23,7 @@ class ConversationSession(Base):
     reopen_count = Column(Integer, nullable=False, default=0) # Number of times conversation has been reopened after resolution
     last_reopened_at = Column(DateTime, nullable=True) # Timestamp of most recent reopening
     resolved_at = Column(DateTime, nullable=True) # Timestamp when conversation was marked as resolved
+    priority = Column(Integer, nullable=False, default=0) # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
 
     # Human handoff fields
     handoff_requested_at = Column(DateTime, nullable=True) # When handoff to human was requested

@@ -24,6 +24,9 @@ class FeedbackUpdate(BaseModel):
     feedback_rating: int
     feedback_notes: Optional[str] = None
 
+class PriorityUpdate(BaseModel):
+    priority: int  # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
+
 @router.get("/sessions/counts", dependencies=[Depends(require_permission("conversation:read"))])
 def get_session_counts(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     """
@@ -149,7 +152,8 @@ def get_all_sessions(
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
             contact_phone=contact_info.phone_number if contact_info else None,
-            is_client_connected=real_time_connected  # Use real-time status
+            is_client_connected=real_time_connected,  # Use real-time status
+            priority=s.priority
         ))
     return sessions
 
@@ -314,3 +318,26 @@ def update_feedback(
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or feedback update failed")
     return {"message": "Feedback submitted successfully"}
+
+@router.put("/{session_id}/priority", dependencies=[Depends(require_permission("conversation:update"))])
+def update_priority(
+    session_id: str,
+    priority_update: PriorityUpdate,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Update the priority level of a conversation.
+    Priority levels: 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
+    """
+    if priority_update.priority < 0 or priority_update.priority > 4:
+        raise HTTPException(status_code=400, detail="Priority must be between 0 and 4")
+
+    session = conversation_session_service.update_session(
+        db,
+        conversation_id=session_id,
+        session_update=schemas_conversation_session.ConversationSessionUpdate(priority=priority_update.priority)
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"message": "Priority updated successfully", "priority": session.priority}

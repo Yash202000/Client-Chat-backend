@@ -51,4 +51,5 @@ from app.models.campaign_activity import CampaignActivity
 from app.models.lead_score import LeadScore
 from app.models.tag import Tag, lead_tags, contact_tags
 from app.models.segment import Segment, SegmentType
+from app.models.template import Template
 

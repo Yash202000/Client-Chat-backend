@@ -29,6 +29,7 @@ class ConversationSessionUpdate(BaseModel):
     is_ai_enabled: Optional[bool] = None
     assignee_id: Optional[int] = None
     contact_id: Optional[int] = None  # Allow updating contact_id when contact is created
+    priority: Optional[int] = None  # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
 
     # Handoff fields
     handoff_requested_at: Optional[datetime] = None
