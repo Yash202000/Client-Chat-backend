@@ -24,6 +24,9 @@ class FeedbackUpdate(BaseModel):
     feedback_rating: int
     feedback_notes: Optional[str] = None
 
+class PriorityUpdate(BaseModel):
+    priority: int  # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
+
 @router.get("/sessions/counts", dependencies=[Depends(require_permission("conversation:read"))])
 def get_session_counts(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     """
@@ -40,6 +43,66 @@ def get_session_counts(db: Session = Depends(get_db), current_user: models_user.
         "resolved": resolved_count,
         "all": len(all_sessions)
     }
+
+@router.get("/analytics/reopens", dependencies=[Depends(require_permission("conversation:read"))])
+async def get_reopen_analytics(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """
+    Get conversation reopen analytics including counts, rates, and average time to reopen.
+    Query Parameters:
+    - start_date: Optional date filter in YYYY-MM-DD format
+    - end_date: Optional date filter in YYYY-MM-DD format
+    """
+    query = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == current_user.company_id,
+        models_conversation_session.ConversationSession.reopen_count > 0
+    )
+
+    if start_date:
+        start_datetime = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+        query = query.filter(models_conversation_session.ConversationSession.last_reopened_at >= start_datetime)
+    if end_date:
+        end_datetime = datetime.datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+        query = query.filter(models_conversation_session.ConversationSession.last_reopened_at <= end_datetime)
+
+    sessions = query.all()
+
+    total_reopens = sum(s.reopen_count for s in sessions)
+    avg_reopen_count = total_reopens / len(sessions) if sessions else 0
+
+    # Calculate average time to reopen
+    times_to_reopen = []
+    for s in sessions:
+        if s.resolved_at and s.last_reopened_at:
+            delta = (s.last_reopened_at - s.resolved_at).total_seconds()
+            times_to_reopen.append(delta)
+
+    avg_time_to_reopen = sum(times_to_reopen) / len(times_to_reopen) if times_to_reopen else 0
+
+    # Get total conversations for reopen rate
+    total_query = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.company_id == current_user.company_id
+    )
+    if start_date:
+        total_query = total_query.filter(models_conversation_session.ConversationSession.created_at >= start_datetime)
+    if end_date:
+        total_query = total_query.filter(models_conversation_session.ConversationSession.created_at <= end_datetime)
+
+    total_conversations = total_query.count()
+    reopen_rate = (len(sessions) / total_conversations * 100) if total_conversations > 0 else 0
+
+    return {
+        "total_conversations_reopened": len(sessions),
+        "total_reopen_events": total_reopens,
+        "average_reopens_per_conversation": round(avg_reopen_count, 2),
+        "average_time_to_reopen_hours": round(avg_time_to_reopen / 3600, 2) if avg_time_to_reopen > 0 else 0,
+        "reopen_rate_percentage": round(reopen_rate, 2),
+    }
+
 
 @router.get("/sessions", response_model=List[schemas_session.Session], dependencies=[Depends(require_permission("conversation:read"))])
 def get_all_sessions(
@@ -89,7 +152,8 @@ def get_all_sessions(
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
             contact_phone=contact_info.phone_number if contact_info else None,
-            is_client_connected=real_time_connected  # Use real-time status
+            is_client_connected=real_time_connected,  # Use real-time status
+            priority=s.priority
         ))
     return sessions
 
@@ -255,62 +319,25 @@ def update_feedback(
         raise HTTPException(status_code=404, detail="Conversation not found or feedback update failed")
     return {"message": "Feedback submitted successfully"}
 
-
-@router.get("/analytics/reopens", dependencies=[Depends(require_permission("conversation:read"))])
-async def get_reopen_analytics(
+@router.put("/{session_id}/priority", dependencies=[Depends(require_permission("conversation:update"))])
+def update_priority(
+    session_id: str,
+    priority_update: PriorityUpdate,
     db: Session = Depends(get_db),
-    current_user: models_user.User = Depends(get_current_active_user),
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    current_user: models_user.User = Depends(get_current_active_user)
 ):
     """
-    Get conversation reopen analytics including counts, rates, and average time to reopen.
-    Query Parameters:
-    - start_date: Optional date filter in YYYY-MM-DD format
-    - end_date: Optional date filter in YYYY-MM-DD format
+    Update the priority level of a conversation.
+    Priority levels: 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
     """
-    query = db.query(models_conversation_session.ConversationSession).filter(
-        models_conversation_session.ConversationSession.company_id == current_user.company_id,
-        models_conversation_session.ConversationSession.reopen_count > 0
+    if priority_update.priority < 0 or priority_update.priority > 4:
+        raise HTTPException(status_code=400, detail="Priority must be between 0 and 4")
+
+    session = conversation_session_service.update_session(
+        db,
+        conversation_id=session_id,
+        session_update=schemas_conversation_session.ConversationSessionUpdate(priority=priority_update.priority)
     )
-
-    if start_date:
-        start_datetime = datetime.datetime.strptime(start_date, '%Y-%m-%d')
-        query = query.filter(models_conversation_session.ConversationSession.last_reopened_at >= start_datetime)
-    if end_date:
-        end_datetime = datetime.datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
-        query = query.filter(models_conversation_session.ConversationSession.last_reopened_at <= end_datetime)
-
-    sessions = query.all()
-
-    total_reopens = sum(s.reopen_count for s in sessions)
-    avg_reopen_count = total_reopens / len(sessions) if sessions else 0
-
-    # Calculate average time to reopen
-    times_to_reopen = []
-    for s in sessions:
-        if s.resolved_at and s.last_reopened_at:
-            delta = (s.last_reopened_at - s.resolved_at).total_seconds()
-            times_to_reopen.append(delta)
-
-    avg_time_to_reopen = sum(times_to_reopen) / len(times_to_reopen) if times_to_reopen else 0
-
-    # Get total conversations for reopen rate
-    total_query = db.query(models_conversation_session.ConversationSession).filter(
-        models_conversation_session.ConversationSession.company_id == current_user.company_id
-    )
-    if start_date:
-        total_query = total_query.filter(models_conversation_session.ConversationSession.created_at >= start_datetime)
-    if end_date:
-        total_query = total_query.filter(models_conversation_session.ConversationSession.created_at <= end_datetime)
-
-    total_conversations = total_query.count()
-    reopen_rate = (len(sessions) / total_conversations * 100) if total_conversations > 0 else 0
-
-    return {
-        "total_conversations_reopened": len(sessions),
-        "total_reopen_events": total_reopens,
-        "average_reopens_per_conversation": round(avg_reopen_count, 2),
-        "average_time_to_reopen_hours": round(avg_time_to_reopen / 3600, 2) if avg_time_to_reopen > 0 else 0,
-        "reopen_rate_percentage": round(reopen_rate, 2),
-    }
+    if not session:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"message": "Priority updated successfully", "priority": session.priority}

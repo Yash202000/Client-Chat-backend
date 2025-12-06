@@ -54,7 +54,7 @@ class IntentMatch(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(String(255), nullable=False, index=True)
-    intent_id = Column(Integer, ForeignKey("intents.id"), nullable=False)
+    intent_id = Column(Integer, ForeignKey("intents.id"), nullable=True)  # Nullable for workflow-based intents
 
     # Match details
     message_text = Column(Text)

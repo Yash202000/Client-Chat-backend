@@ -230,20 +230,19 @@ def update_workflow_intent_config(
     Update the intent configuration for a workflow.
     This allows configuring trigger intents, entities, and auto-trigger settings.
     """
+    from sqlalchemy.orm.attributes import flag_modified
     workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    # Update the workflow with new intent_config
-    update_data = schemas_workflow.WorkflowUpdate(intent_config=config.intent_config)
-    updated_workflow = workflow_service.update_workflow(
-        db=db,
-        workflow_id=workflow_id,
-        workflow=update_data,
-        company_id=current_user.company_id
-    )
+    # Directly update the intent_config on the model (bypass WorkflowUpdate schema)
+    workflow.intent_config = config.intent_config
+    flag_modified(workflow, 'intent_config')
+    
+    db.commit()
+    db.refresh(workflow)
 
-    return updated_workflow
+    return workflow
 
 @router.post("/{workflow_id}/test-intent", response_model=TestWorkflowIntentResponse, dependencies=[Depends(require_permission("workflow:read"))])
 async def test_workflow_intent(

@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.models.lead import Lead, LeadStage, QualificationStatus
 from app.models.lead_score import LeadScore
+from app.models.tag import lead_tags
 from app.schemas.lead import LeadCreate, LeadUpdate, LeadStageUpdate
 
 
@@ -209,6 +210,7 @@ def search_leads(
     max_score: Optional[int] = None,
     source: Optional[str] = None,
     qualification_status: Optional[QualificationStatus] = None,
+    tag_ids: Optional[List[int]] = None,
     skip: int = 0,
     limit: int = 100
 ):
@@ -242,8 +244,22 @@ def search_leads(
             )
         )
 
-    return db.query(Lead).options(
+    base_query = db.query(Lead).options(
         joinedload(Lead.contact)
     ).filter(
         and_(*filters)
-    ).order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()
+    )
+
+    # Filter by tag IDs if provided
+    if tag_ids:
+        # Use subquery to avoid DISTINCT issues with JSON columns
+        from sqlalchemy import select
+        subq = select(lead_tags.c.lead_id).where(
+            and_(
+                lead_tags.c.lead_id == Lead.id,
+                lead_tags.c.tag_id.in_(tag_ids)
+            )
+        ).exists()
+        base_query = base_query.filter(subq)
+
+    return base_query.order_by(Lead.updated_at.desc()).offset(skip).limit(limit).all()

@@ -310,25 +310,30 @@ Response (just the value or NOT_FOUND):"""
 # Helper function to check if LLM service is available
 async def generate_llm_response(prompt: str, temperature: float = 0.1, max_tokens: int = 500) -> str:
     """
-    Generate LLM response using the default agent's LLM provider.
-    This is a simplified version - you should adapt it to use your existing LLM service.
+    Generate LLM response using Groq for intent classification.
+    Uses a fast, lightweight model for quick intent detection.
     """
     try:
-        # Import your existing LLM generation logic
-        from app.services.llm_providers.groq_provider import GroqProvider
+        from groq import AsyncGroq
         from app.core.config import settings
 
-        # Use Groq as default for intent classification (fast and cheap)
-        provider = GroqProvider(api_key=settings.GROQ_API_KEY)
+        # Use Groq API key from settings
+        api_key = settings.GROQ_API_KEY
+        if not api_key:
+            print("Warning: GROQ_API_KEY not configured, LLM intent classification disabled")
+            return ""
 
-        response = await provider.generate_completion(
-            model="llama-3.1-8b-instant",
+        client = AsyncGroq(api_key=api_key, timeout=30.0)
+
+        # Use a fast model for intent classification
+        chat_completion = await client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant",
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
         )
 
-        return response
+        return chat_completion.choices[0].message.content or ""
 
     except Exception as e:
         print(f"Error generating LLM response: {e}")

@@ -1,12 +1,29 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
+from typing import List, Optional
 from app.models import contact as models_contact, chat_message as models_chat_message
+from app.models.tag import contact_tags, Tag
 from app.schemas import contact as schemas_contact
 
 def get_contact(db: Session, contact_id: int, company_id: int):
     return db.query(models_contact.Contact).filter(models_contact.Contact.id == contact_id, models_contact.Contact.company_id == company_id).first()
 
-def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_contact.Contact).filter(models_contact.Contact.company_id == company_id).offset(skip).limit(limit).all()
+def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100, tag_ids: Optional[List[int]] = None):
+    query = db.query(models_contact.Contact).filter(models_contact.Contact.company_id == company_id)
+
+    # Filter by tags if provided
+    if tag_ids:
+        # Use subquery to avoid DISTINCT issues with JSON columns
+        from sqlalchemy import exists, select
+        subq = select(contact_tags.c.contact_id).where(
+            and_(
+                contact_tags.c.contact_id == models_contact.Contact.id,
+                contact_tags.c.tag_id.in_(tag_ids)
+            )
+        ).exists()
+        query = query.filter(subq)
+
+    return query.offset(skip).limit(limit).all()
 
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int):
     db_contact = models_contact.Contact(

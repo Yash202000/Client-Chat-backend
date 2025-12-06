@@ -23,6 +23,7 @@ def list_leads(
     source: Optional[str] = None,
     qualification_status: Optional[str] = None,
     query: Optional[str] = None,
+    tag_ids: Optional[List[int]] = Query(None, description="Filter by tag IDs"),
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
@@ -30,7 +31,7 @@ def list_leads(
     List leads with optional filtering
     """
     # If filters are provided, use search
-    if any([stage, assignee_id, min_score, max_score, source, qualification_status, query]):
+    if any([stage, assignee_id, min_score, max_score, source, qualification_status, query, tag_ids]):
         leads = lead_service.search_leads(
             db=db,
             company_id=current_user.company_id,
@@ -41,6 +42,7 @@ def list_leads(
             max_score=max_score,
             source=source,
             qualification_status=QualificationStatus(qualification_status) if qualification_status else None,
+            tag_ids=tag_ids,
             skip=skip,
             limit=limit
         )
