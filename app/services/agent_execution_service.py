@@ -1,6 +1,6 @@
 import os
 from sqlalchemy.orm import Session
-from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service
+from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service, credential_service
 from app.core.config import settings
 from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema, ChatMessageCreate
@@ -306,7 +306,14 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     # to ensure it shows immediately after user message (not here which is later in the flow)
 
     try:
-        agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
+        # Look up credential by LLM provider for the company
+        agent_api_key = None
+        llm_credential = credential_service.get_credential_by_service_name(db, agent.llm_provider, company_id)
+        if llm_credential:
+            print(f"Found {agent.llm_provider} credential in vault for company.")
+            agent_api_key = credential_service.get_decrypted_credential(db, llm_credential.id, company_id)
+        else:
+            print(f"{agent.llm_provider} credential not found in vault for company. LLM will use provider's default or fail.")
 
         # Build base system prompt
         system_prompt = (
@@ -544,7 +551,14 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
         return
 
     try:
-        agent_api_key = vault_service.decrypt(agent.credential.encrypted_credentials) if agent.credential else None
+        # Look up credential by LLM provider for the company
+        agent_api_key = None
+        llm_credential = credential_service.get_credential_by_service_name(db, agent.llm_provider, company_id)
+        if llm_credential:
+            print(f"Found {agent.llm_provider} credential in vault for company (streaming).")
+            agent_api_key = credential_service.get_decrypted_credential(db, llm_credential.id, company_id)
+        else:
+            print(f"{agent.llm_provider} credential not found in vault for company (streaming). LLM will use provider's default or fail.")
 
         system_prompt = (
             "You are a helpful and precise assistant. "

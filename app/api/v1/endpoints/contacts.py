@@ -63,7 +63,7 @@ def update_contact(
 ):
     return contact_service.update_contact(db=db, contact_id=contact_id, contact=contact, company_id=current_user.company_id)
 
-@router.get("/by_session/{session_id}", response_model=schemas_contact.Contact)
+@router.get("/by_session/{session_id}", response_model=Optional[schemas_contact.Contact])
 def get_contact_by_session(
     session_id: str,
     db: Session = Depends(get_db),

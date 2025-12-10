@@ -16,6 +16,7 @@ from fastapi import UploadFile
 import io
 import logging
 from types import SimpleNamespace
+import aiohttp
 
 router = APIRouter()
 
@@ -70,10 +71,12 @@ async def public_voice_websocket_endpoint(
 
     # Get OpenAI API key from vault if available (used for both STT and TTS)
     openai_api_key = None
-    if agent.credential and agent.credential.service.lower() == 'openai':
-        logger.info("Found OpenAI credential associated with the agent.")
+    # Look up OpenAI credential by service name for the company
+    openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+    if openai_credential:
+        logger.info("Found OpenAI credential in vault for company.")
         try:
-            decrypted_key = credential_service.get_decrypted_credential(db, agent.credential.id, company_id)
+            decrypted_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
             if decrypted_key and isinstance(decrypted_key, str):
                 openai_api_key = decrypted_key
                 logger.info("Using OpenAI API key from Vault for STT/TTS.")
@@ -85,13 +88,13 @@ async def public_voice_websocket_endpoint(
     stt_service = None
     if stt_provider == "groq":
         groq_api_key = None
-        print(agent.credential)
-        # Check if the agent has a specific credential for Groq (case-insensitive)
-        if agent.credential and agent.credential.service.lower() == 'groq':
-            logger.info("Found Groq credential associated with the agent.")
+        # Look up Groq credential by service name for the company
+        groq_credential = credential_service.get_credential_by_service_name(db, 'groq', company_id)
+        if groq_credential:
+            logger.info("Found Groq credential in vault for company.")
             try:
                 # The credential service returns the raw decrypted key for simple services like Groq
-                decrypted_key = credential_service.get_decrypted_credential(db, agent.credential.id, company_id)
+                decrypted_key = credential_service.get_decrypted_credential(db, groq_credential.id, company_id)
                 if decrypted_key and isinstance(decrypted_key, str):
                     groq_api_key = decrypted_key
                     logger.info("Using Groq API key from Vault.")
@@ -99,9 +102,9 @@ async def public_voice_websocket_endpoint(
                     logger.warning("Groq credential found but the decrypted key is not a valid string.")
             except Exception as e:
                 logger.error(f"Failed to decrypt Groq credential: {e}")
-        
+
         if not groq_api_key:
-            logger.warning("Groq API key not found in agent's vault. Falling back to environment variable.")
+            logger.warning("Groq API key not found in vault. Falling back to environment variable.")
 
         try:
             stt_service = GroqSTTService(api_key=groq_api_key) if groq_api_key else GroqSTTService()
@@ -126,7 +129,28 @@ async def public_voice_websocket_endpoint(
             stt_service = OpenAISTTService()
 
     elif stt_provider == "deepgram":
-        stt_service = STTService(websocket)
+        deepgram_api_key = None
+
+        # Look up Deepgram credential by service name for the company
+        deepgram_credential = credential_service.get_credential_by_service_name(db, 'deepgram', company_id)
+        if deepgram_credential:
+            logger.info("Found Deepgram credential in vault for company.")
+            try:
+                # Get decrypted key from vault
+                decrypted_key = credential_service.get_decrypted_credential(db, deepgram_credential.id, company_id)
+                if decrypted_key and isinstance(decrypted_key, str):
+                    deepgram_api_key = decrypted_key
+                    logger.info("Using Deepgram API key from Vault.")
+                else:
+                    logger.warning("Deepgram credential found but the decrypted key is not a valid string.")
+            except Exception as e:
+                logger.error(f"Failed to decrypt Deepgram credential: {e}")
+
+        if not deepgram_api_key:
+            logger.warning("Deepgram API key not found in vault. Falling back to environment variable.")
+
+        # Pass api_key to STTService (will use env var if None)
+        stt_service = STTService(websocket, api_key=deepgram_api_key)
     else:
         logger.error(f"Unsupported STT provider: {stt_provider}")
         await websocket.close(code=1008)
@@ -150,11 +174,24 @@ async def public_voice_websocket_endpoint(
             if await stt_service.connect():
                 while True:
                     try:
-                        message = await stt_service.deepgram_ws.receive_json()
-                        if message.get("type") == "Results":
-                            transcript = message["channel"]["alternatives"][0]["transcript"]
-                            if transcript and message.get("is_final", False):
-                                await transcript_queue.put(transcript)
+                        # Use receive() to handle all message types (text, binary, close, etc.)
+                        msg = await stt_service.deepgram_ws.receive()
+
+                        # Handle close frames gracefully
+                        if msg.type == aiohttp.WSMsgType.CLOSED:
+                            logger.info("Deepgram WebSocket closed normally")
+                            break
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            logger.error(f"Deepgram WebSocket error: {msg}")
+                            break
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            # Parse JSON message
+                            message = json.loads(msg.data)
+                            if message.get("type") == "Results":
+                                transcript = message["channel"]["alternatives"][0]["transcript"]
+                                if transcript and message.get("is_final", False):
+                                    await transcript_queue.put(transcript)
+                        # Ignore other message types (binary, ping, pong, etc.)
                     except Exception as e:
                         logger.error(f"Error receiving from STT service: {e}")
                         break
