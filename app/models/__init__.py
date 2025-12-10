@@ -52,5 +52,6 @@ from app.models.lead_score import LeadScore
 from app.models.tag import Tag, lead_tags, contact_tags
 from app.models.segment import Segment, SegmentType
 from app.models.template import Template
+from app.models.message_template import MessageTemplate
 from app.models.entity_note import EntityNote, NoteType
 

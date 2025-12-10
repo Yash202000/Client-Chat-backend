@@ -86,16 +86,18 @@ class GroqSTTService:
                 return await response.json()
 
 class STTService:
-    def __init__(self, websocket: WebSocket):
+    def __init__(self, websocket: WebSocket, api_key: str = None):
         self.websocket = websocket
         self.session = aiohttp.ClientSession()
         self.deepgram_ws = None
+        # Use provided API key, fallback to environment variable
+        self.api_key = api_key or DEEPGRAM_API_KEY
 
     async def connect(self):
         try:
             self.deepgram_ws = await self.session.ws_connect(
                 DEEPGRAM_URL,
-                headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+                headers={"Authorization": f"Token {self.api_key}"}
             )
             return True
         except Exception as e:
