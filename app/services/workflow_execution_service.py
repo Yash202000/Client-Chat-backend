@@ -831,6 +831,399 @@ Category:"""
             print(f"✗ Question classifier error: {e}")
             return {"output": "default", "classification": None, "error": str(e)}
 
+    async def _execute_extract_entities_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow: Workflow, conversation_id: str):
+        """
+        Extracts entities from text using LLM.
+        If extraction fails, pauses workflow to prompt user for missing entities.
+        """
+        entities_config = node_data.get("entities", [])
+        input_source = node_data.get("input_source", "{{context.user_message}}")
+        model = node_data.get("model", "groq/llama-3.1-8b-instant")
+        retry_prompt_template = node_data.get("retry_prompt_template", "I couldn't find your {entity_description}. Please provide it.")
+        max_retries = node_data.get("max_retries", 2)
+
+        if not entities_config:
+            print("✗ Extract entities: No entities configured")
+            return {"output": {}, "status": "complete"}
+
+        # Check if resuming from pause (user providing missing entity)
+        if "_extracting_entity_name" in context:
+            extracting_entity_name = context.get("_extracting_entity_name")
+            missing_entities = context.get("_missing_entities", [])
+            extraction_attempts = context.get("_extraction_attempts", {})
+
+            # Deserialize missing_entities if it's a JSON string
+            if isinstance(missing_entities, str):
+                try:
+                    missing_entities = json.loads(missing_entities)
+                except (json.JSONDecodeError, TypeError):
+                    missing_entities = []
+
+            print(f"✓ Extract entities: Resuming, user provided value for '{extracting_entity_name}'")
+
+            # The standard resume logic saved user input to context[extracting_entity_name]
+            # Now we need to extract the actual value from the user's response using LLM
+            user_provided_text = context.get(extracting_entity_name, "")
+
+            if user_provided_text:
+                # Find the entity config for this entity
+                entity_config = next((e for e in entities_config if e["name"] == extracting_entity_name), None)
+
+                if entity_config:
+                    # Use LLM to extract just the value from user's response
+                    entity_description = entity_config.get("description", extracting_entity_name)
+                    entity_type = entity_config.get("type", "text")
+
+                    extraction_prompt = f"""Extract only the {entity_description} from this message.
+Return ONLY the extracted value, nothing else.
+
+Entity to extract: {extracting_entity_name} ({entity_type})
+Description: {entity_description}
+Message: "{user_provided_text}"
+
+Extracted value:"""
+
+                    try:
+                        llm_response = await self.llm_tool_service.execute(
+                            model=model,
+                            system_prompt="You are an entity extraction assistant. Extract only the requested value from the message. Return ONLY the value itself, nothing else.",
+                            chat_history=[],
+                            user_prompt=extraction_prompt,
+                            tools=[],
+                            knowledge_base_id=None,
+                            company_id=company_id
+                        )
+
+                        if isinstance(llm_response, dict):
+                            extracted_value = llm_response.get("content", "").strip()
+                        else:
+                            extracted_value = str(llm_response).strip() if llm_response else user_provided_text
+
+                        # Validate extracted value based on entity type
+                        is_valid = False
+                        validation_error = None
+
+                        if extracted_value and extracted_value.lower() not in ['null', 'none', 'n/a']:
+                            # Type-based validation
+                            if entity_type == "number":
+                                # Check if it's a valid number
+                                try:
+                                    float(extracted_value)
+                                    is_valid = True
+                                except ValueError:
+                                    validation_error = f"'{extracted_value}' is not a valid number"
+                            elif entity_type == "email":
+                                # Basic email validation
+                                import re
+                                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                                if re.match(email_pattern, extracted_value):
+                                    is_valid = True
+                                else:
+                                    validation_error = f"'{extracted_value}' is not a valid email"
+                            elif entity_type == "phone":
+                                # Basic phone validation (digits, spaces, +, -, ())
+                                import re
+                                phone_pattern = r'^[+]?[\d\s\-()]+$'
+                                if re.match(phone_pattern, extracted_value) and len(extracted_value.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')) >= 10:
+                                    is_valid = True
+                                else:
+                                    validation_error = f"'{extracted_value}' is not a valid phone number"
+                            else:
+                                # For text and other types, any non-empty value is valid
+                                is_valid = True
+
+                        # Save if valid, otherwise mark as still missing
+                        if is_valid:
+                            context[extracting_entity_name] = extracted_value
+                            # Save to memory for persistence
+                            memory_service.set_memory(
+                                self.db,
+                                MemoryCreate(key=extracting_entity_name, value=extracted_value),
+                                agent_id=workflow.agent.id,
+                                session_id=conversation_id
+                            )
+                            print(f"✓ Extracted and validated '{extracted_value}' for {extracting_entity_name} (type: {entity_type})")
+                        else:
+                            # Validation failed - don't save, keep in missing list
+                            print(f"✗ Validation failed for {extracting_entity_name}: {validation_error}")
+                            # Don't remove from missing list - will ask again
+                            is_valid = False
+
+                    except Exception as e:
+                        print(f"✗ LLM extraction failed for {extracting_entity_name}: {e}, using raw input")
+                        context[extracting_entity_name] = user_provided_text
+                        is_valid = True  # Exception path - accept raw input
+                else:
+                    # No config found, use raw input
+                    context[extracting_entity_name] = user_provided_text
+                    is_valid = True
+            else:
+                print(f"⚠ Warning: Expected '{extracting_entity_name}' in context but not found, using empty value")
+                context[extracting_entity_name] = ""
+                is_valid = True
+
+            # Remove from missing list only if validation passed
+            if is_valid and extracting_entity_name in missing_entities:
+                missing_entities.remove(extracting_entity_name)
+
+            # Clear the resumption markers
+            del context["_extracting_entity_name"]
+
+            # Check if there are more missing entities
+            if missing_entities:
+                # Ask for the next missing entity
+                next_entity_name = missing_entities[0]
+                entity_config = next((e for e in entities_config if e["name"] == next_entity_name), None)
+
+                if entity_config:
+                    entity_description = entity_config.get("description", next_entity_name)
+                    entity_type_next = entity_config.get("type", "text")
+                    prompt_text = retry_prompt_template.replace("{entity_description}", entity_description).replace("{entity_name}", next_entity_name)
+
+                    # If this is the same entity that just failed validation, add the error message
+                    if next_entity_name == extracting_entity_name and not is_valid and validation_error:
+                        prompt_text = f"{validation_error}. {prompt_text}"
+
+                    # Update context for next iteration
+                    context["_extracting_entity_name"] = next_entity_name
+                    context["_missing_entities"] = missing_entities
+                    context["_extraction_attempts"] = extraction_attempts
+                    context["variable_to_save"] = next_entity_name  # Standard pause/resume mechanism expects this
+
+                    # Save to memory (for debugging and backup)
+                    memory_service.set_memory(
+                        self.db,
+                        MemoryCreate(key="variable_to_save", value=next_entity_name),
+                        agent_id=workflow.agent.id,
+                        session_id=conversation_id
+                    )
+                    memory_service.set_memory(
+                        self.db,
+                        MemoryCreate(key="_extracting_entity_name", value=next_entity_name),
+                        agent_id=workflow.agent.id,
+                        session_id=conversation_id
+                    )
+                    memory_service.set_memory(
+                        self.db,
+                        MemoryCreate(key="_missing_entities", value=json.dumps(missing_entities)),
+                        agent_id=workflow.agent.id,
+                        session_id=conversation_id
+                    )
+
+                    print(f"ℹ Extract entities: Still missing {len(missing_entities)} entities, asking for '{next_entity_name}'")
+
+                    return {
+                        "status": "paused_for_prompt",
+                        "prompt": {
+                            "text": prompt_text,
+                            "options": []
+                        },
+                        "output_variable": next_entity_name,
+                        "re_execute_node": True  # Re-execute this node to continue collection
+                    }
+
+            # All entities collected, clean up context
+            context.pop("_missing_entities", None)
+            context.pop("_extraction_attempts", None)
+
+            # Gather all extracted entities
+            extracted_entities = {}
+            for entity_config in entities_config:
+                entity_name = entity_config["name"]
+                extracted_entities[entity_name] = context.get(entity_name)
+
+            print(f"✓ Extract entities: All entities collected: {list(extracted_entities.keys())}")
+            return {"output": extracted_entities, "status": "complete"}
+
+        # First time execution - attempt LLM extraction
+        # Resolve input source placeholder
+        input_text = self._resolve_placeholders(input_source, context, results)
+
+        if not input_text:
+            print(f"✗ Extract entities: No input text found from source '{input_source}'")
+            input_text = ""
+
+        # Build LLM extraction prompt
+        entities_list = "\n".join([
+            f"- {entity['name']}: {entity.get('description', 'No description')} (type: {entity.get('type', 'text')})"
+            for entity in entities_config
+        ])
+
+        prompt = f"""Extract the following entities from the message.
+Return a JSON object with entity names as keys.
+If an entity is not found, use null as the value.
+
+Entities to extract:
+{entities_list}
+
+Message: "{input_text}"
+
+Return only valid JSON, nothing else:"""
+
+        print(f"✓ Extract entities: Attempting to extract {len(entities_config)} entities from: '{input_text[:100]}...'")
+
+        try:
+            # Call LLM
+            llm_response = await self.llm_tool_service.execute(
+                model=model,
+                system_prompt="You are an entity extraction assistant. Extract the requested entities from the message and return them in valid JSON format. Always return a JSON object with entity names as keys. Use null for entities that cannot be found.",
+                chat_history=[],
+                user_prompt=prompt,
+                tools=[],  # Empty list instead of None
+                knowledge_base_id=None,
+                company_id=company_id
+            )
+
+            # Parse JSON response
+            if isinstance(llm_response, dict):
+                response_text = llm_response.get("content", "")
+            else:
+                response_text = str(llm_response) if llm_response else ""
+
+            if not response_text:
+                raise ValueError("LLM returned empty response")
+
+            # Extract JSON from response (handle markdown code blocks)
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif response_text.startswith("```"):
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            extracted_entities = json.loads(response_text)
+
+            # Validate that extracted_entities is a dict
+            if not isinstance(extracted_entities, dict):
+                raise ValueError(f"LLM returned non-dict response: {type(extracted_entities)}")
+
+            print(f"✓ Extract entities: LLM returned: {extracted_entities}")
+
+        except Exception as e:
+            print(f"✗ Extract entities: LLM extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Treat all as missing
+            extracted_entities = {entity["name"]: None for entity in (entities_config or [])}
+
+        # Save extracted entities to context and check which are missing
+        missing_entities = []
+        for entity_config in entities_config:
+            entity_name = entity_config["name"]
+            entity_value = extracted_entities.get(entity_name)
+            is_required = entity_config.get("required", True)
+
+            if entity_value is not None and entity_value != "":
+                # Validate extracted value based on entity type
+                entity_type = entity_config.get("type", "text")
+                is_valid = False
+                validation_error = None
+
+                if entity_type == "number":
+                    try:
+                        float(entity_value)
+                        is_valid = True
+                    except ValueError:
+                        validation_error = f"'{entity_value}' is not a valid number"
+                elif entity_type == "email":
+                    import re
+                    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                    if re.match(email_pattern, str(entity_value)):
+                        is_valid = True
+                    else:
+                        validation_error = f"'{entity_value}' is not a valid email"
+                elif entity_type == "phone":
+                    import re
+                    phone_pattern = r'^[+]?[\d\s\-()]+$'
+                    entity_value_str = str(entity_value)
+                    if re.match(phone_pattern, entity_value_str) and len(entity_value_str.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')) >= 10:
+                        is_valid = True
+                    else:
+                        validation_error = f"'{entity_value}' is not a valid phone number"
+                else:
+                    # For text and other types, any non-empty value is valid
+                    is_valid = True
+
+                if is_valid:
+                    # Successfully extracted and validated
+                    context[entity_name] = entity_value
+                    # Also save to memory to ensure persistence across pauses
+                    memory_service.set_memory(
+                        self.db,
+                        MemoryCreate(key=entity_name, value=entity_value),
+                        agent_id=workflow.agent.id,
+                        session_id=conversation_id
+                    )
+                    print(f"✓ Entity '{entity_name}' extracted and validated: {entity_value} (type: {entity_type})")
+                else:
+                    # Validation failed - treat as missing
+                    if is_required:
+                        missing_entities.append(entity_name)
+                        print(f"✗ Entity '{entity_name}' extracted but validation failed: {validation_error}")
+                    else:
+                        context[entity_name] = None
+                        print(f"ℹ Entity '{entity_name}' validation failed but optional: {validation_error}")
+            elif is_required:
+                # Missing and required
+                missing_entities.append(entity_name)
+                print(f"✗ Entity '{entity_name}' missing and required")
+            else:
+                # Missing but optional
+                context[entity_name] = None
+                print(f"ℹ Entity '{entity_name}' missing but optional, setting to null")
+
+        # If all required entities extracted, return success
+        if not missing_entities:
+            print(f"✓ Extract entities: All required entities extracted successfully")
+            return {"output": extracted_entities, "status": "complete"}
+
+        # Some entities missing - pause and ask for first one
+        first_missing = missing_entities[0]
+        entity_config = next((e for e in entities_config if e["name"] == first_missing), None)
+
+        if entity_config:
+            entity_description = entity_config.get("description", first_missing)
+            prompt_text = retry_prompt_template.replace("{entity_description}", entity_description).replace("{entity_name}", first_missing)
+        else:
+            prompt_text = f"Please provide {first_missing}"
+
+        # Save state to context for resume
+        context["_missing_entities"] = missing_entities
+        context["_extracting_entity_name"] = first_missing
+        context["_extraction_attempts"] = {entity: 0 for entity in missing_entities}
+        context["variable_to_save"] = first_missing  # Standard pause/resume mechanism expects this
+
+        # Save to memory (for debugging and backup)
+        memory_service.set_memory(
+            self.db,
+            MemoryCreate(key="variable_to_save", value=first_missing),
+            agent_id=workflow.agent.id,
+            session_id=conversation_id
+        )
+        memory_service.set_memory(
+            self.db,
+            MemoryCreate(key="_extracting_entity_name", value=first_missing),
+            agent_id=workflow.agent.id,
+            session_id=conversation_id
+        )
+        memory_service.set_memory(
+            self.db,
+            MemoryCreate(key="_missing_entities", value=json.dumps(missing_entities)),
+            agent_id=workflow.agent.id,
+            session_id=conversation_id
+        )
+
+        print(f"ℹ Extract entities: {len(missing_entities)} entities missing, asking for '{first_missing}'")
+
+        return {
+            "status": "paused_for_prompt",
+            "prompt": {
+                "text": prompt_text,
+                "options": []
+            },
+            "output_variable": first_missing,
+            "re_execute_node": True  # Re-execute this node to continue collection
+        }
+
     async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
@@ -1091,19 +1484,33 @@ Category:"""
                     node_data, context, results, workflow_obj.agent.company_id
                 )
 
+            elif node_type == "extract_entities":
+                # Extracts entities from message using LLM
+                result = await self._execute_extract_entities_node(
+                    node_data, context, results, workflow_obj.agent.company_id, workflow_obj, conversation_id
+                )
+
             results[current_node_id] = result
             last_executed_node_id = current_node_id
 
             if result and result.get("status") in ["paused_for_input", "paused_for_prompt", "paused_for_form"]:
-                next_node_id = graph_engine.get_next_node(current_node_id, result)
-                
+                # Check if this node wants to re-execute itself (for multi-step collection)
+                # If result has 're_execute_node', save current node as next_step_id instead
+                if result.get("re_execute_node"):
+                    next_node_id = current_node_id  # Re-execute this node
+                else:
+                    next_node_id = graph_engine.get_next_node(current_node_id, result)
+
                 # Before pausing, save the variable name that should receive the input.
-                # This information should be part of the node's data.
-                variable_to_save = node_data.get("output_variable")
+                # First check if the result provides output_variable (for dynamic nodes like extract_entities)
+                # Otherwise check the node's configuration data
+                variable_to_save = result.get("output_variable")
                 if not variable_to_save:
-                    params = node_data.get("params", {})
-                    # Check both 'output_variable' and 'save_to_variable' for backward compatibility
-                    variable_to_save = params.get("output_variable") or params.get("save_to_variable")
+                    variable_to_save = node_data.get("output_variable")
+                    if not variable_to_save:
+                        params = node_data.get("params", {})
+                        # Check both 'output_variable' and 'save_to_variable' for backward compatibility
+                        variable_to_save = params.get("output_variable") or params.get("save_to_variable")
                 
                 print(f"DEBUG: Pausing node data: {node_data}")
                 print(f"DEBUG: 'output_variable' from node data is: '{variable_to_save}'")
@@ -1149,6 +1556,17 @@ Category:"""
         # and the conversation remains visible. Track workflow completion in context.
         context['last_workflow_completed_at'] = datetime.now().isoformat()
         context['last_workflow_id'] = workflow_obj.id
+
+        # Clean up any extraction-related markers from context and memory so they don't interfere with future runs
+        extraction_markers = ['_extracting_entity_name', '_missing_entities', '_extraction_attempts', 'variable_to_save']
+        for marker in extraction_markers:
+            context.pop(marker, None)
+            # Also delete from memory service
+            try:
+                memory_service.delete_memory(self.db, marker, workflow_obj.agent.id, conversation_id)
+            except:
+                pass  # Marker might not exist in memory
+        print(f"DEBUG: Cleaned up extraction markers from context and memory on workflow completion")
 
         # Update session context
         session_update = ConversationSessionUpdate(status='active', context=context)
