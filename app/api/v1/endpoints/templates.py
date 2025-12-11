@@ -11,7 +11,7 @@ from app.models.template import Template, TemplateType
 router = APIRouter()
 
 
-@router.get("/", response_model=schemas_template.TemplateList)
+@router.get("", response_model=schemas_template.TemplateList)
 def list_templates(
     search: Optional[str] = None,
     template_type: Optional[str] = None,
@@ -60,7 +60,7 @@ def list_templates(
     )
 
 
-@router.post("/", response_model=schemas_template.Template)
+@router.post("", response_model=schemas_template.Template)
 def create_template(
     template_data: schemas_template.TemplateCreate,
     db: Session = Depends(get_db),
