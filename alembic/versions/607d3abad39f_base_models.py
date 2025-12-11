@@ -1,8 +1,8 @@
-"""initial migration
+"""base models
 
-Revision ID: 06bc94628aea
+Revision ID: 607d3abad39f
 Revises: 
-Create Date: 2025-10-25 00:31:57.313097
+Create Date: 2025-12-11 11:46:01.408974
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '06bc94628aea'
+revision: str = '607d3abad39f'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -118,6 +118,13 @@ def upgrade() -> None:
     sa.Column('secondary_color', sa.String(), nullable=True),
     sa.Column('custom_domain', sa.String(), nullable=True),
     sa.Column('company_id', sa.Integer(), nullable=True),
+    sa.Column('smtp_host', sa.String(), nullable=True),
+    sa.Column('smtp_port', sa.Integer(), nullable=True),
+    sa.Column('smtp_user', sa.String(), nullable=True),
+    sa.Column('smtp_password', sa.Text(), nullable=True),
+    sa.Column('smtp_use_tls', sa.Boolean(), nullable=True),
+    sa.Column('smtp_from_email', sa.String(), nullable=True),
+    sa.Column('smtp_from_name', sa.String(), nullable=True),
     sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -128,12 +135,23 @@ def upgrade() -> None:
     sa.Column('name', sa.String(), nullable=True),
     sa.Column('phone_number', sa.String(), nullable=True),
     sa.Column('custom_attributes', sa.JSON(), nullable=True),
+    sa.Column('lead_source', sa.String(), nullable=True),
+    sa.Column('lifecycle_stage', sa.Enum('SUBSCRIBER', 'LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CUSTOMER', 'EVANGELIST', 'OTHER', name='lifecyclestage'), nullable=True),
+    sa.Column('do_not_contact', sa.Boolean(), nullable=False),
+    sa.Column('opt_in_status', sa.Enum('OPTED_IN', 'OPTED_OUT', 'PENDING', 'UNKNOWN', name='optinstatus'), nullable=False),
+    sa.Column('opt_in_date', sa.DateTime(), nullable=True),
+    sa.Column('opt_out_date', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=True),
+    sa.Column('last_contacted_at', sa.DateTime(), nullable=True),
     sa.Column('company_id', sa.Integer(), nullable=True),
     sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_contacts_email'), 'contacts', ['email'], unique=True)
     op.create_index(op.f('ix_contacts_id'), 'contacts', ['id'], unique=False)
+    op.create_index(op.f('ix_contacts_lead_source'), 'contacts', ['lead_source'], unique=False)
+    op.create_index(op.f('ix_contacts_lifecycle_stage'), 'contacts', ['lifecycle_stage'], unique=False)
     op.create_index(op.f('ix_contacts_name'), 'contacts', ['name'], unique=False)
     op.create_table('credentials',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -227,6 +245,22 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_roles_id'), 'roles', ['id'], unique=False)
     op.create_index(op.f('ix_roles_name'), 'roles', ['name'], unique=False)
+    op.create_table('tags',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('color', sa.String(length=7), nullable=True),
+    sa.Column('description', sa.String(length=255), nullable=True),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('entity_type', sa.String(length=20), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('name', 'company_id', name='uq_tag_name_company')
+    )
+    op.create_index(op.f('ix_tags_company_id'), 'tags', ['company_id'], unique=False)
+    op.create_index(op.f('ix_tags_id'), 'tags', ['id'], unique=False)
+    op.create_index(op.f('ix_tags_name'), 'tags', ['name'], unique=False)
     op.create_table('teams',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=True),
@@ -247,6 +281,7 @@ def upgrade() -> None:
     sa.Column('is_pre_built', sa.Boolean(), nullable=True),
     sa.Column('company_id', sa.Integer(), nullable=True),
     sa.Column('configuration', sa.JSON(), nullable=True),
+    sa.Column('follow_up_config', sa.JSON(), nullable=True),
     sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -268,6 +303,7 @@ def upgrade() -> None:
     sa.Column('instructions', sa.String(), nullable=True),
     sa.Column('credential_id', sa.Integer(), nullable=True),
     sa.Column('company_id', sa.Integer(), nullable=True),
+    sa.Column('handoff_team_id', sa.Integer(), nullable=True),
     sa.Column('version_number', sa.Integer(), nullable=True),
     sa.Column('parent_version_id', sa.Integer(), nullable=True),
     sa.Column('status', sa.String(), nullable=True),
@@ -278,6 +314,7 @@ def upgrade() -> None:
     sa.Column('stt_provider', sa.String(), nullable=False),
     sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
     sa.ForeignKeyConstraint(['credential_id'], ['credentials.id'], ),
+    sa.ForeignKeyConstraint(['handoff_team_id'], ['teams.id'], ),
     sa.ForeignKeyConstraint(['parent_version_id'], ['agents.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -293,6 +330,14 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_ai_tool_questions_id'), 'ai_tool_questions', ['id'], unique=False)
+    op.create_table('contact_tags',
+    sa.Column('contact_id', sa.Integer(), nullable=False),
+    sa.Column('tag_id', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['contact_id'], ['contacts.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tag_id'], ['tags.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('contact_id', 'tag_id')
+    )
     op.create_table('role_permissions',
     sa.Column('role_id', sa.Integer(), nullable=False),
     sa.Column('permission_id', sa.Integer(), nullable=False),
@@ -390,6 +435,28 @@ def upgrade() -> None:
     op.create_index(op.f('ix_memories_id'), 'memories', ['id'], unique=False)
     op.create_index(op.f('ix_memories_key'), 'memories', ['key'], unique=False)
     op.create_index(op.f('ix_memories_session_id'), 'memories', ['session_id'], unique=False)
+    op.create_table('message_templates',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('created_by_user_id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('shortcut', sa.String(length=50), nullable=False),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('tags', sa.ARRAY(sa.String(length=50)), nullable=True),
+    sa.Column('scope', sa.Enum('PERSONAL', 'SHARED', name='templatescope'), nullable=False),
+    sa.Column('usage_count', sa.Integer(), nullable=False),
+    sa.Column('last_used_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_message_templates_company_id'), 'message_templates', ['company_id'], unique=False)
+    op.create_index(op.f('ix_message_templates_created_by_user_id'), 'message_templates', ['created_by_user_id'], unique=False)
+    op.create_index(op.f('ix_message_templates_id'), 'message_templates', ['id'], unique=False)
+    op.create_index(op.f('ix_message_templates_scope'), 'message_templates', ['scope'], unique=False)
+    op.create_index(op.f('ix_message_templates_shortcut'), 'message_templates', ['shortcut'], unique=False)
     op.create_table('optimization_suggestions',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('suggestion_type', sa.String(), nullable=False),
@@ -403,18 +470,72 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_optimization_suggestions_id'), 'optimization_suggestions', ['id'], unique=False)
+    op.create_table('segments',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('segment_type', sa.Enum('DYNAMIC', 'STATIC', name='segmenttype'), nullable=False),
+    sa.Column('criteria', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('static_contact_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('static_lead_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('contact_count', sa.Integer(), nullable=False),
+    sa.Column('lead_count', sa.Integer(), nullable=False),
+    sa.Column('last_refreshed_at', sa.DateTime(), nullable=True),
+    sa.Column('created_by_user_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_segments_company_id'), 'segments', ['company_id'], unique=False)
+    op.create_index(op.f('ix_segments_id'), 'segments', ['id'], unique=False)
+    op.create_index(op.f('ix_segments_name'), 'segments', ['name'], unique=False)
     op.create_table('team_memberships',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=True),
     sa.Column('team_id', sa.Integer(), nullable=True),
     sa.Column('role', sa.String(), nullable=True),
     sa.Column('company_id', sa.Integer(), nullable=True),
+    sa.Column('is_available', sa.Boolean(), server_default='true', nullable=True),
+    sa.Column('priority', sa.Integer(), server_default='0', nullable=True),
+    sa.Column('max_concurrent_sessions', sa.Integer(), server_default='3', nullable=True),
+    sa.Column('current_session_count', sa.Integer(), server_default='0', nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
     sa.ForeignKeyConstraint(['team_id'], ['teams.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_team_memberships_id'), 'team_memberships', ['id'], unique=False)
+    op.create_table('templates',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('created_by_user_id', sa.Integer(), nullable=True),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('template_type', sa.Enum('EMAIL', 'SMS', 'WHATSAPP', 'VOICE', name='templatetype'), nullable=False),
+    sa.Column('subject', sa.String(length=500), nullable=True),
+    sa.Column('body', sa.Text(), nullable=True),
+    sa.Column('html_body', sa.Text(), nullable=True),
+    sa.Column('voice_script', sa.Text(), nullable=True),
+    sa.Column('tts_voice_id', sa.String(length=100), nullable=True),
+    sa.Column('whatsapp_template_name', sa.String(length=255), nullable=True),
+    sa.Column('whatsapp_template_params', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('personalization_tokens', postgresql.ARRAY(sa.String(length=100)), nullable=True),
+    sa.Column('tags', postgresql.ARRAY(sa.String(length=50)), nullable=True),
+    sa.Column('is_ai_generated', sa.Boolean(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_templates_company_id'), 'templates', ['company_id'], unique=False)
+    op.create_index(op.f('ix_templates_id'), 'templates', ['id'], unique=False)
+    op.create_index(op.f('ix_templates_template_type'), 'templates', ['template_type'], unique=False)
     op.create_table('user_settings',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=True),
@@ -504,6 +625,50 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_workflows_id'), 'workflows', ['id'], unique=False)
     op.create_index(op.f('ix_workflows_name'), 'workflows', ['name'], unique=False)
+    op.create_table('campaigns',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('campaign_type', sa.Enum('EMAIL', 'SMS', 'WHATSAPP', 'VOICE', 'MULTI_CHANNEL', name='campaigntype'), nullable=False),
+    sa.Column('status', sa.Enum('DRAFT', 'SCHEDULED', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED', name='campaignstatus'), nullable=False),
+    sa.Column('workflow_id', sa.Integer(), nullable=True),
+    sa.Column('agent_id', sa.Integer(), nullable=True),
+    sa.Column('created_by_user_id', sa.Integer(), nullable=True),
+    sa.Column('owner_user_id', sa.Integer(), nullable=True),
+    sa.Column('start_date', sa.DateTime(), nullable=True),
+    sa.Column('end_date', sa.DateTime(), nullable=True),
+    sa.Column('scheduled_send_time', sa.DateTime(), nullable=True),
+    sa.Column('segment_id', sa.Integer(), nullable=True),
+    sa.Column('target_criteria', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('goal_type', sa.Enum('LEAD_GENERATION', 'NURTURE', 'CONVERSION', 'ENGAGEMENT', 'RETENTION', 'REACTIVATION', name='goaltype'), nullable=True),
+    sa.Column('goal_value', sa.Integer(), nullable=True),
+    sa.Column('budget', sa.DECIMAL(precision=10, scale=2), nullable=True),
+    sa.Column('actual_cost', sa.DECIMAL(precision=10, scale=2), nullable=True),
+    sa.Column('settings', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('twilio_config', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('total_contacts', sa.Integer(), nullable=False),
+    sa.Column('contacts_reached', sa.Integer(), nullable=False),
+    sa.Column('contacts_engaged', sa.Integer(), nullable=False),
+    sa.Column('contacts_converted', sa.Integer(), nullable=False),
+    sa.Column('total_revenue', sa.DECIMAL(precision=10, scale=2), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('last_run_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['owner_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['segment_id'], ['segments.id'], ),
+    sa.ForeignKeyConstraint(['workflow_id'], ['workflows.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_campaigns_campaign_type'), 'campaigns', ['campaign_type'], unique=False)
+    op.create_index(op.f('ix_campaigns_company_id'), 'campaigns', ['company_id'], unique=False)
+    op.create_index(op.f('ix_campaigns_id'), 'campaigns', ['id'], unique=False)
+    op.create_index(op.f('ix_campaigns_name'), 'campaigns', ['name'], unique=False)
+    op.create_index(op.f('ix_campaigns_segment_id'), 'campaigns', ['segment_id'], unique=False)
+    op.create_index(op.f('ix_campaigns_status'), 'campaigns', ['status'], unique=False)
     op.create_table('channel_memberships',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -540,6 +705,15 @@ def upgrade() -> None:
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('is_ai_enabled', sa.Boolean(), nullable=False),
     sa.Column('is_client_connected', sa.Boolean(), nullable=False),
+    sa.Column('reopen_count', sa.Integer(), nullable=False),
+    sa.Column('last_reopened_at', sa.DateTime(), nullable=True),
+    sa.Column('resolved_at', sa.DateTime(), nullable=True),
+    sa.Column('priority', sa.Integer(), nullable=False),
+    sa.Column('handoff_requested_at', sa.DateTime(), nullable=True),
+    sa.Column('handoff_reason', sa.String(), nullable=True),
+    sa.Column('assigned_pool', sa.String(), nullable=True),
+    sa.Column('waiting_for_agent', sa.Boolean(), server_default='false', nullable=False),
+    sa.Column('handoff_accepted_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
@@ -578,10 +752,12 @@ def upgrade() -> None:
     sa.Column('content', sa.String(), nullable=False),
     sa.Column('channel_id', sa.Integer(), nullable=False),
     sa.Column('sender_id', sa.Integer(), nullable=False),
+    sa.Column('parent_message_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('extra_data', sa.JSON(), nullable=True),
     sa.ForeignKeyConstraint(['channel_id'], ['chat_channels.id'], ),
+    sa.ForeignKeyConstraint(['parent_message_id'], ['internal_chat_messages.id'], ),
     sa.ForeignKeyConstraint(['sender_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -592,9 +768,13 @@ def upgrade() -> None:
     sa.Column('status', sa.String(), nullable=True),
     sa.Column('channel_id', sa.Integer(), nullable=False),
     sa.Column('created_by_id', sa.Integer(), nullable=False),
-    sa.Column('participants', sa.JSON(), nullable=True),
+    sa.Column('invited_users', sa.JSON(), nullable=True),
+    sa.Column('joined_users', sa.JSON(), nullable=True),
     sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('answered_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('timeout_seconds', sa.Integer(), nullable=True),
+    sa.Column('participants', sa.JSON(), nullable=True),
     sa.ForeignKeyConstraint(['channel_id'], ['chat_channels.id'], ),
     sa.ForeignKeyConstraint(['created_by_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -618,6 +798,60 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_workflow_triggers_channel'), 'workflow_triggers', ['channel'], unique=False)
     op.create_index(op.f('ix_workflow_triggers_id'), 'workflow_triggers', ['id'], unique=False)
+    op.create_table('campaign_messages',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('campaign_id', sa.Integer(), nullable=False),
+    sa.Column('sequence_order', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(), nullable=True),
+    sa.Column('message_type', sa.Enum('EMAIL', 'SMS', 'WHATSAPP', 'INSTAGRAM', 'TELEGRAM', 'VOICE', 'AI_CONVERSATION', name='messagetype'), nullable=False),
+    sa.Column('template_id', sa.Integer(), nullable=True),
+    sa.Column('subject', sa.String(), nullable=True),
+    sa.Column('body', sa.Text(), nullable=True),
+    sa.Column('html_body', sa.Text(), nullable=True),
+    sa.Column('voice_script', sa.Text(), nullable=True),
+    sa.Column('tts_voice_id', sa.String(), nullable=True),
+    sa.Column('voice_agent_id', sa.Integer(), nullable=True),
+    sa.Column('twilio_phone_number', sa.String(), nullable=True),
+    sa.Column('call_flow_config', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('whatsapp_template_name', sa.String(), nullable=True),
+    sa.Column('whatsapp_template_params', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('delay_amount', sa.Integer(), nullable=False),
+    sa.Column('delay_unit', sa.Enum('MINUTES', 'HOURS', 'DAYS', 'WEEKS', name='delayunit'), nullable=False),
+    sa.Column('send_time_window_start', sa.String(), nullable=True),
+    sa.Column('send_time_window_end', sa.String(), nullable=True),
+    sa.Column('send_on_weekdays_only', sa.Boolean(), nullable=False),
+    sa.Column('is_ab_test', sa.Boolean(), nullable=False),
+    sa.Column('ab_variant', sa.String(), nullable=True),
+    sa.Column('ab_split_percentage', sa.Integer(), nullable=True),
+    sa.Column('personalization_tokens', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('cta_text', sa.String(), nullable=True),
+    sa.Column('cta_url', sa.String(), nullable=True),
+    sa.Column('track_clicks', sa.Boolean(), nullable=False),
+    sa.Column('send_conditions', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['campaign_id'], ['campaigns.id'], ),
+    sa.ForeignKeyConstraint(['template_id'], ['templates.id'], ),
+    sa.ForeignKeyConstraint(['voice_agent_id'], ['agents.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_campaign_messages_campaign_id'), 'campaign_messages', ['campaign_id'], unique=False)
+    op.create_index(op.f('ix_campaign_messages_id'), 'campaign_messages', ['id'], unique=False)
+    op.create_table('chat_attachments',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('file_name', sa.String(), nullable=False),
+    sa.Column('file_url', sa.String(), nullable=False),
+    sa.Column('file_type', sa.String(), nullable=False),
+    sa.Column('file_size', sa.BigInteger(), nullable=False),
+    sa.Column('message_id', sa.Integer(), nullable=False),
+    sa.Column('uploaded_by', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['message_id'], ['internal_chat_messages.id'], ),
+    sa.ForeignKeyConstraint(['uploaded_by'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_chat_attachments_id'), 'chat_attachments', ['id'], unique=False)
     op.create_table('chat_messages',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('message', sa.String(), nullable=True),
@@ -655,7 +889,7 @@ def upgrade() -> None:
     op.create_table('intent_matches',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('conversation_id', sa.String(length=255), nullable=False),
-    sa.Column('intent_id', sa.Integer(), nullable=True),  # Nullable for workflow-based intents
+    sa.Column('intent_id', sa.Integer(), nullable=True),
     sa.Column('message_text', sa.Text(), nullable=True),
     sa.Column('confidence_score', sa.Float(), nullable=True),
     sa.Column('matched_method', sa.String(length=50), nullable=True),
@@ -670,12 +904,273 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_intent_matches_conversation_id'), 'intent_matches', ['conversation_id'], unique=False)
     op.create_index(op.f('ix_intent_matches_id'), 'intent_matches', ['id'], unique=False)
+    op.create_table('leads',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('contact_id', sa.Integer(), nullable=False),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('assignee_id', sa.Integer(), nullable=True),
+    sa.Column('source', sa.String(), nullable=True),
+    sa.Column('campaign_id', sa.Integer(), nullable=True),
+    sa.Column('stage', sa.Enum('LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CUSTOMER', 'LOST', name='leadstage'), nullable=False),
+    sa.Column('stage_changed_at', sa.DateTime(), nullable=False),
+    sa.Column('previous_stage', sa.Enum('LEAD', 'MQL', 'SQL', 'OPPORTUNITY', 'CUSTOMER', 'LOST', name='leadstage'), nullable=True),
+    sa.Column('qualification_status', sa.Enum('UNQUALIFIED', 'IN_PROGRESS', 'QUALIFIED', 'DISQUALIFIED', name='qualificationstatus'), nullable=False),
+    sa.Column('qualification_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('score', sa.Integer(), nullable=False),
+    sa.Column('last_scored_at', sa.DateTime(), nullable=True),
+    sa.Column('deal_value', sa.DECIMAL(precision=10, scale=2), nullable=True),
+    sa.Column('expected_close_date', sa.DateTime(), nullable=True),
+    sa.Column('actual_close_date', sa.DateTime(), nullable=True),
+    sa.Column('won_reason', sa.String(), nullable=True),
+    sa.Column('lost_reason', sa.String(), nullable=True),
+    sa.Column('notes', sa.String(), nullable=True),
+    sa.Column('tags', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('custom_fields', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['assignee_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['campaign_id'], ['campaigns.id'], ),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['contact_id'], ['contacts.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_leads_assignee_id'), 'leads', ['assignee_id'], unique=False)
+    op.create_index(op.f('ix_leads_campaign_id'), 'leads', ['campaign_id'], unique=False)
+    op.create_index(op.f('ix_leads_company_id'), 'leads', ['company_id'], unique=False)
+    op.create_index(op.f('ix_leads_contact_id'), 'leads', ['contact_id'], unique=False)
+    op.create_index(op.f('ix_leads_id'), 'leads', ['id'], unique=False)
+    op.create_index(op.f('ix_leads_score'), 'leads', ['score'], unique=False)
+    op.create_index(op.f('ix_leads_source'), 'leads', ['source'], unique=False)
+    op.create_index(op.f('ix_leads_stage'), 'leads', ['stage'], unique=False)
+    op.create_table('message_mentions',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('message_id', sa.Integer(), nullable=False),
+    sa.Column('mentioned_user_id', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['mentioned_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['message_id'], ['internal_chat_messages.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_message_mentions_id'), 'message_mentions', ['id'], unique=False)
+    op.create_table('message_reactions',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('emoji', sa.String(), nullable=False),
+    sa.Column('message_id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['message_id'], ['internal_chat_messages.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('message_id', 'user_id', 'emoji', name='unique_message_user_emoji')
+    )
+    op.create_index(op.f('ix_message_reactions_id'), 'message_reactions', ['id'], unique=False)
+    op.create_table('notifications',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('notification_type', sa.String(), nullable=False),
+    sa.Column('title', sa.String(), nullable=False),
+    sa.Column('message', sa.String(), nullable=False),
+    sa.Column('related_message_id', sa.Integer(), nullable=True),
+    sa.Column('related_channel_id', sa.Integer(), nullable=True),
+    sa.Column('actor_id', sa.Integer(), nullable=True),
+    sa.Column('is_read', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('read_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['actor_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['related_channel_id'], ['chat_channels.id'], ),
+    sa.ForeignKeyConstraint(['related_message_id'], ['internal_chat_messages.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_notifications_created_at'), 'notifications', ['created_at'], unique=False)
+    op.create_index(op.f('ix_notifications_id'), 'notifications', ['id'], unique=False)
+    op.create_index(op.f('ix_notifications_is_read'), 'notifications', ['is_read'], unique=False)
+    op.create_index(op.f('ix_notifications_user_id'), 'notifications', ['user_id'], unique=False)
+    op.create_table('campaign_activities',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('campaign_id', sa.Integer(), nullable=False),
+    sa.Column('contact_id', sa.Integer(), nullable=False),
+    sa.Column('lead_id', sa.Integer(), nullable=True),
+    sa.Column('message_id', sa.Integer(), nullable=True),
+    sa.Column('activity_type', sa.Enum('EMAIL_SENT', 'EMAIL_DELIVERED', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_REPLIED', 'EMAIL_BOUNCED', 'EMAIL_UNSUBSCRIBED', 'SMS_SENT', 'SMS_DELIVERED', 'SMS_REPLIED', 'SMS_FAILED', 'WHATSAPP_SENT', 'WHATSAPP_DELIVERED', 'WHATSAPP_READ', 'WHATSAPP_REPLIED', 'CALL_INITIATED', 'CALL_RINGING', 'CALL_ANSWERED', 'CALL_COMPLETED', 'CALL_FAILED', 'CALL_BUSY', 'CALL_NO_ANSWER', 'VOICEMAIL_DETECTED', 'VOICEMAIL_LEFT', 'CONVERSATION_STARTED', 'CONVERSATION_REPLIED', 'CONVERSATION_ENDED', 'FORM_SUBMITTED', 'MEETING_BOOKED', 'LEAD_QUALIFIED', 'OPPORTUNITY_CREATED', 'DEAL_WON', 'DEAL_LOST', 'LINK_CLICKED', 'CONTENT_VIEWED', 'DOCUMENT_DOWNLOADED', 'OPTED_OUT', 'ERROR', name='activitytype'), nullable=False),
+    sa.Column('timestamp', sa.DateTime(), nullable=False),
+    sa.Column('activity_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('revenue_amount', sa.DECIMAL(precision=10, scale=2), nullable=True),
+    sa.Column('external_id', sa.String(), nullable=True),
+    sa.Column('session_id', sa.String(), nullable=True),
+    sa.Column('error_message', sa.String(), nullable=True),
+    sa.Column('error_code', sa.String(), nullable=True),
+    sa.ForeignKeyConstraint(['campaign_id'], ['campaigns.id'], ),
+    sa.ForeignKeyConstraint(['contact_id'], ['contacts.id'], ),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ),
+    sa.ForeignKeyConstraint(['message_id'], ['campaign_messages.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_campaign_activities_activity_type'), 'campaign_activities', ['activity_type'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_campaign_id'), 'campaign_activities', ['campaign_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_contact_id'), 'campaign_activities', ['contact_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_external_id'), 'campaign_activities', ['external_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_id'), 'campaign_activities', ['id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_lead_id'), 'campaign_activities', ['lead_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_message_id'), 'campaign_activities', ['message_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_session_id'), 'campaign_activities', ['session_id'], unique=False)
+    op.create_index(op.f('ix_campaign_activities_timestamp'), 'campaign_activities', ['timestamp'], unique=False)
+    op.create_table('campaign_contacts',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('campaign_id', sa.Integer(), nullable=False),
+    sa.Column('contact_id', sa.Integer(), nullable=False),
+    sa.Column('lead_id', sa.Integer(), nullable=True),
+    sa.Column('enrolled_at', sa.DateTime(), nullable=False),
+    sa.Column('enrolled_by_user_id', sa.Integer(), nullable=True),
+    sa.Column('status', sa.Enum('PENDING', 'ACTIVE', 'COMPLETED', 'OPTED_OUT', 'BOUNCED', 'FAILED', 'PAUSED', name='enrollmentstatus'), nullable=False),
+    sa.Column('current_step', sa.Integer(), nullable=False),
+    sa.Column('current_message_id', sa.Integer(), nullable=True),
+    sa.Column('next_scheduled_at', sa.DateTime(), nullable=True),
+    sa.Column('last_interaction_at', sa.DateTime(), nullable=True),
+    sa.Column('completed_at', sa.DateTime(), nullable=True),
+    sa.Column('opted_out_at', sa.DateTime(), nullable=True),
+    sa.Column('opt_out_reason', sa.String(), nullable=True),
+    sa.Column('opens', sa.Integer(), nullable=False),
+    sa.Column('clicks', sa.Integer(), nullable=False),
+    sa.Column('replies', sa.Integer(), nullable=False),
+    sa.Column('conversions', sa.Integer(), nullable=False),
+    sa.Column('calls_initiated', sa.Integer(), nullable=False),
+    sa.Column('calls_completed', sa.Integer(), nullable=False),
+    sa.Column('total_call_duration', sa.Integer(), nullable=False),
+    sa.Column('voicemails_left', sa.Integer(), nullable=False),
+    sa.Column('enrollment_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['campaign_id'], ['campaigns.id'], ),
+    sa.ForeignKeyConstraint(['contact_id'], ['contacts.id'], ),
+    sa.ForeignKeyConstraint(['current_message_id'], ['campaign_messages.id'], ),
+    sa.ForeignKeyConstraint(['enrolled_by_user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('campaign_id', 'contact_id', name='uq_campaign_contact')
+    )
+    op.create_index(op.f('ix_campaign_contacts_campaign_id'), 'campaign_contacts', ['campaign_id'], unique=False)
+    op.create_index(op.f('ix_campaign_contacts_contact_id'), 'campaign_contacts', ['contact_id'], unique=False)
+    op.create_index(op.f('ix_campaign_contacts_id'), 'campaign_contacts', ['id'], unique=False)
+    op.create_index(op.f('ix_campaign_contacts_lead_id'), 'campaign_contacts', ['lead_id'], unique=False)
+    op.create_index(op.f('ix_campaign_contacts_status'), 'campaign_contacts', ['status'], unique=False)
+    op.create_table('entity_notes',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('contact_id', sa.Integer(), nullable=True),
+    sa.Column('lead_id', sa.Integer(), nullable=True),
+    sa.Column('note_type', sa.Enum('NOTE', 'CALL', 'MEETING', 'EMAIL', 'TASK', name='notetype'), nullable=False),
+    sa.Column('title', sa.String(length=255), nullable=True),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('activity_date', sa.DateTime(), nullable=True),
+    sa.Column('duration_minutes', sa.Integer(), nullable=True),
+    sa.Column('participants', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('outcome', sa.String(length=255), nullable=True),
+    sa.Column('created_by', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['contact_id'], ['contacts.id'], ),
+    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_entity_notes_company_id'), 'entity_notes', ['company_id'], unique=False)
+    op.create_index(op.f('ix_entity_notes_contact_id'), 'entity_notes', ['contact_id'], unique=False)
+    op.create_index(op.f('ix_entity_notes_created_by'), 'entity_notes', ['created_by'], unique=False)
+    op.create_index(op.f('ix_entity_notes_id'), 'entity_notes', ['id'], unique=False)
+    op.create_index(op.f('ix_entity_notes_lead_id'), 'entity_notes', ['lead_id'], unique=False)
+    op.create_index(op.f('ix_entity_notes_note_type'), 'entity_notes', ['note_type'], unique=False)
+    op.create_table('lead_scores',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('lead_id', sa.Integer(), nullable=False),
+    sa.Column('company_id', sa.Integer(), nullable=False),
+    sa.Column('score_type', sa.Enum('AI_INTENT', 'ENGAGEMENT', 'DEMOGRAPHIC', 'BEHAVIORAL', 'WORKFLOW', 'MANUAL', 'COMBINED', name='scoretype'), nullable=False),
+    sa.Column('score_value', sa.Integer(), nullable=False),
+    sa.Column('weight', sa.Float(), nullable=False),
+    sa.Column('score_reason', sa.Text(), nullable=True),
+    sa.Column('score_factors', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('intent_matches', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('scored_by_user_id', sa.Integer(), nullable=True),
+    sa.Column('scored_by_agent_id', sa.Integer(), nullable=True),
+    sa.Column('conversation_session_id', sa.String(), nullable=True),
+    sa.Column('scored_at', sa.DateTime(), nullable=False),
+    sa.Column('expires_at', sa.DateTime(), nullable=True),
+    sa.Column('score_metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.ForeignKeyConstraint(['company_id'], ['companies.id'], ),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ),
+    sa.ForeignKeyConstraint(['scored_by_agent_id'], ['agents.id'], ),
+    sa.ForeignKeyConstraint(['scored_by_user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_lead_scores_company_id'), 'lead_scores', ['company_id'], unique=False)
+    op.create_index(op.f('ix_lead_scores_id'), 'lead_scores', ['id'], unique=False)
+    op.create_index(op.f('ix_lead_scores_lead_id'), 'lead_scores', ['lead_id'], unique=False)
+    op.create_index(op.f('ix_lead_scores_score_type'), 'lead_scores', ['score_type'], unique=False)
+    op.create_index(op.f('ix_lead_scores_scored_at'), 'lead_scores', ['scored_at'], unique=False)
+    op.create_table('lead_tags',
+    sa.Column('lead_id', sa.Integer(), nullable=False),
+    sa.Column('tag_id', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tag_id'], ['tags.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('lead_id', 'tag_id')
+    )
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_table('lead_tags')
+    op.drop_index(op.f('ix_lead_scores_scored_at'), table_name='lead_scores')
+    op.drop_index(op.f('ix_lead_scores_score_type'), table_name='lead_scores')
+    op.drop_index(op.f('ix_lead_scores_lead_id'), table_name='lead_scores')
+    op.drop_index(op.f('ix_lead_scores_id'), table_name='lead_scores')
+    op.drop_index(op.f('ix_lead_scores_company_id'), table_name='lead_scores')
+    op.drop_table('lead_scores')
+    op.drop_index(op.f('ix_entity_notes_note_type'), table_name='entity_notes')
+    op.drop_index(op.f('ix_entity_notes_lead_id'), table_name='entity_notes')
+    op.drop_index(op.f('ix_entity_notes_id'), table_name='entity_notes')
+    op.drop_index(op.f('ix_entity_notes_created_by'), table_name='entity_notes')
+    op.drop_index(op.f('ix_entity_notes_contact_id'), table_name='entity_notes')
+    op.drop_index(op.f('ix_entity_notes_company_id'), table_name='entity_notes')
+    op.drop_table('entity_notes')
+    op.drop_index(op.f('ix_campaign_contacts_status'), table_name='campaign_contacts')
+    op.drop_index(op.f('ix_campaign_contacts_lead_id'), table_name='campaign_contacts')
+    op.drop_index(op.f('ix_campaign_contacts_id'), table_name='campaign_contacts')
+    op.drop_index(op.f('ix_campaign_contacts_contact_id'), table_name='campaign_contacts')
+    op.drop_index(op.f('ix_campaign_contacts_campaign_id'), table_name='campaign_contacts')
+    op.drop_table('campaign_contacts')
+    op.drop_index(op.f('ix_campaign_activities_timestamp'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_session_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_message_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_lead_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_external_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_contact_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_campaign_id'), table_name='campaign_activities')
+    op.drop_index(op.f('ix_campaign_activities_activity_type'), table_name='campaign_activities')
+    op.drop_table('campaign_activities')
+    op.drop_index(op.f('ix_notifications_user_id'), table_name='notifications')
+    op.drop_index(op.f('ix_notifications_is_read'), table_name='notifications')
+    op.drop_index(op.f('ix_notifications_id'), table_name='notifications')
+    op.drop_index(op.f('ix_notifications_created_at'), table_name='notifications')
+    op.drop_table('notifications')
+    op.drop_index(op.f('ix_message_reactions_id'), table_name='message_reactions')
+    op.drop_table('message_reactions')
+    op.drop_index(op.f('ix_message_mentions_id'), table_name='message_mentions')
+    op.drop_table('message_mentions')
+    op.drop_index(op.f('ix_leads_stage'), table_name='leads')
+    op.drop_index(op.f('ix_leads_source'), table_name='leads')
+    op.drop_index(op.f('ix_leads_score'), table_name='leads')
+    op.drop_index(op.f('ix_leads_id'), table_name='leads')
+    op.drop_index(op.f('ix_leads_contact_id'), table_name='leads')
+    op.drop_index(op.f('ix_leads_company_id'), table_name='leads')
+    op.drop_index(op.f('ix_leads_campaign_id'), table_name='leads')
+    op.drop_index(op.f('ix_leads_assignee_id'), table_name='leads')
+    op.drop_table('leads')
     op.drop_index(op.f('ix_intent_matches_id'), table_name='intent_matches')
     op.drop_index(op.f('ix_intent_matches_conversation_id'), table_name='intent_matches')
     op.drop_table('intent_matches')
@@ -684,6 +1179,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_chat_messages_issue'), table_name='chat_messages')
     op.drop_index(op.f('ix_chat_messages_id'), table_name='chat_messages')
     op.drop_table('chat_messages')
+    op.drop_index(op.f('ix_chat_attachments_id'), table_name='chat_attachments')
+    op.drop_table('chat_attachments')
+    op.drop_index(op.f('ix_campaign_messages_id'), table_name='campaign_messages')
+    op.drop_index(op.f('ix_campaign_messages_campaign_id'), table_name='campaign_messages')
+    op.drop_table('campaign_messages')
     op.drop_index(op.f('ix_workflow_triggers_id'), table_name='workflow_triggers')
     op.drop_index(op.f('ix_workflow_triggers_channel'), table_name='workflow_triggers')
     op.drop_table('workflow_triggers')
@@ -701,6 +1201,13 @@ def downgrade() -> None:
     op.drop_table('comments')
     op.drop_index(op.f('ix_channel_memberships_id'), table_name='channel_memberships')
     op.drop_table('channel_memberships')
+    op.drop_index(op.f('ix_campaigns_status'), table_name='campaigns')
+    op.drop_index(op.f('ix_campaigns_segment_id'), table_name='campaigns')
+    op.drop_index(op.f('ix_campaigns_name'), table_name='campaigns')
+    op.drop_index(op.f('ix_campaigns_id'), table_name='campaigns')
+    op.drop_index(op.f('ix_campaigns_company_id'), table_name='campaigns')
+    op.drop_index(op.f('ix_campaigns_campaign_type'), table_name='campaigns')
+    op.drop_table('campaigns')
     op.drop_index(op.f('ix_workflows_name'), table_name='workflows')
     op.drop_index(op.f('ix_workflows_id'), table_name='workflows')
     op.drop_table('workflows')
@@ -715,10 +1222,24 @@ def downgrade() -> None:
     op.drop_table('voice_profiles')
     op.drop_index(op.f('ix_user_settings_id'), table_name='user_settings')
     op.drop_table('user_settings')
+    op.drop_index(op.f('ix_templates_template_type'), table_name='templates')
+    op.drop_index(op.f('ix_templates_id'), table_name='templates')
+    op.drop_index(op.f('ix_templates_company_id'), table_name='templates')
+    op.drop_table('templates')
     op.drop_index(op.f('ix_team_memberships_id'), table_name='team_memberships')
     op.drop_table('team_memberships')
+    op.drop_index(op.f('ix_segments_name'), table_name='segments')
+    op.drop_index(op.f('ix_segments_id'), table_name='segments')
+    op.drop_index(op.f('ix_segments_company_id'), table_name='segments')
+    op.drop_table('segments')
     op.drop_index(op.f('ix_optimization_suggestions_id'), table_name='optimization_suggestions')
     op.drop_table('optimization_suggestions')
+    op.drop_index(op.f('ix_message_templates_shortcut'), table_name='message_templates')
+    op.drop_index(op.f('ix_message_templates_scope'), table_name='message_templates')
+    op.drop_index(op.f('ix_message_templates_id'), table_name='message_templates')
+    op.drop_index(op.f('ix_message_templates_created_by_user_id'), table_name='message_templates')
+    op.drop_index(op.f('ix_message_templates_company_id'), table_name='message_templates')
+    op.drop_table('message_templates')
     op.drop_index(op.f('ix_memories_session_id'), table_name='memories')
     op.drop_index(op.f('ix_memories_key'), table_name='memories')
     op.drop_index(op.f('ix_memories_id'), table_name='memories')
@@ -736,6 +1257,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
     op.drop_table('role_permissions')
+    op.drop_table('contact_tags')
     op.drop_index(op.f('ix_ai_tool_questions_id'), table_name='ai_tool_questions')
     op.drop_table('ai_tool_questions')
     op.drop_index(op.f('ix_agents_name'), table_name='agents')
@@ -747,6 +1269,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_teams_name'), table_name='teams')
     op.drop_index(op.f('ix_teams_id'), table_name='teams')
     op.drop_table('teams')
+    op.drop_index(op.f('ix_tags_name'), table_name='tags')
+    op.drop_index(op.f('ix_tags_id'), table_name='tags')
+    op.drop_index(op.f('ix_tags_company_id'), table_name='tags')
+    op.drop_table('tags')
     op.drop_index(op.f('ix_roles_name'), table_name='roles')
     op.drop_index(op.f('ix_roles_id'), table_name='roles')
     op.drop_table('roles')
@@ -768,6 +1294,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_credentials_id'), table_name='credentials')
     op.drop_table('credentials')
     op.drop_index(op.f('ix_contacts_name'), table_name='contacts')
+    op.drop_index(op.f('ix_contacts_lifecycle_stage'), table_name='contacts')
+    op.drop_index(op.f('ix_contacts_lead_source'), table_name='contacts')
     op.drop_index(op.f('ix_contacts_id'), table_name='contacts')
     op.drop_index(op.f('ix_contacts_email'), table_name='contacts')
     op.drop_table('contacts')
