@@ -1129,7 +1129,11 @@ Category:"""
                     response_payload["prompt"] = result["prompt"]
                 if "form" in result:
                     response_payload["form"] = result["form"]
-                
+
+                # Include last response message for TTS in voice mode
+                if response_messages:
+                    response_payload["response"] = response_messages[-1]
+
                 return response_payload
 
             if result and "error" in result:
