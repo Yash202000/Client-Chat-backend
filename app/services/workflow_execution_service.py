@@ -847,8 +847,26 @@ Category:"""
             return {"output": {}, "status": "complete"}
 
         # Check if resuming from pause (user providing missing entity)
-        if "_extracting_entity_name" in context:
-            extracting_entity_name = context.get("_extracting_entity_name")
+        # First, check for stale markers - if variable_to_save doesn't match, we have stale data
+        extracting_entity_name = context.get("_extracting_entity_name")
+        variable_to_save = context.get("variable_to_save", "")
+
+        is_valid_resume = (
+            extracting_entity_name is not None and
+            variable_to_save == extracting_entity_name
+        )
+
+        if extracting_entity_name and not is_valid_resume:
+            print(f"⚠ Extract entities: Stale resume markers detected (variable_to_save='{variable_to_save}' != extracting_entity_name='{extracting_entity_name}'). Starting fresh extraction.")
+            # Clear stale markers and entity values
+            context.pop("_extracting_entity_name", None)
+            context.pop("_missing_entities", None)
+            context.pop("_extraction_attempts", None)
+            for entity_config in entities_config:
+                entity_name = entity_config["name"]
+                context.pop(entity_name, None)
+
+        if is_valid_resume:
             missing_entities = context.get("_missing_entities", [])
             extraction_attempts = context.get("_extraction_attempts", {})
 
@@ -861,9 +879,11 @@ Category:"""
 
             print(f"✓ Extract entities: Resuming, user provided value for '{extracting_entity_name}'")
 
-            # The standard resume logic saved user input to context[extracting_entity_name]
-            # Now we need to extract the actual value from the user's response using LLM
-            user_provided_text = context.get(extracting_entity_name, "")
+            # Get the user's response - try extracting_entity_name first, then fall back to user_message
+            user_provided_text = context.get(extracting_entity_name, "") or context.get("user_message", "")
+
+            is_valid = False
+            validation_error = None
 
             if user_provided_text:
                 # Find the entity config for this entity
@@ -900,9 +920,6 @@ Extracted value:"""
                             extracted_value = str(llm_response).strip() if llm_response else user_provided_text
 
                         # Validate extracted value based on entity type
-                        is_valid = False
-                        validation_error = None
-
                         if extracted_value and extracted_value.lower() not in ['null', 'none', 'n/a']:
                             # Type-based validation
                             if entity_type == "number":
@@ -946,8 +963,6 @@ Extracted value:"""
                         else:
                             # Validation failed - don't save, keep in missing list
                             print(f"✗ Validation failed for {extracting_entity_name}: {validation_error}")
-                            # Don't remove from missing list - will ask again
-                            is_valid = False
 
                     except Exception as e:
                         print(f"✗ LLM extraction failed for {extracting_entity_name}: {e}, using raw input")
@@ -958,7 +973,7 @@ Extracted value:"""
                     context[extracting_entity_name] = user_provided_text
                     is_valid = True
             else:
-                print(f"⚠ Warning: Expected '{extracting_entity_name}' in context but not found, using empty value")
+                print(f"⚠ Warning: No user input found for '{extracting_entity_name}', using empty value")
                 context[extracting_entity_name] = ""
                 is_valid = True
 
