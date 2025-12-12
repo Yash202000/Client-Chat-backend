@@ -70,50 +70,25 @@ def export_workflow(workflow_id: int, db: Session = Depends(get_db), current_use
     Export a workflow as a downloadable JSON file.
     Includes workflow configuration and lists required tools for validation on import.
     """
-    workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
-    if workflow is None:
+    workflow_data = workflow_service.export_workflow(db, workflow_id, current_user.company_id)
+    if workflow_data is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
-
-    # Parse visual_steps if it's a string
-    visual_steps = workflow.visual_steps
-    if isinstance(visual_steps, str):
-        try:
-            visual_steps = json.loads(visual_steps)
-        except json.JSONDecodeError:
-            visual_steps = {"nodes": [], "edges": []}
-
-    # Extract tool names from nodes for import validation
-    tool_names = []
-    if visual_steps:
-        for node in visual_steps.get("nodes", []):
-            if node.get("type") == "tool":
-                tool_name = node.get("data", {}).get("tool_name") or node.get("data", {}).get("tool")
-                if tool_name:
-                    tool_names.append(tool_name)
-
-    # Parse intent_config if it's a string
-    intent_config = workflow.intent_config
-    if isinstance(intent_config, str):
-        try:
-            intent_config = json.loads(intent_config)
-        except json.JSONDecodeError:
-            intent_config = None
 
     export_data = {
         "export_version": "1.0",
         "exported_at": datetime.utcnow().isoformat(),
         "workflow": {
-            "name": workflow.name,
-            "description": workflow.description,
-            "trigger_phrases": workflow.trigger_phrases or [],
-            "visual_steps": visual_steps,
-            "intent_config": intent_config
+            "name": workflow_data["name"],
+            "description": workflow_data["description"],
+            "trigger_phrases": workflow_data["trigger_phrases"],
+            "visual_steps": workflow_data["visual_steps"],
+            "intent_config": workflow_data["intent_config"]
         },
-        "required_tools": list(set(tool_names))
+        "required_tools": workflow_data["required_tools"]
     }
 
     # Create safe filename
-    safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in workflow.name)
+    safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in workflow_data["name"])
 
     return Response(
         content=json.dumps(export_data, indent=2),
@@ -131,44 +106,23 @@ def import_workflow(
     Import a workflow from an exported JSON file.
     Validates that required tools exist in the company before creating the workflow.
     """
-    data = request.workflow_data
-
-    # Validate export version
-    export_version = data.get("export_version")
-    if export_version != "1.0":
-        raise HTTPException(status_code=400, detail=f"Unsupported export version: {export_version}. Expected 1.0")
-
-    workflow_data = data.get("workflow", {})
-    required_tools = data.get("required_tools", [])
-
-    # Validate required tools exist in company (skip builtin tools)
-    missing_tools = []
-    for tool_name in required_tools:
-        # Check if it's a builtin tool (they don't have company_id)
-        tool = tool_service.get_tool_by_name(db, tool_name, current_user.company_id)
-        if not tool:
-            # Also check for builtin tools (company_id is None)
-            builtin_tool = tool_service.get_tool_by_name(db, tool_name, None)
-            if not builtin_tool:
-                missing_tools.append(tool_name)
-
-    if missing_tools:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Missing required tools in your company: {', '.join(missing_tools)}. Please create these tools first."
-        )
-
-    # Create workflow with imported data
-    new_workflow = schemas_workflow.WorkflowCreate(
-        name=f"{workflow_data.get('name', 'Imported Workflow')} (Imported)",
-        description=workflow_data.get("description"),
+    result = workflow_service.import_workflow(
+        db=db,
+        import_data=request.workflow_data,
         agent_id=request.agent_id,
-        trigger_phrases=workflow_data.get("trigger_phrases", []),
-        visual_steps=workflow_data.get("visual_steps"),
-        intent_config=workflow_data.get("intent_config")
+        company_id=current_user.company_id
     )
 
-    return workflow_service.create_workflow(db=db, workflow=new_workflow, company_id=current_user.company_id)
+    if "error" in result:
+        if result["error"] == "missing_tools":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required tools in your company: {', '.join(result['missing_tools'])}. Please create these tools first."
+            )
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    return result["workflow"]
 
 # --- Versioning Endpoints ---
 
