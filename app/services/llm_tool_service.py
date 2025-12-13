@@ -12,11 +12,14 @@ class LLMToolService:
     def __init__(self, db: Session):
         self.db = db
 
-    async def execute(self, model: str, system_prompt: str, chat_history: list, user_prompt: str, tools: list, knowledge_base_id: int = None, company_id: int = None):
+    async def execute(self, model: str, system_prompt: str, chat_history: list, user_prompt: str, tools: list, knowledge_base_id: int = None, company_id: int = None, attachments: list = None):
         """
         This is the core logic for handling LLM interactions. It builds the prompt,
         formats tools, and manages a validation/retry loop to ensure the LLM
         behaves correctly.
+
+        Args:
+            attachments: List of attachment dicts with file_name, file_type, file_size, file_data (base64)
         """
         # 1. --- Construct the master System Prompt ---
         final_system_prompt = (
@@ -40,8 +43,26 @@ class LLMToolService:
                 context = "\n\nContext:\n" + "\n".join(relevant_chunks)
                 augmented_prompt = f"{user_prompt}{context}"
                 print(f"DEBUG: Augmented prompt with KB context.")
-        
-        full_chat_history = chat_history + [{"role": "user", "content": augmented_prompt}]
+
+        # Build user message content - support image attachments for vision models
+        if attachments:
+            # Build multimodal content array for vision models
+            content = [{"type": "text", "text": augmented_prompt}]
+            for attachment in attachments:
+                file_type = attachment.get('file_type', '')
+                if file_type.startswith('image/'):
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{file_type};base64,{attachment['file_data']}"
+                        }
+                    })
+                    print(f"DEBUG: Added image attachment to LLM request: {attachment.get('file_name')}")
+            user_message = {"role": "user", "content": content}
+        else:
+            user_message = {"role": "user", "content": augmented_prompt}
+
+        full_chat_history = chat_history + [user_message]
 
         # 3. --- Format all tools for the LLM Provider ---
         formatted_tools = []

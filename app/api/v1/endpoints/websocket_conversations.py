@@ -499,6 +499,17 @@ async def websocket_endpoint(
             try:
                 message_data = json.loads(data)
 
+                # Log raw incoming message (excluding large file_data)
+                log_data = {k: v for k, v in message_data.items() if k != 'attachments'}
+                if 'attachments' in message_data and message_data['attachments']:
+                    log_data['attachments'] = [
+                        {k: v for k, v in att.items() if k != 'file_data'}
+                        for att in message_data['attachments']
+                    ]
+                    log_data['attachments_count'] = len(message_data['attachments'])
+                    log_data['has_file_data'] = any('file_data' in att for att in message_data['attachments'])
+                print(f"[websocket_conversations] 📥 RAW MESSAGE RECEIVED: {log_data}")
+
                 # Handle ping/pong messages
                 if message_data.get('type') == 'pong':
                     continue  # Just an acknowledgment, no further processing
@@ -527,13 +538,41 @@ async def websocket_endpoint(
 
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
+                attachments = message_data.get('attachments', [])  # Get attachments from message
+
+                # Log attachment info
+                if attachments:
+                    print(f"[websocket_conversations] 📎 Received {len(attachments)} attachment(s) from session #{session_id}")
+                    for i, att in enumerate(attachments):
+                        if att.get('location'):
+                            loc = att['location']
+                            print(f"[websocket_conversations]   - Attachment {i+1}: 📍 Location ({loc.get('latitude')}, {loc.get('longitude')})")
+                        else:
+                            print(f"[websocket_conversations]   - Attachment {i+1}: {att.get('file_name')} ({att.get('file_type')}, {att.get('file_size')} bytes)")
+                else:
+                    print(f"[websocket_conversations] No attachments in message from session #{session_id}")
+
             except (json.JSONDecodeError, AttributeError):
                 print(f"[websocket_conversations] Received invalid data from session #{session_id}: {data}")
                 continue
 
-            if not user_message or not sender:
-                print(f"[websocket_conversations] Missing user_message or sender: user_message={user_message}, sender={sender}")
+            # Allow messages with attachments even if text is empty
+            if (not user_message and not attachments) or not sender:
+                print(f"[websocket_conversations] Missing user_message/attachments or sender: user_message={user_message}, attachments={len(attachments)}, sender={sender}")
                 continue
+
+            # If only attachments (no text), set a placeholder message
+            if not user_message and attachments:
+                # Check if it's a location attachment
+                has_location = any(att.get('location') for att in attachments)
+                has_image = any(att.get('file_data') for att in attachments)
+                if has_location and has_image:
+                    user_message = "[Image and location attached]"
+                elif has_location:
+                    user_message = "[Location attached]"
+                else:
+                    user_message = "[Image attached]"
+                print(f"[websocket_conversations] 📎 Attachment-only message, using placeholder: {user_message}")
 
             # Create a temporary DB session for this message handling
             with get_db_session() as db:
@@ -711,11 +750,13 @@ async def websocket_endpoint(
                             continue
 
                         # 3. Execute the matched workflow with the current state (conversation_id)
+                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s)")
                         execution_result = await workflow_exec_service.execute_workflow(
                             user_message=user_message,
                             conversation_id=session_id,
                             company_id=company_id,
-                            workflow=workflow
+                            workflow=workflow,
+                            attachments=attachments
                         )
                     finally:
                         # Turn off typing indicator after workflow/AI processing completes
@@ -835,9 +876,25 @@ async def public_websocket_endpoint(
                 continue
             user_message = message_data.get('message')
             sender = message_data.get('sender')
+            attachments = message_data.get('attachments', [])  # Get attachments from message
 
-            if not user_message or not sender:
+            # Log attachment info
+            if attachments:
+                print(f"[websocket_conversations] 📎 PUBLIC: Received {len(attachments)} attachment(s) from session #{session_id}")
+                for i, att in enumerate(attachments):
+                    print(f"[websocket_conversations]   - Attachment {i+1}: {att.get('file_name')} ({att.get('file_type')}, {att.get('file_size')} bytes)")
+            else:
+                print(f"[websocket_conversations] PUBLIC: No attachments in message from session #{session_id}")
+
+            # Allow messages with attachments even if text is empty
+            if (not user_message and not attachments) or not sender:
+                print(f"[websocket_conversations] PUBLIC: Missing user_message/attachments or sender")
                 continue
+
+            # If only attachments (no text), set a placeholder message
+            if not user_message and attachments:
+                user_message = "[Image attached]"
+                print(f"[websocket_conversations] 📎 PUBLIC: Image-only message, using placeholder text")
 
             # Use temporary DB session for each message
             with get_db_session() as db:
@@ -997,8 +1054,9 @@ async def public_websocket_endpoint(
                             # A workflow is already in progress, so we resume it.
                             workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                             if workflow:
+                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s)")
                                  execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
@@ -1026,8 +1084,9 @@ async def public_websocket_endpoint(
                                 workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
 
                             if workflow:
+                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s)")
                                 execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
                                 )
 
                         # If no workflow was found or resumed, fallback to the default agent response

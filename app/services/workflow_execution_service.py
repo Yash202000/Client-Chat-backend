@@ -459,6 +459,20 @@ class WorkflowExecutionService:
         # 3. Get the tools associated with the agent
         agent_tools = workflow.agent.tools if workflow.agent else []
 
+        # 4. Get attachments from context (for vision model support)
+        # First check user_attachments (set during workflow execution)
+        attachments = context.get("user_attachments", [])
+
+        # Also check if any context variable contains attachments (from Listen node)
+        # This handles cases where Listen node saved {text, attachments} format
+        if not attachments:
+            for key, value in context.items():
+                if isinstance(value, dict) and "attachments" in value:
+                    attachments = value.get("attachments", [])
+                    if attachments:
+                        print(f"DEBUG: Found attachments in context variable '{key}'")
+                        break
+
         llm_response = await self.llm_tool_service.execute(
             model=node_data.get("model"),
             system_prompt=system_prompt,
@@ -466,7 +480,8 @@ class WorkflowExecutionService:
             user_prompt=resolved_prompt,
             tools=agent_tools,
             knowledge_base_id=node_data.get("knowledge_base_id"),
-            company_id=company_id
+            company_id=company_id,
+            attachments=attachments
         )
 
         # Extract the content from the LLM response
@@ -1239,7 +1254,7 @@ Return only valid JSON, nothing else:"""
             "re_execute_node": True  # Re-execute this node to continue collection
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None):
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -1339,6 +1354,8 @@ Return only valid JSON, nothing else:"""
         if session.next_step_id:
             current_node_id = session.next_step_id
             print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
+            # Add attachments to context when resuming
+            context["user_attachments"] = attachments or []
             # The variable to save was stored in the context before pausing.
             variable_to_save = context.get("variable_to_save")
             print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
@@ -1348,8 +1365,16 @@ Return only valid JSON, nothing else:"""
                     form_data = json.loads(user_message)
                     context[variable_to_save] = form_data
                 except (json.JSONDecodeError, TypeError):
-                     # It's a plain text response (e.g., from a prompt)
-                    context[variable_to_save] = user_message
+                    # It's a plain text response (e.g., from a prompt)
+                    # If there are attachments, save them along with the message
+                    if attachments:
+                        context[variable_to_save] = {
+                            "text": user_message,
+                            "attachments": attachments
+                        }
+                        print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
+                    else:
+                        context[variable_to_save] = user_message
                 print(f"DEBUG: Context after updating with user message: {context}")
                 # Save the updated context back to memory
                 memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
@@ -1357,6 +1382,7 @@ Return only valid JSON, nothing else:"""
             current_node_id = graph_engine.find_start_node()
             # For the very first message in a workflow
             context["initial_user_message"] = user_message
+            context["user_attachments"] = attachments or []
             memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
         last_executed_node_id = None
@@ -1593,6 +1619,10 @@ Return only valid JSON, nothing else:"""
         self.db.commit()
         self.db.refresh(session)
         print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
+
+        # Clear all memory for this session so next workflow starts fresh
+        memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
+        print(f"DEBUG: Cleared all memory for session {conversation_id}")
 
         # Return only the last response message (intermediate ones were already broadcasted)
         if response_messages:

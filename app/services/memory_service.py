@@ -36,3 +36,15 @@ def get_all_memories(db: Session, agent_id: int, session_id: str):
         models_memory.Memory.agent_id == agent_id,
         models_memory.Memory.session_id == session_id
     ).all()
+
+def delete_all_memories(db: Session, agent_id: int, session_id: str):
+    """
+    Deletes all memory entries for a given agent and session.
+    Used when a workflow completes to start fresh on next execution.
+    """
+    deleted_count = db.query(models_memory.Memory).filter(
+        models_memory.Memory.agent_id == agent_id,
+        models_memory.Memory.session_id == session_id
+    ).delete()
+    db.commit()
+    return deleted_count
