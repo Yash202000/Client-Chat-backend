@@ -1430,8 +1430,43 @@ Return only valid JSON, nothing else:"""
 
             elif node_type == "prompt":
                 params = node_data.get("params", {})
-                options_str = params.get("options", "")
-                options_list = [opt.strip() for opt in options_str.split(',')] if options_str else []
+                options_mode = params.get("options_mode", "manual")
+                options_list = []
+
+                if options_mode == "variable":
+                    # Resolve variable reference
+                    options_variable = params.get("options_variable", "")
+                    if options_variable:
+                        resolved_options = self._resolve_placeholders(options_variable, context, results)
+                        # If resolved value is a string (JSON), parse it
+                        if isinstance(resolved_options, str):
+                            try:
+                                resolved_options = json.loads(resolved_options)
+                            except json.JSONDecodeError:
+                                resolved_options = []
+                        # Ensure it's a list of key-value dicts
+                        if isinstance(resolved_options, list):
+                            options_list = [
+                                opt if isinstance(opt, dict) and 'key' in opt and 'value' in opt
+                                else {"key": str(opt), "value": str(opt)}
+                                for opt in resolved_options
+                            ]
+                else:
+                    # Manual mode: use options array directly
+                    options = params.get("options", [])
+                    if isinstance(options, str):
+                        # Backward compatibility: comma-separated string
+                        options_list = [
+                            {"key": opt.strip(), "value": opt.strip()}
+                            for opt in options.split(',') if opt.strip()
+                        ]
+                    elif isinstance(options, list):
+                        options_list = [
+                            opt if isinstance(opt, dict) and 'key' in opt and 'value' in opt
+                            else {"key": str(opt), "value": str(opt)}
+                            for opt in options
+                        ]
+
                 result = {
                     "status": "paused_for_prompt",
                     "prompt": {
