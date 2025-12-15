@@ -1,6 +1,6 @@
 import httpx
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 
 from app.models.integration import Integration
 from app.services import integration_service
@@ -56,11 +56,12 @@ async def send_whatsapp_message(
 async def send_whatsapp_interactive_message(
     recipient_phone_number: str,
     message_text: str,
-    options: List[str],
+    options: List[Union[str, Dict[str, str]]],
     integration: Integration
 ) -> Dict[str, Any]:
     """
     Sends an interactive message with buttons to a WhatsApp user.
+    Supports both string options (legacy) and key-value dict options (new).
     """
     credentials = integration_service.get_decrypted_credentials(integration)
     api_token = credentials.get("api_token") or credentials.get("access_token")
@@ -70,7 +71,7 @@ async def send_whatsapp_interactive_message(
         raise ValueError("WhatsApp credentials (api_token, phone_number_id) are not configured for this integration.")
 
     url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{phone_number_id}/messages"
-    
+
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
@@ -79,11 +80,20 @@ async def send_whatsapp_interactive_message(
     # WhatsApp allows up to 3 buttons, and each title has a 20-character limit.
     buttons = []
     for i, option in enumerate(options[:3]):
+        if isinstance(option, dict):
+            # New key-value format
+            button_id = option.get("key", f"option_{i+1}")
+            button_title = option.get("value", "")[:20]
+        else:
+            # Legacy string format
+            button_id = f"option_{i+1}"
+            button_title = str(option)[:20]
+
         buttons.append({
             "type": "reply",
             "reply": {
-                "id": f"option_{i+1}",
-                "title": option[:20]  # Truncate title to 20 chars
+                "id": button_id,  # Use key as ID for proper response handling
+                "title": button_title
             }
         })
 
