@@ -159,6 +159,104 @@ def delete_workflow(db: Session, workflow_id: int, company_id: int):
         return True
     return False
 
+def _parse_json_field(value, default):
+    """Helper to parse potentially double-encoded JSON fields."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            # Check if still a string (double-encoded)
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+            return parsed
+        except json.JSONDecodeError:
+            return default
+    return value  # Already a dict
+
+def export_workflow(db: Session, workflow_id: int, company_id: int) -> dict:
+    """
+    Export a workflow as a dictionary suitable for JSON export.
+    Handles double-encoded JSON fields from storage.
+    """
+    workflow = get_workflow(db, workflow_id, company_id)
+    if not workflow:
+        return None
+
+    # Debug: Log what we're actually exporting
+    print(f"DEBUG export: id={workflow_id}, name={workflow.name}, visual_steps is {'None' if workflow.visual_steps is None else 'present'}")
+    if workflow.visual_steps:
+        print(f"DEBUG export: visual_steps type={type(workflow.visual_steps)}, len={len(str(workflow.visual_steps))}")
+
+    # If this is a parent workflow with no visual_steps, try to use the active version instead
+    if workflow.visual_steps is None and workflow.versions:
+        active_version = next((v for v in workflow.versions if v.is_active), None)
+        if active_version and active_version.visual_steps:
+            print(f"DEBUG export: Using active version {active_version.id} instead of parent {workflow_id}")
+            workflow = active_version
+
+    visual_steps = _parse_json_field(workflow.visual_steps, {"nodes": [], "edges": []})
+    intent_config = _parse_json_field(workflow.intent_config, {})
+
+    # Extract tool names from nodes
+    tool_names = []
+    for node in visual_steps.get("nodes", []):
+        if node.get("type") == "tool":
+            tool_name = node.get("data", {}).get("tool_name") or node.get("data", {}).get("tool")
+            if tool_name:
+                tool_names.append(tool_name)
+
+    return {
+        "name": workflow.name,
+        "description": workflow.description,
+        "trigger_phrases": workflow.trigger_phrases or [],
+        "visual_steps": visual_steps,
+        "intent_config": intent_config,
+        "required_tools": list(set(tool_names))
+    }
+
+def import_workflow(db: Session, import_data: dict, agent_id: int, company_id: int) -> dict:
+    """
+    Import a workflow from exported JSON data.
+    Returns dict with 'workflow' on success or 'error' and 'missing_tools' on failure.
+    """
+    from app.services import tool_service
+
+    # Validate export version
+    export_version = import_data.get("export_version")
+    if export_version != "1.0":
+        return {"error": f"Unsupported export version: {export_version}. Expected 1.0"}
+
+    workflow_data = import_data.get("workflow", {})
+    required_tools = import_data.get("required_tools", [])
+
+    # Validate required tools exist in company (skip builtin tools)
+    missing_tools = []
+    for tool_name in required_tools:
+        # Check if it's a company tool
+        tool = tool_service.get_tool_by_name(db, tool_name, company_id)
+        if not tool:
+            # Also check for builtin tools (company_id is None)
+            builtin_tool = tool_service.get_tool_by_name(db, tool_name, None)
+            if not builtin_tool:
+                missing_tools.append(tool_name)
+
+    if missing_tools:
+        return {"error": "missing_tools", "missing_tools": missing_tools}
+
+    # Create workflow with imported data
+    new_workflow = schemas_workflow.WorkflowCreate(
+        name=f"{workflow_data.get('name', 'Imported Workflow')} (Imported)",
+        description=workflow_data.get("description"),
+        agent_id=agent_id,
+        trigger_phrases=workflow_data.get("trigger_phrases", []),
+        visual_steps=workflow_data.get("visual_steps"),
+        intent_config=workflow_data.get("intent_config")
+    )
+
+    created_workflow = create_workflow(db=db, workflow=new_workflow, company_id=company_id)
+    return {"workflow": created_workflow}
+
 def find_similar_workflow(db: Session, company_id: int, query: str):
     """
     Finds the most similar ACTIVE workflow.
