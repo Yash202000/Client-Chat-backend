@@ -10,19 +10,19 @@ class ConnectionManager:
         # Track last activity timestamp for each websocket: {session_id: {websocket_id: timestamp}}
         self.last_activity: Dict[str, Dict[int, float]] = {}
 
-    async def connect(self, websocket: WebSocket, session_id: str, user_type: str):
+    async def connect(self, websocket: WebSocket, session_id: str, user_type: str, connection_type: str = "chat"):
         await websocket.accept()
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
             self.last_activity[session_id] = {}
 
-        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type})
+        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type, "connection_type": connection_type})
 
         # Initialize activity timestamp
         ws_id = id(websocket)
         self.last_activity[session_id][ws_id] = time.time()
 
-        print(f"Connected: {user_type} to session {session_id}. Total connections for session: {len(self.active_connections[session_id])}")
+        print(f"Connected: {user_type} ({connection_type}) to session {session_id}. Total connections for session: {len(self.active_connections[session_id])}")
 
     def disconnect(self, websocket: WebSocket, session_id: str):
         print(f"[disconnect] Attempting to disconnect from channel '{session_id}'")
@@ -115,6 +115,39 @@ class ConnectionManager:
                 print(f"[broadcast] 🗑️ Removed empty channel '{channel_id}'")
         else:
             print(f"[broadcast] ❌ No connections found for channel '{channel_id}'")
+
+    async def broadcast_bytes_to_session(self, session_id: str, data: bytes):
+        """
+        Broadcast binary data (audio) to voice connections only for a session.
+        Used for sending TTS audio to voice WebSocket connections.
+
+        Args:
+            session_id: The session ID to broadcast to
+            data: Binary data (audio bytes) to send
+        """
+        if session_id in self.active_connections:
+            # Filter for voice connections only
+            voice_connections = [c for c in self.active_connections[session_id] if c.get("connection_type") == "voice"]
+            print(f"[broadcast_bytes_to_session] Sending audio to {len(voice_connections)} voice connections in session {session_id}")
+
+            failed_connections = []
+
+            for connection in voice_connections:
+                try:
+                    await connection["websocket"].send_bytes(data)
+                except Exception as e:
+                    print(f"[broadcast_bytes_to_session] Error sending audio to websocket: {e}")
+                    failed_connections.append(connection)
+
+            # Clean up dead connections after iteration
+            for failed_conn in failed_connections:
+                try:
+                    self.active_connections[session_id].remove(failed_conn)
+                    print(f"[broadcast_bytes_to_session] Removed dead voice connection from session {session_id}")
+                except ValueError:
+                    pass
+        else:
+            print(f"[broadcast_bytes_to_session] No active connections for session {session_id}")
 
     async def broadcast_to_company(self, company_id: int, message: str):
         """

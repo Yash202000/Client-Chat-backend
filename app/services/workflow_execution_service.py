@@ -1531,6 +1531,36 @@ Return only valid JSON, nothing else:"""
                             "agent"
                         )
 
+                        # Generate TTS for chat_and_voice mode (intermediate response)
+                        try:
+                            from app.services import widget_settings_service, credential_service
+                            from app.services.tts_service import TTSService
+                            widget_settings = widget_settings_service.get_widget_settings(self.db, workflow_obj.agent.id)
+                            if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
+                                tts_provider = workflow_obj.agent.tts_provider or 'voice_engine'
+                                voice_id = workflow_obj.agent.voice_id or 'default'
+                                openai_api_key = None
+                                openai_credential = credential_service.get_credential_by_service_name(self.db, 'openai', workflow_obj.agent.company_id)
+                                if openai_credential:
+                                    try:
+                                        openai_api_key = credential_service.get_decrypted_credential(self.db, openai_credential.id, workflow_obj.agent.company_id)
+                                    except Exception:
+                                        pass
+                                tts_service = TTSService(openai_api_key=openai_api_key)
+                                audio_stream = tts_service.text_to_speech_stream(resolved_output, voice_id, tts_provider)
+                                async for audio_chunk in audio_stream:
+                                    await ws_manager.broadcast_bytes_to_session(str(conversation_id), audio_chunk)
+                                await tts_service.close()
+                                # Send audio_end marker so frontend knows this TTS is complete
+                                await ws_manager.broadcast_to_session(
+                                    str(conversation_id),
+                                    json.dumps({"type": "audio_end"}),
+                                    "agent"
+                                )
+                                print(f"[workflow_execution] TTS audio sent for intermediate response in session: {conversation_id}")
+                        except Exception as tts_error:
+                            print(f"[workflow_execution] TTS error for intermediate response: {tts_error}")
+
             # ============================================================
             # NEW CHAT-SPECIFIC NODES
             # ============================================================
