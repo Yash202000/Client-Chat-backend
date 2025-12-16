@@ -200,6 +200,18 @@ async def request_handoff(
             await manager.broadcast_to_company(session.company_id, json.dumps(call_notification))
             logger.info(f"Broadcasted call notification to company {session.company_id} for agent {available_agent.id}")
 
+            # Create database notification entry for the agent
+            from app.crud import crud_notification
+            crud_notification.create_handoff_call_notification(
+                db=db,
+                agent_user_id=available_agent.id,
+                session_id=session_id,
+                customer_name=customer_name,
+                reason=reason,
+                priority=priority
+            )
+            logger.info(f"Created handoff call notification for agent {available_agent.id}")
+
             return {
                 "status": "call_initiated",
                 "agent_id": available_agent.id,
@@ -212,7 +224,17 @@ async def request_handoff(
             }
         except Exception as e:
             logger.error(f"Failed to create LiveKit room: {e}")
-            # Fall back to text-based handoff
+            # Fall back to text-based handoff - still create notification
+            from app.crud import crud_notification
+            crud_notification.create_handoff_call_notification(
+                db=db,
+                agent_user_id=available_agent.id,
+                session_id=session_id,
+                customer_name=customer_name,
+                reason=reason,
+                priority=priority
+            )
+            logger.info(f"Created handoff notification for agent {available_agent.id} (text-based fallback)")
             return {
                 "status": "agent_found",
                 "agent_id": available_agent.id,
