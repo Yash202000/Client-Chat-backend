@@ -702,9 +702,8 @@ class WorkflowExecutionService:
         try:
             session = conversation_session_service.get_session(self.db, conversation_id)
             if session:
-                # Disable AI for manual handling
+                # Update status for agent assignment (AI stays enabled - can be toggled manually)
                 session_update = ConversationSessionUpdate(
-                    is_ai_enabled=False,
                     status='pending_agent_assignment'
                 )
                 conversation_session_service.update_session(self.db, conversation_id, session_update)

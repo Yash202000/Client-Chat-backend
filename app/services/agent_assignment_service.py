@@ -85,10 +85,9 @@ async def assign_session_to_agent(
     """
     logger.info(f"Assigning session {session_id} to agent {agent_user_id}")
 
-    # Update the session
+    # Update the session (AI stays enabled - can be toggled manually by agent)
     session_update = ConversationSessionUpdate(
         assignee_id=agent_user_id,
-        is_ai_enabled=False,  # Disable AI when human takes over
         status='assigned',
         waiting_for_agent=False,
         handoff_accepted_at=datetime.utcnow(),
@@ -151,14 +150,13 @@ async def request_handoff(
         logger.error(f"Session {session_id} not found")
         return {"status": "error", "message": "Session not found"}
 
-    # Update session with handoff request
+    # Update session with handoff request (AI stays enabled - can be toggled manually)
     session_update = ConversationSessionUpdate(
         handoff_requested_at=datetime.utcnow(),
         handoff_reason=reason,
         assigned_pool=team_name,  # Store team name
         waiting_for_agent=True,
-        status='pending_agent_assignment',
-        is_ai_enabled=False  # Stop AI responses during handoff
+        status='pending_agent_assignment'
     )
 
     updated_session = conversation_session_service.update_session(db, session_id, session_update)
