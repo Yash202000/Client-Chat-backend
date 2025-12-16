@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.services import chat_service, widget_settings_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service
+from app.services import chat_service, widget_settings_service, workflow_service, agent_execution_service, messaging_service, integration_service, company_service, agent_service, contact_service, conversation_session_service, user_service, workflow_trigger_service, credential_service
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message, websocket as schemas_websocket
 from app.schemas.websockets import WebSocketMessage
@@ -1118,6 +1118,33 @@ async def public_websocket_endpoint(
                                     })
 
                                 await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
+
+                                # Generate TTS for chat_and_voice mode
+                                if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
+                                    try:
+                                        # Get agent's voice settings
+                                        tts_provider = agent.tts_provider or 'voice_engine'
+                                        voice_id = agent.voice_id or 'default'
+
+                                        # Get OpenAI API key if needed
+                                        openai_api_key = None
+                                        openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+                                        if openai_credential:
+                                            try:
+                                                openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
+                                            except Exception as e:
+                                                print(f"[TTS] Failed to get OpenAI key: {e}")
+
+                                        tts_service = TTSService(openai_api_key=openai_api_key)
+                                        audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
+                                        async for audio_chunk in audio_stream:
+                                            await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
+                                        await tts_service.close()
+                                        # Send audio_end marker
+                                        await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                        print(f"[websocket_conversations] TTS audio sent for chat_and_voice mode in session: {session_id}")
+                                    except Exception as tts_error:
+                                        print(f"[websocket_conversations] TTS error in chat_and_voice mode: {tts_error}")
                     finally:
                         # Turn off typing indicator after AI processing completes
                         if typing_indicator_sent:
@@ -1138,25 +1165,119 @@ async def public_websocket_endpoint(
                         db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                         await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
+                        # Generate TTS for chat_and_voice mode (workflow completed)
+                        if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
+                            try:
+                                tts_provider = agent.tts_provider or 'voice_engine'
+                                voice_id = agent.voice_id or 'default'
+                                openai_api_key = None
+                                openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+                                if openai_credential:
+                                    try:
+                                        openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
+                                    except Exception:
+                                        pass
+                                tts_service = TTSService(openai_api_key=openai_api_key)
+                                audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
+                                async for audio_chunk in audio_stream:
+                                    await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
+                                await tts_service.close()
+                                # Send audio_end marker
+                                await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                print(f"[websocket_conversations] TTS audio sent for workflow completion in session: {session_id}")
+                            except Exception as tts_error:
+                                print(f"[websocket_conversations] TTS error: {tts_error}")
+
                     elif execution_result.get("status") == "paused_for_prompt":
                         prompt_data = execution_result.get("prompt", {})
+                        prompt_text = prompt_data.get("text", "")
+                        options = prompt_data.get("options", [])
                         prompt_message = {
-                            "message": prompt_data.get("text"),
+                            "message": prompt_text,
                             "message_type": "prompt",
-                            "options": prompt_data.get("options", []),
+                            "options": options,
                             "sender": "agent",
                         }
                         await manager.broadcast_to_session(str(session_id), json.dumps(prompt_message), "agent")
 
+                        # Generate TTS for chat_and_voice mode (prompt)
+                        if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and prompt_text:
+                            try:
+                                tts_provider = agent.tts_provider or 'voice_engine'
+                                voice_id = agent.voice_id or 'default'
+                                # Format prompt with options for voice
+                                tts_text = prompt_text
+                                if options:
+                                    # Handle options as list of dicts, list of strings, or comma-separated string
+                                    if isinstance(options, str):
+                                        option_names = [o.strip() for o in options.split(',')]
+                                    elif isinstance(options, list) and options:
+                                        if isinstance(options[0], dict):
+                                            option_names = [o.get('label', o.get('value', str(o))) for o in options]
+                                        else:
+                                            option_names = [str(o) for o in options]
+                                    else:
+                                        option_names = []
+                                    if option_names:
+                                        tts_text += " Your options are: " + ", ".join(option_names)
+                                openai_api_key = None
+                                openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+                                if openai_credential:
+                                    try:
+                                        openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
+                                    except Exception:
+                                        pass
+                                tts_service = TTSService(openai_api_key=openai_api_key)
+                                audio_stream = tts_service.text_to_speech_stream(tts_text, voice_id, tts_provider)
+                                async for audio_chunk in audio_stream:
+                                    await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
+                                await tts_service.close()
+                                # Send audio_end marker
+                                await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                print(f"[websocket_conversations] TTS audio sent for prompt in session: {session_id}")
+                            except Exception as tts_error:
+                                print(f"[websocket_conversations] TTS error: {tts_error}")
+
                     elif execution_result.get("status") == "paused_for_form":
                         form_data = execution_result.get("form", {})
+                        form_title = form_data.get("title", "")
+                        form_fields = form_data.get("fields", [])
                         form_message = {
-                            "message": form_data.get("title"),
+                            "message": form_title,
                             "message_type": "form",
-                            "fields": form_data.get("fields", []),
+                            "fields": form_fields,
                             "sender": "agent",
                         }
                         await manager.broadcast_to_session(str(session_id), json.dumps(form_message), "agent")
+
+                        # Generate TTS for chat_and_voice mode (form)
+                        if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and form_title:
+                            try:
+                                tts_provider = agent.tts_provider or 'voice_engine'
+                                voice_id = agent.voice_id or 'default'
+                                # Format form info for voice
+                                tts_text = form_title
+                                if form_fields:
+                                    field_names = [f.get("label", f.get("name", "")) for f in form_fields if f.get("label") or f.get("name")]
+                                    if field_names:
+                                        tts_text += " Please provide: " + ", ".join(field_names)
+                                openai_api_key = None
+                                openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+                                if openai_credential:
+                                    try:
+                                        openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
+                                    except Exception:
+                                        pass
+                                tts_service = TTSService(openai_api_key=openai_api_key)
+                                audio_stream = tts_service.text_to_speech_stream(tts_text, voice_id, tts_provider)
+                                async for audio_chunk in audio_stream:
+                                    await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
+                                await tts_service.close()
+                                # Send audio_end marker
+                                await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                print(f"[websocket_conversations] TTS audio sent for form in session: {session_id}")
+                            except Exception as tts_error:
+                                print(f"[websocket_conversations] TTS error: {tts_error}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)

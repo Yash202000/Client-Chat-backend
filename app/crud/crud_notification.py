@@ -226,3 +226,27 @@ def create_missed_call_notification(
         related_channel_id=channel_id,
         actor_id=caller_id
     )
+
+
+def create_handoff_call_notification(
+    db: Session,
+    agent_user_id: int,
+    session_id: str,
+    customer_name: str,
+    reason: str,
+    priority: str
+) -> Notification:
+    """Create notification for incoming handoff call from customer"""
+    title = f"Incoming call from {customer_name}"
+    message = f"Session: {session_id}. Reason: {reason}. Priority: {priority}"
+
+    return create_notification(
+        db=db,
+        user_id=agent_user_id,
+        notification_type="handoff_call",
+        title=title,
+        message=message,
+        related_message_id=None,
+        related_channel_id=None,
+        actor_id=None
+    )

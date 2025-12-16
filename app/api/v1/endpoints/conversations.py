@@ -197,7 +197,8 @@ def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: int, db
             last_message_timestamp=sessions_from_db.updated_at.isoformat(),
             first_message_content="",
             contact=contact_info,
-            is_ai_enabled=sessions_from_db.is_ai_enabled
+            is_ai_enabled=sessions_from_db.is_ai_enabled,
+            priority=sessions_from_db.priority
         )
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])

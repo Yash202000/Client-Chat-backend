@@ -85,10 +85,9 @@ async def assign_session_to_agent(
     """
     logger.info(f"Assigning session {session_id} to agent {agent_user_id}")
 
-    # Update the session
+    # Update the session (AI stays enabled - can be toggled manually by agent)
     session_update = ConversationSessionUpdate(
         assignee_id=agent_user_id,
-        is_ai_enabled=False,  # Disable AI when human takes over
         status='assigned',
         waiting_for_agent=False,
         handoff_accepted_at=datetime.utcnow(),
@@ -151,14 +150,13 @@ async def request_handoff(
         logger.error(f"Session {session_id} not found")
         return {"status": "error", "message": "Session not found"}
 
-    # Update session with handoff request
+    # Update session with handoff request (AI stays enabled - can be toggled manually)
     session_update = ConversationSessionUpdate(
         handoff_requested_at=datetime.utcnow(),
         handoff_reason=reason,
         assigned_pool=team_name,  # Store team name
         waiting_for_agent=True,
-        status='pending_agent_assignment',
-        is_ai_enabled=False  # Stop AI responses during handoff
+        status='pending_agent_assignment'
     )
 
     updated_session = conversation_session_service.update_session(db, session_id, session_update)
@@ -202,6 +200,18 @@ async def request_handoff(
             await manager.broadcast_to_company(session.company_id, json.dumps(call_notification))
             logger.info(f"Broadcasted call notification to company {session.company_id} for agent {available_agent.id}")
 
+            # Create database notification entry for the agent
+            from app.crud import crud_notification
+            crud_notification.create_handoff_call_notification(
+                db=db,
+                agent_user_id=available_agent.id,
+                session_id=session_id,
+                customer_name=customer_name,
+                reason=reason,
+                priority=priority
+            )
+            logger.info(f"Created handoff call notification for agent {available_agent.id}")
+
             return {
                 "status": "call_initiated",
                 "agent_id": available_agent.id,
@@ -214,7 +224,17 @@ async def request_handoff(
             }
         except Exception as e:
             logger.error(f"Failed to create LiveKit room: {e}")
-            # Fall back to text-based handoff
+            # Fall back to text-based handoff - still create notification
+            from app.crud import crud_notification
+            crud_notification.create_handoff_call_notification(
+                db=db,
+                agent_user_id=available_agent.id,
+                session_id=session_id,
+                customer_name=customer_name,
+                reason=reason,
+                priority=priority
+            )
+            logger.info(f"Created handoff notification for agent {available_agent.id} (text-based fallback)")
             return {
                 "status": "agent_found",
                 "agent_id": available_agent.id,

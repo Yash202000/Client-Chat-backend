@@ -66,8 +66,8 @@ async def public_voice_websocket_endpoint(
 
     logger.info(f"STT Provider: {stt_provider}, TTS Provider: {tts_provider}, Voice ID: {final_voice_id}")
 
-    await manager.connect(websocket, session_id, user_type)
-    logger.info(f"WebSocket connected to manager for session {session_id}")
+    await manager.connect(websocket, session_id, user_type, connection_type="voice")
+    logger.info(f"WebSocket connected to manager for session {session_id} (voice connection)")
 
     # Get OpenAI API key from vault if available (used for both STT and TTS)
     openai_api_key = None
