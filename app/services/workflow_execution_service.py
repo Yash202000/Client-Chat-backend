@@ -77,28 +77,23 @@ class WorkflowExecutionService:
                     return ''
             return obj
 
-        def replace_func(match):
-            placeholder = match.group(1).strip()
-            print(f"  - Found placeholder: {placeholder}")
+        def resolve_single_placeholder(placeholder: str):
+            """Resolve a single placeholder and return the actual value (preserving type)."""
             path = placeholder.split(".")
             source = path[0]
 
             resolved_value = ''
             if source == "context":
-                # Support nested paths like context.customer_data.reason
-                remaining_path = path[1:]  # ['customer_data', 'reason']
+                remaining_path = path[1:]
                 resolved_value = drill_down(context, remaining_path)
                 print(f"    - Source: context, Path: {remaining_path}, Value: '{resolved_value}'")
             else:
-                # Handle results from previous nodes
                 step_result = results.get(source)
                 print(f"    - Source: results, Step: {source}, Result: {step_result}")
                 if step_result:
-                    # Start with the step result and drill down
-                    remaining_path = path[1:]  # e.g., ['output'] or ['output', 'content']
+                    remaining_path = path[1:]
                     resolved_value = drill_down(step_result, remaining_path) if remaining_path else step_result
 
-                    # If no specific path given, try to get the output
                     if not remaining_path:
                         output_value = step_result.get("output")
                         if isinstance(output_value, dict):
@@ -109,6 +104,23 @@ class WorkflowExecutionService:
                             resolved_value = output_value
                 print(f"    - Resolved value: '{resolved_value}'")
 
+            return resolved_value
+
+        # Check if the entire value is a single placeholder (e.g., "{{code-123.output.show_dict}}")
+        # If so, return the actual value (dict, list, etc.) instead of converting to string
+        single_placeholder_match = re.match(r"^\s*\{\{(.*?)\}\}\s*$", value)
+        if single_placeholder_match:
+            placeholder = single_placeholder_match.group(1).strip()
+            print(f"  - Found single placeholder: {placeholder}")
+            resolved = resolve_single_placeholder(placeholder)
+            print(f"DEBUG: Returning actual value (type: {type(resolved).__name__}): {resolved}")
+            return resolved
+
+        # For embedded placeholders in text, convert to strings
+        def replace_func(match):
+            placeholder = match.group(1).strip()
+            print(f"  - Found placeholder: {placeholder}")
+            resolved_value = resolve_single_placeholder(placeholder)
             return str(resolved_value) if resolved_value is not None else ''
 
         resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
@@ -1444,8 +1456,14 @@ Return only valid JSON, nothing else:"""
                                 resolved_options = json.loads(resolved_options)
                             except json.JSONDecodeError:
                                 resolved_options = []
+                        # Handle dictionary - convert to list of {key, value} pairs
+                        if isinstance(resolved_options, dict):
+                            options_list = [
+                                {"key": str(k), "value": str(v)}
+                                for k, v in resolved_options.items()
+                            ]
                         # Ensure it's a list of key-value dicts
-                        if isinstance(resolved_options, list):
+                        elif isinstance(resolved_options, list):
                             options_list = [
                                 opt if isinstance(opt, dict) and 'key' in opt and 'value' in opt
                                 else {"key": str(opt), "value": str(opt)}
