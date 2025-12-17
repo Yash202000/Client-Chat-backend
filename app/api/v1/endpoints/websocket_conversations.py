@@ -810,7 +810,16 @@ async def websocket_endpoint(
                         await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
                         print(f"[websocket_conversations] Broadcasted form to session: {session_id}")
 
-                    # If the status is "paused_for_input", we do nothing and just wait for the next user message.
+                    elif execution_result.get("status") == "paused_for_input":
+                        # Broadcast input constraint to widget so it knows what input type is expected
+                        expected_input_type = execution_result.get("expected_input_type", "any")
+                        input_constraint_message = {
+                            "message_type": "input_constraint",
+                            "expected_input_type": expected_input_type,
+                            "sender": "agent"
+                        }
+                        await manager.broadcast_to_session(session_id, json.dumps(input_constraint_message), "agent")
+                        print(f"[websocket_conversations] Broadcasted input constraint ({expected_input_type}) to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
@@ -1278,6 +1287,17 @@ async def public_websocket_endpoint(
                                 print(f"[websocket_conversations] TTS audio sent for form in session: {session_id}")
                             except Exception as tts_error:
                                 print(f"[websocket_conversations] TTS error: {tts_error}")
+
+                    elif execution_result.get("status") == "paused_for_input":
+                        # Broadcast input constraint to widget so it knows what input type is expected
+                        expected_input_type = execution_result.get("expected_input_type", "any")
+                        input_constraint_message = {
+                            "message_type": "input_constraint",
+                            "expected_input_type": expected_input_type,
+                            "sender": "agent"
+                        }
+                        await manager.broadcast_to_session(str(session_id), json.dumps(input_constraint_message), "agent")
+                        print(f"[websocket_conversations] Broadcasted input constraint ({expected_input_type}) to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
