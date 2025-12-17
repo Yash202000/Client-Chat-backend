@@ -1437,7 +1437,12 @@ Return only valid JSON, nothing else:"""
                 result = self._execute_conditional_node(node_data, context, results)
 
             elif node_type == "listen":
-                result = {"status": "paused_for_input"}
+                params = node_data.get("params", {})
+                expected_input_type = params.get("expected_input_type", "any")
+                result = {
+                    "status": "paused_for_input",
+                    "expected_input_type": expected_input_type
+                }
 
             elif node_type == "prompt":
                 params = node_data.get("params", {})
@@ -1659,6 +1664,8 @@ Return only valid JSON, nothing else:"""
                     response_payload["prompt"] = result["prompt"]
                 if "form" in result:
                     response_payload["form"] = result["form"]
+                if "expected_input_type" in result:
+                    response_payload["expected_input_type"] = result["expected_input_type"]
 
                 # Include last response message for TTS in voice mode
                 if response_messages:
