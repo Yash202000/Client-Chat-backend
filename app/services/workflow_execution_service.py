@@ -182,8 +182,11 @@ class WorkflowExecutionService:
             arg_value = arg.get("value", "")
             if arg_name:
                 resolved_value = self._resolve_placeholders(str(arg_value), context, results)
-                # Try to parse as Python literal if it looks like a dict/list
-                if resolved_value.startswith('{') or resolved_value.startswith('['):
+                # If resolved_value is already a dict/list, use it directly
+                if isinstance(resolved_value, (dict, list)):
+                    resolved_args[arg_name] = resolved_value
+                # Try to parse as Python literal if it looks like a dict/list string
+                elif isinstance(resolved_value, str) and (resolved_value.startswith('{') or resolved_value.startswith('[')):
                     try:
                         import ast
                         resolved_args[arg_name] = ast.literal_eval(resolved_value)
@@ -472,18 +475,23 @@ class WorkflowExecutionService:
         agent_tools = workflow.agent.tools if workflow.agent else []
 
         # 4. Get attachments from context (for vision model support)
-        # First check user_attachments (set during workflow execution)
-        attachments = context.get("user_attachments", [])
+        # Only include attachments if agent has vision_enabled
+        attachments = []
+        if workflow.agent and getattr(workflow.agent, 'vision_enabled', False):
+            # First check user_attachments (set during workflow execution)
+            attachments = context.get("user_attachments", [])
 
-        # Also check if any context variable contains attachments (from Listen node)
-        # This handles cases where Listen node saved {text, attachments} format
-        if not attachments:
-            for key, value in context.items():
-                if isinstance(value, dict) and "attachments" in value:
-                    attachments = value.get("attachments", [])
-                    if attachments:
-                        print(f"DEBUG: Found attachments in context variable '{key}'")
-                        break
+            # Also check if any context variable contains attachments (from Listen node)
+            # This handles cases where Listen node saved {text, attachments} format
+            if not attachments:
+                for key, value in context.items():
+                    if isinstance(value, dict) and "attachments" in value:
+                        attachments = value.get("attachments", [])
+                        if attachments:
+                            print(f"DEBUG: Found attachments in context variable '{key}'")
+                            break
+        else:
+            print(f"DEBUG: Vision not enabled for agent, skipping attachments")
 
         llm_response = await self.llm_tool_service.execute(
             model=node_data.get("model"),
@@ -1523,7 +1531,11 @@ Return only valid JSON, nothing else:"""
                         from app.schemas import chat_message as schemas_chat_message
 
                         # Save to database and broadcast properly formatted message
-                        agent_message = schemas_chat_message.ChatMessageCreate(message=resolved_output, message_type="message")
+                        # Handle dict output (e.g., from Listen node with attachments)
+                        message_text = resolved_output
+                        if isinstance(resolved_output, dict):
+                            message_text = resolved_output.get("text", str(resolved_output))
+                        agent_message = schemas_chat_message.ChatMessageCreate(message=message_text, message_type="message")
                         db_agent_message = chat_service.create_chat_message(
                             self.db, agent_message,
                             workflow_obj.agent.id, conversation_id,
@@ -1552,7 +1564,8 @@ Return only valid JSON, nothing else:"""
                                     except Exception:
                                         pass
                                 tts_service = TTSService(openai_api_key=openai_api_key)
-                                audio_stream = tts_service.text_to_speech_stream(resolved_output, voice_id, tts_provider)
+                                # Use message_text (already extracted from dict if needed)
+                                audio_stream = tts_service.text_to_speech_stream(message_text, voice_id, tts_provider)
                                 async for audio_chunk in audio_stream:
                                     await ws_manager.broadcast_bytes_to_session(str(conversation_id), audio_chunk)
                                 await tts_service.close()

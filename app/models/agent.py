@@ -48,3 +48,4 @@ class Agent(Base):
     voice_id = Column(String, nullable=True, default='default')
     tts_provider = Column(String, nullable=False, default='voice_engine')
     stt_provider = Column(String, nullable=False, default='deepgram')
+    vision_enabled = Column(Boolean, default=False)
