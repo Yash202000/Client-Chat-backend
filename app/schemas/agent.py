@@ -27,6 +27,7 @@ class AgentBase(BaseModel):
     voice_id: Optional[str] = 'default'
     tts_provider: Optional[str] = 'voice_engine'
     stt_provider: Optional[str] = 'deepgram'
+    vision_enabled: Optional[bool] = False
 
 class AgentCreate(AgentBase):
     pass
@@ -52,6 +53,7 @@ class AgentUpdate(BaseModel):
     voice_id: Optional[str] = None
     tts_provider: Optional[str] = None
     stt_provider: Optional[str] = None
+    vision_enabled: Optional[bool] = None
 
 class Agent(AgentBase):
     id: int
