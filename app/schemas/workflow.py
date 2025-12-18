@@ -5,7 +5,7 @@ import json
 class WorkflowBase(BaseModel):
     name: str
     description: Optional[str] = None
-    agent_id: int
+    agent_id: Optional[int] = None  # Optional for template-created workflows
     trigger_phrases: Optional[List[str]] = None
     intent_config: Optional[Dict[str, Any]] = None
     version: int = 1
