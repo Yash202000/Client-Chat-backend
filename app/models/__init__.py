@@ -19,6 +19,7 @@ from app.models.team import Team
 from app.models.team_membership import TeamMembership
 from app.models.tool import Tool
 from app.models.user import User
+from app.models.user_invitation import UserInvitation
 from app.models.user_settings import UserSettings
 from app.models.voice_profile import VoiceProfile
 from app.models.webhook import Webhook
