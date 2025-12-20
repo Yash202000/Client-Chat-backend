@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+import asyncio
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models import workflow
@@ -129,7 +130,7 @@ class WorkflowExecutionService:
         print(f"DEBUG: Final resolved string: '{resolved_string}'")
         return resolved_string
 
-    def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
         from types import SimpleNamespace
 
         expression = node_data.get("expression", "")
@@ -161,8 +162,11 @@ class WorkflowExecutionService:
             # Resolve placeholders in the expression before evaluation
             resolved_expression = self._resolve_placeholders(expression, context, results)
 
-            # Evaluate the expression
-            manipulated_data = eval(resolved_expression, safe_globals, safe_locals)
+            # Run eval in thread pool to avoid blocking the event loop
+            def run_eval():
+                return eval(resolved_expression, safe_globals, safe_locals)
+
+            manipulated_data = await asyncio.to_thread(run_eval)
 
             # Store the result in the context
             context[output_variable] = manipulated_data
@@ -171,7 +175,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error manipulating data: {e}"}
 
-    def _execute_code_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_code_node(self, node_data: dict, context: dict, results: dict):
         code = node_data.get("code", "")
         arguments = node_data.get("arguments", [])  # [{name: "arg1", value: "{{context.var}}"}]
         return_variables = node_data.get("return_variables", [])  # ["result1", "result2"]
@@ -209,81 +213,86 @@ class WorkflowExecutionService:
             **resolved_args  # Spread arguments into scope so they're directly accessible
         }
 
-        try:
-            # Execute the code
-            exec(code, execution_scope)
+        # Define synchronous code execution function to run in thread pool
+        def run_code_sync():
+            try:
+                # Execute the code
+                exec(code, execution_scope)
 
-            # Check if a function was defined and should be auto-called
-            # Only auto-call if the function wasn't already called in the code
-            import re
-            func_match = re.search(r'def\s+(\w+)\s*\(', code)
-            if func_match:
-                func_name = func_match.group(1)
-                # Check if function was manually called in the code (look for "func_name(" after the def block)
-                func_call_pattern = rf'{func_name}\s*\('
-                # Find all calls - if there's a call outside the def, user called it manually
-                func_def_end = code.find('def ' + func_name)
-                code_after_def = code[func_def_end:] if func_def_end >= 0 else ""
-                # Check if there's a call that's not the def line itself
-                lines_after_def = code_after_def.split('\n')[1:]  # Skip the def line
-                manual_call_exists = any(re.search(func_call_pattern, line) and not line.strip().startswith('def ') for line in lines_after_def)
+                # Check if a function was defined and should be auto-called
+                # Only auto-call if the function wasn't already called in the code
+                import re
+                func_match = re.search(r'def\s+(\w+)\s*\(', code)
+                if func_match:
+                    func_name = func_match.group(1)
+                    # Check if function was manually called in the code (look for "func_name(" after the def block)
+                    func_call_pattern = rf'{func_name}\s*\('
+                    # Find all calls - if there's a call outside the def, user called it manually
+                    func_def_end = code.find('def ' + func_name)
+                    code_after_def = code[func_def_end:] if func_def_end >= 0 else ""
+                    # Check if there's a call that's not the def line itself
+                    lines_after_def = code_after_def.split('\n')[1:]  # Skip the def line
+                    manual_call_exists = any(re.search(func_call_pattern, line) and not line.strip().startswith('def ') for line in lines_after_def)
 
-                # Also check if return variables are already set (user assigned them manually)
-                return_vars_already_set = return_variables and all(
-                    var_name.strip() in execution_scope and execution_scope[var_name.strip()] is not None
-                    for var_name in return_variables if var_name.strip()
-                )
+                    # Also check if return variables are already set (user assigned them manually)
+                    return_vars_already_set = return_variables and all(
+                        var_name.strip() in execution_scope and execution_scope[var_name.strip()] is not None
+                        for var_name in return_variables if var_name.strip()
+                    )
 
-                if not manual_call_exists and not return_vars_already_set:
-                    if func_name in execution_scope and callable(execution_scope[func_name]):
-                        # Call the function with arguments in order
-                        func = execution_scope[func_name]
-                        arg_values = [resolved_args[name] for name in arg_names_ordered if name in resolved_args]
-                        print(f"[CODE NODE] Auto-calling function '{func_name}' with args: {arg_values}")
-                        func_result = func(*arg_values)
+                    if not manual_call_exists and not return_vars_already_set:
+                        if func_name in execution_scope and callable(execution_scope[func_name]):
+                            # Call the function with arguments in order
+                            func = execution_scope[func_name]
+                            arg_values = [resolved_args[name] for name in arg_names_ordered if name in resolved_args]
+                            print(f"[CODE NODE] Auto-calling function '{func_name}' with args: {arg_values}")
+                            func_result = func(*arg_values)
 
-                        # If there's one return variable, assign the function result to it
-                        if return_variables and len(return_variables) == 1:
-                            var_name = return_variables[0].strip()
-                            execution_scope[var_name] = func_result
-                            context[var_name] = func_result
-                            print(f"[CODE NODE] Output: {{{var_name}: {func_result}}}")
-                            return {"output": {var_name: func_result}}
-                        elif return_variables and len(return_variables) > 1 and isinstance(func_result, (tuple, list)):
-                            # Multiple return values
-                            output = {}
-                            for i, var_name in enumerate(return_variables):
-                                var_name = var_name.strip()
-                                if i < len(func_result):
-                                    output[var_name] = func_result[i]
-                                    context[var_name] = func_result[i]
-                            print(f"[CODE NODE] Output: {output}")
-                            return {"output": output if output else func_result}
-                        else:
-                            # No return variables defined, just return the function result
-                            print(f"[CODE NODE] Output: {func_result}")
-                            return {"output": func_result}
+                            # If there's one return variable, assign the function result to it
+                            if return_variables and len(return_variables) == 1:
+                                var_name = return_variables[0].strip()
+                                execution_scope[var_name] = func_result
+                                context[var_name] = func_result
+                                print(f"[CODE NODE] Output: {{{var_name}: {func_result}}}")
+                                return {"output": {var_name: func_result}}
+                            elif return_variables and len(return_variables) > 1 and isinstance(func_result, (tuple, list)):
+                                # Multiple return values
+                                output = {}
+                                for i, var_name in enumerate(return_variables):
+                                    var_name = var_name.strip()
+                                    if i < len(func_result):
+                                        output[var_name] = func_result[i]
+                                        context[var_name] = func_result[i]
+                                print(f"[CODE NODE] Output: {output}")
+                                return {"output": output if output else func_result}
+                            else:
+                                # No return variables defined, just return the function result
+                                print(f"[CODE NODE] Output: {func_result}")
+                                return {"output": func_result}
 
-            # Collect return variables into output (for non-function code or manually called functions)
-            if return_variables:
-                output = {}
-                for var_name in return_variables:
-                    var_name = var_name.strip()
-                    if var_name and var_name in execution_scope:
-                        output[var_name] = execution_scope[var_name]
-                        # Also store in context for later use in workflow
-                        context[var_name] = execution_scope[var_name]
+                # Collect return variables into output (for non-function code or manually called functions)
+                if return_variables:
+                    output = {}
+                    for var_name in return_variables:
+                        var_name = var_name.strip()
+                        if var_name and var_name in execution_scope:
+                            output[var_name] = execution_scope[var_name]
+                            # Also store in context for later use in workflow
+                            context[var_name] = execution_scope[var_name]
 
-                print(f"[CODE NODE] Output: {output}")
-                return {"output": output if output else "Code executed successfully."}
-            else:
-                # Legacy behavior: return the 'output' variable if set
-                return {"output": execution_scope.get("output", "Code executed successfully.")}
+                    print(f"[CODE NODE] Output: {output}")
+                    return {"output": output if output else "Code executed successfully."}
+                else:
+                    # Legacy behavior: return the 'output' variable if set
+                    return {"output": execution_scope.get("output", "Code executed successfully.")}
 
-        except Exception as e:
-            import traceback
-            print(f"[CODE NODE] Error: {e}")
-            return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
+            except Exception as e:
+                import traceback
+                print(f"[CODE NODE] Error: {e}")
+                return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
+
+        # Run the synchronous code execution in a thread pool to avoid blocking the event loop
+        return await asyncio.to_thread(run_code_sync)
 
     async def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow):
         knowledge_base_id = node_data.get("knowledge_base_id")
@@ -1571,10 +1580,10 @@ Return only valid JSON, nothing else:"""
                 result = await self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
 
             elif node_type == "data_manipulation":
-                result = self._execute_data_manipulation_node(node_data, context, results)
+                result = await self._execute_data_manipulation_node(node_data, context, results)
 
             elif node_type == "code":
-                result = self._execute_code_node(node_data, context, results)
+                result = await self._execute_code_node(node_data, context, results)
 
             elif node_type == "knowledge":
                 result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj)
