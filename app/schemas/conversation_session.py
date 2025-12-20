@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -37,6 +37,9 @@ class ConversationSessionUpdate(BaseModel):
     assigned_pool: Optional[str] = None
     waiting_for_agent: Optional[bool] = None
     handoff_accepted_at: Optional[datetime] = None
+
+    # Subworkflow execution state
+    subworkflow_stack: Optional[List[Dict[str, Any]]] = None
 
 class ConversationSession(ConversationSessionBase):
     id: int

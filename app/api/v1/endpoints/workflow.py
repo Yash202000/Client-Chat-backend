@@ -41,12 +41,161 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     workflows = workflow_service.get_workflows(db=db, company_id=current_user.company_id, skip=skip, limit=limit)
     return workflows
 
+# NOTE: This route MUST be defined before /{workflow_id} routes to avoid path conflicts
+@router.get("/subworkflow-usage/all", dependencies=[Depends(require_permission("workflow:read"))])
+def get_all_subworkflow_usage(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Get subworkflow usage information for all workflows.
+    Returns a dict mapping workflow_id to list of workflows using it.
+    """
+    all_workflows = workflow_service.get_workflows(
+        db=db,
+        company_id=current_user.company_id
+    )
+
+    # Build a map of workflow_id -> [workflows using it as subworkflow]
+    usage_map = {}
+
+    for wf in all_workflows:
+        # Get visual_steps - check active version if parent has none
+        visual_steps = wf.visual_steps
+        if visual_steps is None and wf.versions:
+            active_version = next((v for v in wf.versions if v.is_active), None)
+            if active_version:
+                visual_steps = active_version.visual_steps
+
+        if visual_steps:
+            if isinstance(visual_steps, str):
+                try:
+                    visual_steps = json.loads(visual_steps)
+                except:
+                    continue
+
+            nodes = visual_steps.get("nodes", [])
+            for node in nodes:
+                if node.get("type") == "subworkflow":
+                    subworkflow_id = node.get("data", {}).get("subworkflow_id")
+                    if subworkflow_id:
+                        # Ensure integer for consistent key type
+                        subworkflow_id = int(subworkflow_id)
+                        if subworkflow_id not in usage_map:
+                            usage_map[subworkflow_id] = []
+                        usage_map[subworkflow_id].append({
+                            "id": wf.id,
+                            "name": wf.name
+                        })
+
+    return usage_map
+
 @router.get("/{workflow_id}", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:read"))])
 def read_workflow(workflow_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     db_workflow = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
     if db_workflow is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return db_workflow
+
+@router.get("/{workflow_id}/available-subworkflows", dependencies=[Depends(require_permission("workflow:read"))])
+def get_available_subworkflows(
+    workflow_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Get workflows available to be used as subworkflows for the specified workflow.
+    Excludes the current workflow and any that would create circular references.
+    """
+    from app.services.workflow_execution_service import WorkflowExecutionService
+
+    # Get all workflows for the company
+    all_workflows = workflow_service.get_workflows(
+        db=db,
+        company_id=current_user.company_id
+    )
+
+    exec_service = WorkflowExecutionService(db)
+    available = []
+
+    for wf in all_workflows:
+        # Can't call self
+        if wf.id == workflow_id:
+            continue
+
+        # Check for circular reference
+        if exec_service._detect_circular_reference(workflow_id, wf.id, current_user.company_id):
+            continue
+
+        available.append({
+            "id": wf.id,
+            "name": wf.name,
+            "description": wf.description,
+            "has_triggers": bool(wf.trigger_phrases) or bool(wf.intent_config)
+        })
+
+    return available
+
+@router.get("/{workflow_id}/used-by", dependencies=[Depends(require_permission("workflow:read"))])
+def get_workflows_using_as_subworkflow(
+    workflow_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Get list of workflows that use this workflow as a subworkflow.
+    Only returns results if this workflow version is active.
+    """
+    # Get the workflow being queried
+    workflow = workflow_service.get_workflow(db, workflow_id, current_user.company_id)
+    if not workflow:
+        return []
+
+    # Only show banner for active versions
+    if not workflow.is_active:
+        return []
+
+    # Determine the ID to search for (parent ID if this is a version, otherwise own ID)
+    search_id = workflow.parent_workflow_id or workflow.id
+
+    all_workflows = workflow_service.get_workflows(
+        db=db,
+        company_id=current_user.company_id
+    )
+
+    using_workflows = []
+    for wf in all_workflows:
+        if wf.id == search_id:
+            continue
+
+        # Get visual_steps - check active version if parent has none
+        visual_steps = wf.visual_steps
+        if visual_steps is None and wf.versions:
+            active_version = next((v for v in wf.versions if v.is_active), None)
+            if active_version:
+                visual_steps = active_version.visual_steps
+
+        # Check if this workflow contains a subworkflow node referencing search_id
+        if visual_steps:
+            if isinstance(visual_steps, str):
+                try:
+                    visual_steps = json.loads(visual_steps)
+                except:
+                    continue
+
+            nodes = visual_steps.get("nodes", [])
+            for node in nodes:
+                if node.get("type") == "subworkflow":
+                    subworkflow_id = node.get("data", {}).get("subworkflow_id")
+                    # Ensure integer comparison (JSON may store as string)
+                    if subworkflow_id and int(subworkflow_id) == search_id:
+                        using_workflows.append({
+                            "id": wf.id,
+                            "name": wf.name
+                        })
+                        break
+
+    return using_workflows
 
 @router.put("/{workflow_id}", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
 def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
