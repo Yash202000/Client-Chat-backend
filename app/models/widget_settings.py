@@ -21,6 +21,8 @@ class WidgetSettings(Base):
     bot_message_text_color = Column(String, default="#1F2937")
     time_color = Column(String, default="#9CA3AF")
     widget_size = Column(String, default="medium")
+    widget_width = Column(Integer, nullable=True)   # Custom width in px (overrides widget_size)
+    widget_height = Column(Integer, nullable=True)  # Custom height in px (overrides widget_size)
     show_header = Column(Boolean, default=True)
     livekit_url = Column(String, nullable=True)
     frontend_url = Column(String, nullable=True)
