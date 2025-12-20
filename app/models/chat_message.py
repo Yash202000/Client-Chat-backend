@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, Integer, String, DateTime, ForeignKey, func
+from sqlalchemy import BigInteger, Column, Integer, String, DateTime, ForeignKey, func, JSON
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -10,6 +10,7 @@ class ChatMessage(Base):
     sender = Column(String) # 'user' or 'agent'
     message_type = Column(String, default="message") # 'message' or 'note'
     token = Column(String, nullable=True) # For video call tokens, etc.
+    attachments = Column(JSON, nullable=True)  # Store attachment metadata (file_name, file_url, file_type, file_size, location)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     session_id = Column(BigInteger, ForeignKey("conversation_sessions.id"), nullable=False, index=True)

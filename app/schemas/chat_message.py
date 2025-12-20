@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class ChatMessageBase(BaseModel):
@@ -8,6 +8,7 @@ class ChatMessageBase(BaseModel):
 
 class ChatMessageCreate(ChatMessageBase):
     token: Optional[str] = None
+    attachments: Optional[List[Dict[str, Any]]] = None  # Attachment metadata
 
 class ChatMessage(ChatMessageBase):
     id: int
@@ -24,6 +25,7 @@ class ChatMessage(ChatMessageBase):
     feedback_rating: Optional[int] = None
     feedback_notes: Optional[str] = None
     issue: Optional[str] = None
+    attachments: Optional[List[Dict[str, Any]]] = None  # Attachment metadata (file_name, file_url, file_type, file_size, location)
 
     model_config = {
         "from_attributes": True
