@@ -1393,7 +1393,7 @@ Return only valid JSON, nothing else:"""
             "depth": current_depth + 1
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None):
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -1526,21 +1526,27 @@ Return only valid JSON, nothing else:"""
                 variable_to_save = context.get("variable_to_save")
                 print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
                 if variable_to_save:
+                    # Determine what value to save to the workflow variable
+                    # If option_key is provided (user selected a prompt option), use the key
+                    # Otherwise, use the display message (user_message)
+                    value_to_save = option_key if option_key else user_message
+                    print(f"DEBUG: Will save to variable '{variable_to_save}': option_key={option_key}, user_message={user_message}, value_to_save={value_to_save}")
+
                     # Check if the incoming message is a JSON string (from a form submission)
                     try:
-                        form_data = json.loads(user_message)
+                        form_data = json.loads(value_to_save)
                         context[variable_to_save] = form_data
                     except (json.JSONDecodeError, TypeError):
                         # It's a plain text response (e.g., from a prompt)
                         # If there are attachments, save them along with the message
                         if attachments:
                             context[variable_to_save] = {
-                                "text": user_message,
+                                "text": value_to_save,
                                 "attachments": attachments
                             }
                             print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
                         else:
-                            context[variable_to_save] = user_message
+                            context[variable_to_save] = value_to_save
                     print(f"DEBUG: Context after updating with user message: {context}")
                     # Save the updated context back to memory
                     memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
