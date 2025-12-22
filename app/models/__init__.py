@@ -19,12 +19,14 @@ from app.models.team import Team
 from app.models.team_membership import TeamMembership
 from app.models.tool import Tool
 from app.models.user import User
+from app.models.user_invitation import UserInvitation
 from app.models.user_settings import UserSettings
 from app.models.voice_profile import VoiceProfile
 from app.models.webhook import Webhook
 from app.models.widget_settings import WidgetSettings
 from app.models.workflow import Workflow
 from app.models.workflow_trigger import WorkflowTrigger, TriggerChannel
+from app.models.workflow_template import WorkflowTemplate
 from app.models.chat_channel import ChatChannel
 from app.models.channel_membership import ChannelMembership
 from app.models.internal_chat_message import InternalChatMessage

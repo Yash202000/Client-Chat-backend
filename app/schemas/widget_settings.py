@@ -17,6 +17,8 @@ class WidgetSettingsBase(BaseModel):
     bot_message_text_color: Optional[str] = None
     time_color: Optional[str] = None
     widget_size: Optional[str] = None
+    widget_width: Optional[int] = None   # Custom width in px (overrides widget_size)
+    widget_height: Optional[int] = None  # Custom height in px (overrides widget_size)
     show_header: Optional[bool] = None
     livekit_url: Optional[str] = None
     frontend_url: Optional[str] = None

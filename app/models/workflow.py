@@ -9,7 +9,7 @@ class Workflow(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     description = Column(String, nullable=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"))
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # Nullable for template-created workflows
     steps = Column(JSON, nullable=False)
     visual_steps = Column(JSON, nullable=True)
     trigger_phrases = Column(JSON, nullable=True)

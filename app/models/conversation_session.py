@@ -32,6 +32,9 @@ class ConversationSession(Base):
     waiting_for_agent = Column(Boolean, nullable=False, default=False, server_default='false') # Client is waiting for human agent
     handoff_accepted_at = Column(DateTime, nullable=True) # When agent accepted the handoff
 
+    # Subworkflow execution state
+    subworkflow_stack = Column(JSON, nullable=True)  # Stack for nested subworkflow execution
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

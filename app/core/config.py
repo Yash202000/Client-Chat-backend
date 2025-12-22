@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
     WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
 
+    # Workflow Configuration
+    MAX_SUBWORKFLOW_DEPTH: int = 5  # Maximum depth for nested subworkflows
+
     # LLM Streaming Configuration
     LLM_STREAMING_ENABLED: bool = False  # Disabled streaming responses by default
     LLM_STREAM_TOKEN_BUFFER: int = 1  # Number of tokens to buffer before sending (1 = real-time)

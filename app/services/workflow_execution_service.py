@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+import asyncio
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models import workflow
@@ -16,6 +17,7 @@ from app.core.config import settings
 
 import httpx
 import numexpr
+
 
 class WorkflowExecutionService:
     def __init__(self, db: Session):
@@ -108,7 +110,8 @@ class WorkflowExecutionService:
 
         # Check if the entire value is a single placeholder (e.g., "{{code-123.output.show_dict}}")
         # If so, return the actual value (dict, list, etc.) instead of converting to string
-        single_placeholder_match = re.match(r"^\s*\{\{(.*?)\}\}\s*$", value)
+        # Use [^{}]+ to ensure we don't match strings with multiple placeholders
+        single_placeholder_match = re.match(r"^\s*\{\{([^{}]+)\}\}\s*$", value)
         if single_placeholder_match:
             placeholder = single_placeholder_match.group(1).strip()
             print(f"  - Found single placeholder: {placeholder}")
@@ -127,7 +130,7 @@ class WorkflowExecutionService:
         print(f"DEBUG: Final resolved string: '{resolved_string}'")
         return resolved_string
 
-    def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
         from types import SimpleNamespace
 
         expression = node_data.get("expression", "")
@@ -159,8 +162,11 @@ class WorkflowExecutionService:
             # Resolve placeholders in the expression before evaluation
             resolved_expression = self._resolve_placeholders(expression, context, results)
 
-            # Evaluate the expression
-            manipulated_data = eval(resolved_expression, safe_globals, safe_locals)
+            # Run eval in thread pool to avoid blocking the event loop
+            def run_eval():
+                return eval(resolved_expression, safe_globals, safe_locals)
+
+            manipulated_data = await asyncio.to_thread(run_eval)
 
             # Store the result in the context
             context[output_variable] = manipulated_data
@@ -169,7 +175,7 @@ class WorkflowExecutionService:
         except Exception as e:
             return {"error": f"Error manipulating data: {e}"}
 
-    def _execute_code_node(self, node_data: dict, context: dict, results: dict):
+    async def _execute_code_node(self, node_data: dict, context: dict, results: dict):
         code = node_data.get("code", "")
         arguments = node_data.get("arguments", [])  # [{name: "arg1", value: "{{context.var}}"}]
         return_variables = node_data.get("return_variables", [])  # ["result1", "result2"]
@@ -207,81 +213,86 @@ class WorkflowExecutionService:
             **resolved_args  # Spread arguments into scope so they're directly accessible
         }
 
-        try:
-            # Execute the code
-            exec(code, execution_scope)
+        # Define synchronous code execution function to run in thread pool
+        def run_code_sync():
+            try:
+                # Execute the code
+                exec(code, execution_scope)
 
-            # Check if a function was defined and should be auto-called
-            # Only auto-call if the function wasn't already called in the code
-            import re
-            func_match = re.search(r'def\s+(\w+)\s*\(', code)
-            if func_match:
-                func_name = func_match.group(1)
-                # Check if function was manually called in the code (look for "func_name(" after the def block)
-                func_call_pattern = rf'{func_name}\s*\('
-                # Find all calls - if there's a call outside the def, user called it manually
-                func_def_end = code.find('def ' + func_name)
-                code_after_def = code[func_def_end:] if func_def_end >= 0 else ""
-                # Check if there's a call that's not the def line itself
-                lines_after_def = code_after_def.split('\n')[1:]  # Skip the def line
-                manual_call_exists = any(re.search(func_call_pattern, line) and not line.strip().startswith('def ') for line in lines_after_def)
+                # Check if a function was defined and should be auto-called
+                # Only auto-call if the function wasn't already called in the code
+                import re
+                func_match = re.search(r'def\s+(\w+)\s*\(', code)
+                if func_match:
+                    func_name = func_match.group(1)
+                    # Check if function was manually called in the code (look for "func_name(" after the def block)
+                    func_call_pattern = rf'{func_name}\s*\('
+                    # Find all calls - if there's a call outside the def, user called it manually
+                    func_def_end = code.find('def ' + func_name)
+                    code_after_def = code[func_def_end:] if func_def_end >= 0 else ""
+                    # Check if there's a call that's not the def line itself
+                    lines_after_def = code_after_def.split('\n')[1:]  # Skip the def line
+                    manual_call_exists = any(re.search(func_call_pattern, line) and not line.strip().startswith('def ') for line in lines_after_def)
 
-                # Also check if return variables are already set (user assigned them manually)
-                return_vars_already_set = return_variables and all(
-                    var_name.strip() in execution_scope and execution_scope[var_name.strip()] is not None
-                    for var_name in return_variables if var_name.strip()
-                )
+                    # Also check if return variables are already set (user assigned them manually)
+                    return_vars_already_set = return_variables and all(
+                        var_name.strip() in execution_scope and execution_scope[var_name.strip()] is not None
+                        for var_name in return_variables if var_name.strip()
+                    )
 
-                if not manual_call_exists and not return_vars_already_set:
-                    if func_name in execution_scope and callable(execution_scope[func_name]):
-                        # Call the function with arguments in order
-                        func = execution_scope[func_name]
-                        arg_values = [resolved_args[name] for name in arg_names_ordered if name in resolved_args]
-                        print(f"[CODE NODE] Auto-calling function '{func_name}' with args: {arg_values}")
-                        func_result = func(*arg_values)
+                    if not manual_call_exists and not return_vars_already_set:
+                        if func_name in execution_scope and callable(execution_scope[func_name]):
+                            # Call the function with arguments in order
+                            func = execution_scope[func_name]
+                            arg_values = [resolved_args[name] for name in arg_names_ordered if name in resolved_args]
+                            print(f"[CODE NODE] Auto-calling function '{func_name}' with args: {arg_values}")
+                            func_result = func(*arg_values)
 
-                        # If there's one return variable, assign the function result to it
-                        if return_variables and len(return_variables) == 1:
-                            var_name = return_variables[0].strip()
-                            execution_scope[var_name] = func_result
-                            context[var_name] = func_result
-                            print(f"[CODE NODE] Output: {{{var_name}: {func_result}}}")
-                            return {"output": {var_name: func_result}}
-                        elif return_variables and len(return_variables) > 1 and isinstance(func_result, (tuple, list)):
-                            # Multiple return values
-                            output = {}
-                            for i, var_name in enumerate(return_variables):
-                                var_name = var_name.strip()
-                                if i < len(func_result):
-                                    output[var_name] = func_result[i]
-                                    context[var_name] = func_result[i]
-                            print(f"[CODE NODE] Output: {output}")
-                            return {"output": output if output else func_result}
-                        else:
-                            # No return variables defined, just return the function result
-                            print(f"[CODE NODE] Output: {func_result}")
-                            return {"output": func_result}
+                            # If there's one return variable, assign the function result to it
+                            if return_variables and len(return_variables) == 1:
+                                var_name = return_variables[0].strip()
+                                execution_scope[var_name] = func_result
+                                context[var_name] = func_result
+                                print(f"[CODE NODE] Output: {{{var_name}: {func_result}}}")
+                                return {"output": {var_name: func_result}}
+                            elif return_variables and len(return_variables) > 1 and isinstance(func_result, (tuple, list)):
+                                # Multiple return values
+                                output = {}
+                                for i, var_name in enumerate(return_variables):
+                                    var_name = var_name.strip()
+                                    if i < len(func_result):
+                                        output[var_name] = func_result[i]
+                                        context[var_name] = func_result[i]
+                                print(f"[CODE NODE] Output: {output}")
+                                return {"output": output if output else func_result}
+                            else:
+                                # No return variables defined, just return the function result
+                                print(f"[CODE NODE] Output: {func_result}")
+                                return {"output": func_result}
 
-            # Collect return variables into output (for non-function code or manually called functions)
-            if return_variables:
-                output = {}
-                for var_name in return_variables:
-                    var_name = var_name.strip()
-                    if var_name and var_name in execution_scope:
-                        output[var_name] = execution_scope[var_name]
-                        # Also store in context for later use in workflow
-                        context[var_name] = execution_scope[var_name]
+                # Collect return variables into output (for non-function code or manually called functions)
+                if return_variables:
+                    output = {}
+                    for var_name in return_variables:
+                        var_name = var_name.strip()
+                        if var_name and var_name in execution_scope:
+                            output[var_name] = execution_scope[var_name]
+                            # Also store in context for later use in workflow
+                            context[var_name] = execution_scope[var_name]
 
-                print(f"[CODE NODE] Output: {output}")
-                return {"output": output if output else "Code executed successfully."}
-            else:
-                # Legacy behavior: return the 'output' variable if set
-                return {"output": execution_scope.get("output", "Code executed successfully.")}
+                    print(f"[CODE NODE] Output: {output}")
+                    return {"output": output if output else "Code executed successfully."}
+                else:
+                    # Legacy behavior: return the 'output' variable if set
+                    return {"output": execution_scope.get("output", "Code executed successfully.")}
 
-        except Exception as e:
-            import traceback
-            print(f"[CODE NODE] Error: {e}")
-            return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
+            except Exception as e:
+                import traceback
+                print(f"[CODE NODE] Error: {e}")
+                return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
+
+        # Run the synchronous code execution in a thread pool to avoid blocking the event loop
+        return await asyncio.to_thread(run_code_sync)
 
     async def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow):
         knowledge_base_id = node_data.get("knowledge_base_id")
@@ -1273,7 +1284,116 @@ Return only valid JSON, nothing else:"""
             "re_execute_node": True  # Re-execute this node to continue collection
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None):
+    # ============================================================
+    # SUBWORKFLOW EXECUTION METHODS
+    # ============================================================
+
+    def _get_execution_chain(self, conversation_id: str) -> list:
+        """Get list of workflow IDs currently in the execution chain (for circular reference detection)."""
+        session = conversation_session_service.get_session(self.db, conversation_id)
+        if not session or not session.subworkflow_stack:
+            return []
+        return [entry["workflow_id"] for entry in session.subworkflow_stack]
+
+    def _detect_circular_reference(self, workflow_id: int, subworkflow_id: int, company_id: int, visited: set = None) -> bool:
+        """
+        Statically detect if calling subworkflow_id would create a cycle.
+        Used for validation at save time and runtime.
+        """
+        if visited is None:
+            visited = set()
+
+        if subworkflow_id == workflow_id:
+            return True
+        if subworkflow_id in visited:
+            return False  # Already checked this path
+
+        visited.add(subworkflow_id)
+
+        # Get the subworkflow and check its subworkflow nodes
+        subworkflow = workflow_service.get_workflow(self.db, subworkflow_id, company_id)
+        if not subworkflow or not subworkflow.visual_steps:
+            return False
+
+        visual_steps = subworkflow.visual_steps
+        if isinstance(visual_steps, str):
+            try:
+                visual_steps = json.loads(visual_steps)
+            except json.JSONDecodeError:
+                return False
+
+        nodes = visual_steps.get("nodes", [])
+        for node in nodes:
+            if node.get("type") == "subworkflow":
+                nested_subworkflow_id = node.get("data", {}).get("subworkflow_id")
+                if nested_subworkflow_id and self._detect_circular_reference(
+                    workflow_id, nested_subworkflow_id, company_id, visited
+                ):
+                    return True
+
+        return False
+
+    async def _execute_subworkflow_node(
+        self,
+        node_data: dict,
+        context: dict,
+        results: dict,
+        company_id: int,
+        workflow: Workflow,
+        conversation_id: str,
+        current_depth: int = 0
+    ):
+        """
+        Execute a subworkflow node by calling another workflow.
+
+        Node data structure:
+        {
+            "subworkflow_id": int,      # ID of workflow to call
+            "output_variable": str      # Variable name to store subworkflow results
+        }
+        """
+        subworkflow_id = node_data.get("subworkflow_id")
+        output_variable = node_data.get("output_variable", "subworkflow_result")
+
+        if not subworkflow_id:
+            return {"error": "No subworkflow selected. Please configure the subworkflow node."}
+
+        # Depth check
+        if current_depth >= settings.MAX_SUBWORKFLOW_DEPTH:
+            return {
+                "error": f"Maximum subworkflow depth ({settings.MAX_SUBWORKFLOW_DEPTH}) exceeded. Consider simplifying your workflow structure."
+            }
+
+        # Circular reference check at runtime
+        execution_chain = self._get_execution_chain(conversation_id)
+        if subworkflow_id in execution_chain:
+            return {
+                "error": f"Circular reference detected: workflow {subworkflow_id} is already in execution chain"
+            }
+
+        # Static circular reference check
+        if self._detect_circular_reference(workflow.id, subworkflow_id, company_id):
+            return {
+                "error": f"Circular reference detected: subworkflow {subworkflow_id} would create a cycle"
+            }
+
+        # Fetch subworkflow
+        subworkflow = workflow_service.get_workflow(self.db, subworkflow_id, company_id)
+        if not subworkflow:
+            return {"error": f"Subworkflow with ID {subworkflow_id} not found"}
+
+        print(f"✓ Subworkflow node: Executing subworkflow '{subworkflow.name}' (ID: {subworkflow_id}) at depth {current_depth + 1}")
+
+        # Return execution directive - actual execution happens in execute_workflow
+        return {
+            "status": "execute_subworkflow",
+            "subworkflow_id": subworkflow_id,
+            "subworkflow_name": subworkflow.name,
+            "output_variable": output_variable,
+            "depth": current_depth + 1
+        }
+
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -1350,6 +1470,13 @@ Return only valid JSON, nothing else:"""
         # Ensure visual_steps is a dictionary
         visual_steps_data = workflow_obj.visual_steps
 
+        # If this is a parent workflow with no visual_steps, try to use the active version instead
+        if visual_steps_data is None and hasattr(workflow_obj, 'versions') and workflow_obj.versions:
+            active_version = next((v for v in workflow_obj.versions if v.is_active), None)
+            if active_version and active_version.visual_steps:
+                print(f"DEBUG: Using active version {active_version.id} (v{active_version.version}) instead of parent {workflow_obj.id}")
+                visual_steps_data = active_version.visual_steps
+
         # Handle None or empty visual_steps
         if visual_steps_data is None:
             print(f"WARNING: Workflow {workflow_obj.id} has no visual_steps defined")
@@ -1370,33 +1497,59 @@ Return only valid JSON, nothing else:"""
         
         print(f"DEBUG: Workflow resumed with user_message: '{user_message}'")
         # Check if workflow is paused (indicated by next_step_id being set)
+        should_resume = False
         if session.next_step_id:
             current_node_id = session.next_step_id
-            print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
-            # Add attachments to context when resuming
-            context["user_attachments"] = attachments or []
-            # The variable to save was stored in the context before pausing.
-            variable_to_save = context.get("variable_to_save")
-            print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
-            if variable_to_save:
-                # Check if the incoming message is a JSON string (from a form submission)
-                try:
-                    form_data = json.loads(user_message)
-                    context[variable_to_save] = form_data
-                except (json.JSONDecodeError, TypeError):
-                    # It's a plain text response (e.g., from a prompt)
-                    # If there are attachments, save them along with the message
-                    if attachments:
-                        context[variable_to_save] = {
-                            "text": user_message,
-                            "attachments": attachments
-                        }
-                        print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
-                    else:
-                        context[variable_to_save] = user_message
-                print(f"DEBUG: Context after updating with user message: {context}")
-                # Save the updated context back to memory
-                memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+
+            # Check if the node exists in the current workflow version
+            # This can fail if the workflow version was changed while session was paused
+            if current_node_id not in graph_engine.nodes:
+                print(f"WARNING: Paused node '{current_node_id}' not found in current workflow version. Restarting workflow.")
+                # Reset session state and start fresh
+                session_update = ConversationSessionUpdate(
+                    next_step_id=None,
+                    context={}
+                )
+                conversation_session_service.update_session(self.db, conversation_id, session_update)
+                # Clear memories for clean restart
+                memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                # Start from beginning
+                current_node_id = graph_engine.find_start_node()
+                context = {"initial_user_message": user_message, "user_attachments": attachments or []}
+                memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+            else:
+                should_resume = True
+                print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
+                # Add attachments to context when resuming
+                context["user_attachments"] = attachments or []
+                # The variable to save was stored in the context before pausing.
+                variable_to_save = context.get("variable_to_save")
+                print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
+                if variable_to_save:
+                    # Determine what value to save to the workflow variable
+                    # If option_key is provided (user selected a prompt option), use the key
+                    # Otherwise, use the display message (user_message)
+                    value_to_save = option_key if option_key else user_message
+                    print(f"DEBUG: Will save to variable '{variable_to_save}': option_key={option_key}, user_message={user_message}, value_to_save={value_to_save}")
+
+                    # Check if the incoming message is a JSON string (from a form submission)
+                    try:
+                        form_data = json.loads(value_to_save)
+                        context[variable_to_save] = form_data
+                    except (json.JSONDecodeError, TypeError):
+                        # It's a plain text response (e.g., from a prompt)
+                        # If there are attachments, save them along with the message
+                        if attachments:
+                            context[variable_to_save] = {
+                                "text": value_to_save,
+                                "attachments": attachments
+                            }
+                            print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
+                        else:
+                            context[variable_to_save] = value_to_save
+                    print(f"DEBUG: Context after updating with user message: {context}")
+                    # Save the updated context back to memory
+                    memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
         else:
             current_node_id = graph_engine.find_start_node()
             # For the very first message in a workflow
@@ -1433,10 +1586,10 @@ Return only valid JSON, nothing else:"""
                 result = await self._execute_llm_node(node_data, context, results, company_id=workflow.agent.company_id, workflow=workflow, conversation_id=conversation_id)
 
             elif node_type == "data_manipulation":
-                result = self._execute_data_manipulation_node(node_data, context, results)
+                result = await self._execute_data_manipulation_node(node_data, context, results)
 
             elif node_type == "code":
-                result = self._execute_code_node(node_data, context, results)
+                result = await self._execute_code_node(node_data, context, results)
 
             elif node_type == "knowledge":
                 result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj)
@@ -1631,6 +1784,14 @@ Return only valid JSON, nothing else:"""
                     node_data, context, results, workflow_obj.agent.company_id, workflow_obj, conversation_id
                 )
 
+            elif node_type == "subworkflow":
+                # Execute another workflow as a subworkflow
+                # Get current depth from session's subworkflow_stack
+                current_depth = len(session.subworkflow_stack or [])
+                result = await self._execute_subworkflow_node(
+                    node_data, context, results, company_id, workflow_obj, conversation_id, current_depth
+                )
+
             results[current_node_id] = result
             last_executed_node_id = current_node_id
 
@@ -1686,6 +1847,45 @@ Return only valid JSON, nothing else:"""
 
                 return response_payload
 
+            # Handle subworkflow execution
+            if result and result.get("status") == "execute_subworkflow":
+                subworkflow_id = result["subworkflow_id"]
+                output_variable = result["output_variable"]
+                depth = result["depth"]
+
+                # Push current state to subworkflow stack
+                subworkflow_stack = list(session.subworkflow_stack or [])
+                subworkflow_entry = {
+                    "workflow_id": subworkflow_id,
+                    "parent_node_id": current_node_id,
+                    "parent_workflow_id": workflow_obj.id,
+                    "parent_next_step_id": graph_engine.get_next_node(current_node_id, {"output": "subworkflow_complete"}),
+                    "output_variable": output_variable,
+                    "depth": depth
+                }
+                subworkflow_stack.append(subworkflow_entry)
+
+                # Update session with stack and switch to subworkflow
+                session_update = ConversationSessionUpdate(
+                    subworkflow_stack=subworkflow_stack,
+                    workflow_id=subworkflow_id,
+                    next_step_id=None,  # Start from beginning of subworkflow
+                    context=context
+                )
+                conversation_session_service.update_session(self.db, conversation_id, session_update)
+                self.db.refresh(session)
+
+                print(f"✓ Subworkflow: Pushed to stack, entering subworkflow {subworkflow_id} at depth {depth}")
+
+                # Recursively execute subworkflow
+                return await self.execute_workflow(
+                    user_message=user_message,
+                    company_id=company_id,
+                    workflow_id=subworkflow_id,
+                    conversation_id=conversation_id,
+                    attachments=attachments
+                )
+
             if result and "error" in result:
                 # The get_next_node method will handle routing to the error path if it exists
                 pass
@@ -1694,7 +1894,52 @@ Return only valid JSON, nothing else:"""
             current_node_id = graph_engine.get_next_node(current_node_id, result)
             print(f"DEBUG: get_next_node returned: {current_node_id}")
 
-        # Finalizing the workflow
+        # Get the final output before checking for subworkflow completion
+        if response_messages:
+            final_output = response_messages[-1]
+        else:
+            final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+
+        # ============================================================
+        # SUBWORKFLOW COMPLETION - Check if we need to return to parent
+        # ============================================================
+        subworkflow_stack = list(session.subworkflow_stack or [])
+        if subworkflow_stack:
+            # This workflow was a subworkflow - pop stack and continue parent
+            completed_entry = subworkflow_stack.pop()
+            output_variable = completed_entry["output_variable"]
+            parent_workflow_id = completed_entry["parent_workflow_id"]
+            parent_next_step_id = completed_entry["parent_next_step_id"]
+
+            print(f"✓ Subworkflow completed: Returning to parent workflow {parent_workflow_id}, next step: {parent_next_step_id}")
+
+            # Store subworkflow results in context under the configured output variable
+            context[output_variable] = {
+                "output": final_output,
+                "results": {k: v.get("output") for k, v in results.items() if isinstance(v, dict) and "output" in v}
+            }
+
+            # Update session to return to parent workflow
+            session_update = ConversationSessionUpdate(
+                subworkflow_stack=subworkflow_stack if subworkflow_stack else None,
+                workflow_id=parent_workflow_id,
+                next_step_id=parent_next_step_id,
+                context=context
+            )
+            conversation_session_service.update_session(self.db, conversation_id, session_update)
+            self.db.refresh(session)
+
+            # Continue parent workflow from where it left off
+            # Pass empty user_message since we're continuing, not responding to new input
+            return await self.execute_workflow(
+                user_message="",
+                company_id=company_id,
+                workflow_id=parent_workflow_id,
+                conversation_id=conversation_id,
+                attachments=None
+            )
+
+        # Finalizing the workflow (only if not a subworkflow)
         # Instead of marking the session as 'completed', keep it 'active' so multiple workflows can run
         # and the conversation remains visible. Track workflow completion in context.
         context['last_workflow_completed_at'] = datetime.now().isoformat()
@@ -1706,13 +1951,14 @@ Return only valid JSON, nothing else:"""
             context.pop(marker, None)
             # Also delete from memory service
             try:
-                memory_service.delete_memory(self.db, marker, workflow_obj.agent.id, conversation_id)
+                if workflow_obj.agent:
+                    memory_service.delete_memory(self.db, marker, workflow_obj.agent.id, conversation_id)
             except:
                 pass  # Marker might not exist in memory
         print(f"DEBUG: Cleaned up extraction markers from context and memory on workflow completion")
 
         # Update session context
-        session_update = ConversationSessionUpdate(status='active', context=context)
+        session_update = ConversationSessionUpdate(status='active', context=context, subworkflow_stack=None)
         conversation_session_service.update_session(self.db, conversation_id, session_update)
 
         # Clear workflow_id and next_step_id directly so next message triggers fresh workflow search
@@ -1723,13 +1969,8 @@ Return only valid JSON, nothing else:"""
         print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
         # Clear all memory for this session so next workflow starts fresh
-        memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
-        print(f"DEBUG: Cleared all memory for session {conversation_id}")
-
-        # Return only the last response message (intermediate ones were already broadcasted)
-        if response_messages:
-            final_output = response_messages[-1]  # Last message only
-        else:
-            final_output = results.get(last_executed_node_id, {}).get("output", "Workflow completed.")
+        if workflow_obj.agent:
+            memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
+            print(f"DEBUG: Cleared all memory for session {conversation_id}")
 
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

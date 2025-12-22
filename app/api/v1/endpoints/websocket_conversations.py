@@ -5,6 +5,8 @@ from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas import chat_message as schemas_chat_message, websocket as schemas_websocket
 from app.schemas.websockets import WebSocketMessage
 import json
+import base64
+import uuid
 from typing import List, Dict, Any, Optional
 from app.core.dependencies import get_current_user_from_ws, get_db
 from app.core.database import SessionLocal
@@ -20,8 +22,60 @@ import datetime
 from contextlib import contextmanager
 from jose import JWTError, jwt
 from app.core.config import settings
+from app.core.object_storage import s3_client, BUCKET_NAME
 
 router = APIRouter()
+
+def upload_attachment_to_s3(file_data_base64: str, file_name: str, file_type: str) -> Optional[str]:
+    """Upload base64-encoded file to S3, return URL or None if failed."""
+    try:
+        file_bytes = base64.b64decode(file_data_base64)
+        # Generate unique key with UUID prefix
+        safe_filename = file_name.replace(' ', '_')
+        key = f"attachments/{uuid.uuid4()}_{safe_filename}"
+
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=file_bytes,
+            ContentType=file_type
+        )
+
+        # Build URL based on MinIO endpoint
+        scheme = 'https' if settings.minio_secure else 'http'
+        file_url = f"{scheme}://{settings.minio_endpoint}/{BUCKET_NAME}/{key}"
+        print(f"[S3 Upload] Successfully uploaded {file_name} to {file_url}")
+        return file_url
+    except Exception as e:
+        print(f"[S3 Upload] Failed to upload {file_name}: {e}")
+        return None
+
+def process_attachments_for_storage(attachments: List[Dict[str, Any]]) -> str:
+    """
+    Process attachments: upload to S3 if available, build message text.
+    Returns message text like "📎 filename.jpg" or "📍 Location (lat, lng)"
+    """
+    parts = []
+
+    for att in attachments:
+        if att.get('file_data'):
+            # Try to upload to S3
+            file_url = upload_attachment_to_s3(
+                att['file_data'],
+                att.get('file_name', 'file'),
+                att.get('file_type', 'application/octet-stream')
+            )
+            if file_url:
+                att['file_url'] = file_url
+            # Build display text
+            parts.append(f"📎 {att.get('file_name', 'file')}")
+        elif att.get('location'):
+            loc = att['location']
+            lat = loc.get('latitude', 0)
+            lng = loc.get('longitude', 0)
+            parts.append(f"📍 Location ({lat:.4f}, {lng:.4f})")
+
+    return '\n'.join(parts) if parts else ""
 
 @contextmanager
 def get_db_session():
@@ -538,6 +592,7 @@ async def websocket_endpoint(
 
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
+                option_key = message_data.get('option_key')  # Key for workflow variable (when user selects an option)
                 attachments = message_data.get('attachments', [])  # Get attachments from message
 
                 # Log attachment info
@@ -561,18 +616,17 @@ async def websocket_endpoint(
                 print(f"[websocket_conversations] Missing user_message/attachments or sender: user_message={user_message}, attachments={len(attachments)}, sender={sender}")
                 continue
 
-            # If only attachments (no text), set a placeholder message
-            if not user_message and attachments:
-                # Check if it's a location attachment
-                has_location = any(att.get('location') for att in attachments)
-                has_image = any(att.get('file_data') for att in attachments)
-                if has_location and has_image:
-                    user_message = "[Image and location attached]"
-                elif has_location:
-                    user_message = "[Location attached]"
-                else:
-                    user_message = "[Image attached]"
-                print(f"[websocket_conversations] 📎 Attachment-only message, using placeholder: {user_message}")
+            # Process attachments: upload to S3 and build display text
+            attachment_text = ""
+            if attachments:
+                print(f"[websocket_conversations] 📎 Processing {len(attachments)} attachment(s)")
+                attachment_text = process_attachments_for_storage(attachments)
+
+            # Build message for storage
+            message_to_store = user_message
+            if not user_message and attachment_text:
+                # If no text but attachments, use attachment description
+                message_to_store = attachment_text
 
             # Create a temporary DB session for this message handling
             with get_db_session() as db:
@@ -581,14 +635,14 @@ async def websocket_endpoint(
 
                 # 1. Log user message
                 chat_message = schemas_chat_message.ChatMessageCreate(
-                    message=user_message,
+                    message=message_to_store,
                     message_type=message_data.get('message_type', 'message'),
                     token=message_data.get('token')
                 )
 
                 # Determine assignee_id: if agent is sending, use current_user.id
                 assignee_id = current_user.id if sender == 'agent' else None
-                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id)
+                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id, attachments=attachments if attachments else None)
                 print(f"[websocket_conversations] Created chat message: {db_message.id}")
 
                 # Enrich message with assignee name for broadcast
@@ -603,6 +657,10 @@ async def websocket_endpoint(
                         if assignee_user.last_name:
                             name_parts.append(assignee_user.last_name)
                         message_dict['assignee_name'] = ' '.join(name_parts) if name_parts else assignee_user.email
+
+                # Include attachments in broadcast for preview display
+                if attachments:
+                    message_dict['attachments'] = attachments
 
                 await manager.broadcast_to_session(session_id, json.dumps(message_dict), sender)
                 print(f"[websocket_conversations] Broadcasted message to session: {session_id}")
@@ -750,13 +808,14 @@ async def websocket_endpoint(
                             continue
 
                         # 3. Execute the matched workflow with the current state (conversation_id)
-                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s)")
+                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s), option_key={option_key}")
                         execution_result = await workflow_exec_service.execute_workflow(
                             user_message=user_message,
                             conversation_id=session_id,
                             company_id=company_id,
                             workflow=workflow,
-                            attachments=attachments
+                            attachments=attachments,
+                            option_key=option_key
                         )
                     finally:
                         # Turn off typing indicator after workflow/AI processing completes
@@ -781,20 +840,22 @@ async def websocket_endpoint(
 
                     elif execution_result.get("status") == "paused_for_prompt":
                         # The workflow is paused and wants to prompt the user.
-                        # We construct a special message to send to the frontend.
                         prompt_data = execution_result.get("prompt", {})
-                        prompt_message = {
-                            "message": prompt_data.get("text"),
-                            "message_type": "prompt", # A custom type for the frontend to recognize
-                            "options": prompt_data.get("options", []),
-                            "sender": "agent",
-                            "session_id": session_id,
-                            "agent_id": agent_id,
-                            "company_id": company_id,
-                        }
-                        # This message is not saved to the database, it's a transient prompt
-                        await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
-                        print(f"[websocket_conversations] Broadcasted prompt to session: {session_id}")
+
+                        # Save prompt message to database
+                        prompt_chat_message = schemas_chat_message.ChatMessageCreate(
+                            message=prompt_data.get("text", ""),
+                            message_type="prompt"
+                        )
+                        db_prompt_message = chat_service.create_chat_message(
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                        )
+
+                        # Broadcast message with options for frontend display
+                        message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
+                        message_dict['options'] = prompt_data.get("options", [])
+                        await manager.broadcast_to_session(session_id, json.dumps(message_dict), "agent")
+                        print(f"[websocket_conversations] Saved and broadcasted prompt to session: {session_id}")
 
                     elif execution_result.get("status") == "paused_for_form":
                         form_data = execution_result.get("form", {})
@@ -885,6 +946,7 @@ async def public_websocket_endpoint(
                 continue
             user_message = message_data.get('message')
             sender = message_data.get('sender')
+            option_key = message_data.get('option_key')  # Key for workflow variable (when user selects an option)
             attachments = message_data.get('attachments', [])  # Get attachments from message
 
             # Log attachment info
@@ -900,10 +962,11 @@ async def public_websocket_endpoint(
                 print(f"[websocket_conversations] PUBLIC: Missing user_message/attachments or sender")
                 continue
 
-            # If only attachments (no text), set a placeholder message
-            if not user_message and attachments:
-                user_message = "[Image attached]"
-                print(f"[websocket_conversations] 📎 PUBLIC: Image-only message, using placeholder text")
+            # Process attachments: upload to S3 and build display text
+            attachment_text = ""
+            if attachments:
+                print(f"[websocket_conversations] 📎 PUBLIC: Processing {len(attachments)} attachment(s)")
+                attachment_text = process_attachments_for_storage(attachments)
 
             # Use temporary DB session for each message
             with get_db_session() as db:
@@ -1005,6 +1068,9 @@ async def public_websocket_endpoint(
                 if isinstance(user_message, dict):
                     # If it's form data, convert to JSON string for chat message storage
                     message_for_storage = json.dumps(user_message)
+                elif not user_message and attachment_text:
+                    # If no text but attachments, use attachment description (📎 filename, 📍 location)
+                    message_for_storage = attachment_text
 
                 # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
                 # This happens before any database operations to minimize delay
@@ -1030,7 +1096,7 @@ async def public_websocket_endpoint(
 
                 # Now, create and broadcast the chat message
                 chat_message = schemas_chat_message.ChatMessageCreate(message=message_for_storage, message_type=message_data.get('message_type', 'message'))
-                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id=None)
+                db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id=None, attachments=attachments if attachments else None)
 
                 # Enrich message with assignee name for broadcast (if message has assignee from database)
                 message_dict = schemas_chat_message.ChatMessage.model_validate(db_message).model_dump(mode='json')
@@ -1044,6 +1110,10 @@ async def public_websocket_endpoint(
                         if assignee_user.last_name:
                             name_parts.append(assignee_user.last_name)
                         message_dict['assignee_name'] = ' '.join(name_parts) if name_parts else assignee_user.email
+
+                # Include attachments in broadcast for preview display
+                if attachments:
+                    message_dict['attachments'] = attachments
 
                 await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), sender)
 
@@ -1063,9 +1133,9 @@ async def public_websocket_endpoint(
                             # A workflow is already in progress, so we resume it.
                             workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                             if workflow:
-                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s)")
+                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s), option_key={option_key}")
                                  execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
@@ -1093,9 +1163,9 @@ async def public_websocket_endpoint(
                                 workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
 
                             if workflow:
-                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s)")
+                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s), option_key={option_key}")
                                 execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
 
                         # If no workflow was found or resumed, fallback to the default agent response
@@ -1201,13 +1271,21 @@ async def public_websocket_endpoint(
                         prompt_data = execution_result.get("prompt", {})
                         prompt_text = prompt_data.get("text", "")
                         options = prompt_data.get("options", [])
-                        prompt_message = {
-                            "message": prompt_text,
-                            "message_type": "prompt",
-                            "options": options,
-                            "sender": "agent",
-                        }
-                        await manager.broadcast_to_session(str(session_id), json.dumps(prompt_message), "agent")
+
+                        # Save prompt message to database
+                        prompt_chat_message = schemas_chat_message.ChatMessageCreate(
+                            message=prompt_text,
+                            message_type="prompt"
+                        )
+                        db_prompt_message = chat_service.create_chat_message(
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                        )
+
+                        # Broadcast message with options for frontend display
+                        message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
+                        message_dict['options'] = options
+                        await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
+                        print(f"[websocket_conversations] PUBLIC: Saved and broadcasted prompt to session: {session_id}")
 
                         # Generate TTS for chat_and_voice mode (prompt)
                         if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and prompt_text:

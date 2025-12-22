@@ -9,17 +9,17 @@ def get_workflow(db: Session, workflow_id: int, company_id: int):
     return db.query(models_workflow.Workflow).options(
         joinedload(models_workflow.Workflow.agent),
         joinedload(models_workflow.Workflow.versions)
-    ).join(models_agent.Agent).filter(
+    ).filter(
         models_workflow.Workflow.id == workflow_id,
-        models_agent.Agent.company_id == company_id
+        models_workflow.Workflow.company_id == company_id
     ).first()
 
 def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_workflow.Workflow).options(
         joinedload(models_workflow.Workflow.agent),
         joinedload(models_workflow.Workflow.versions)
-    ).join(models_agent.Agent).filter(
-        models_agent.Agent.company_id == company_id,
+    ).filter(
+        models_workflow.Workflow.company_id == company_id,
         models_workflow.Workflow.parent_workflow_id == None
     ).offset(skip).limit(limit).all()
 
