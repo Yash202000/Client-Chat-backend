@@ -74,3 +74,59 @@ def update_user_presence(db: Session, user_id: int, status: str):
         db.refresh(user)
         return user
     return None
+
+def delete_user(db: Session, user_id: int):
+    """Delete or deactivate a user by ID.
+    If user has no dependencies, actually delete. Otherwise, soft delete (deactivate).
+    Returns: dict with 'success' and 'action' ('deleted' or 'deactivated')
+    """
+    from app.models import (
+        user_settings as models_user_settings,
+        channel_membership as models_channel_membership,
+        notification as models_notification,
+        video_call as models_video_call,
+        message_reaction as models_message_reaction,
+        comment as models_comment,
+        message_template as models_message_template,
+        chat_attachment as models_chat_attachment,
+        entity_note as models_entity_note,
+        message_mention as models_message_mention,
+        team_membership as models_team_membership,
+        internal_chat_message as models_internal_chat_message,
+        chat_message as models_chat_message,
+        conversation_session as models_conversation_session,
+    )
+
+    user = get_user(db, user_id)
+    if not user:
+        return {"success": False, "action": None}
+
+    # Check for dependencies (records that reference this user)
+    has_dependencies = (
+        db.query(models_channel_membership.ChannelMembership).filter(models_channel_membership.ChannelMembership.user_id == user_id).first() is not None or
+        db.query(models_notification.Notification).filter(models_notification.Notification.user_id == user_id).first() is not None or
+        db.query(models_video_call.VideoCall).filter(models_video_call.VideoCall.created_by_id == user_id).first() is not None or
+        db.query(models_message_reaction.MessageReaction).filter(models_message_reaction.MessageReaction.user_id == user_id).first() is not None or
+        db.query(models_comment.Comment).filter(models_comment.Comment.user_id == user_id).first() is not None or
+        db.query(models_message_template.MessageTemplate).filter(models_message_template.MessageTemplate.created_by_user_id == user_id).first() is not None or
+        db.query(models_chat_attachment.ChatAttachment).filter(models_chat_attachment.ChatAttachment.uploaded_by == user_id).first() is not None or
+        db.query(models_entity_note.EntityNote).filter(models_entity_note.EntityNote.created_by == user_id).first() is not None or
+        db.query(models_message_mention.MessageMention).filter(models_message_mention.MessageMention.mentioned_user_id == user_id).first() is not None or
+        db.query(models_team_membership.TeamMembership).filter(models_team_membership.TeamMembership.user_id == user_id).first() is not None or
+        db.query(models_internal_chat_message.InternalChatMessage).filter(models_internal_chat_message.InternalChatMessage.sender_id == user_id).first() is not None or
+        db.query(models_chat_message.ChatMessage).filter(models_chat_message.ChatMessage.assignee_id == user_id).first() is not None or
+        db.query(models_conversation_session.ConversationSession).filter(models_conversation_session.ConversationSession.assignee_id == user_id).first() is not None
+    )
+
+    if has_dependencies:
+        # Soft delete - just deactivate
+        user.is_active = False
+        db.commit()
+        return {"success": True, "action": "deactivated"}
+    else:
+        # No dependencies - can safely delete
+        # Delete user settings first
+        db.query(models_user_settings.UserSettings).filter(models_user_settings.UserSettings.user_id == user_id).delete()
+        db.delete(user)
+        db.commit()
+        return {"success": True, "action": "deleted"}

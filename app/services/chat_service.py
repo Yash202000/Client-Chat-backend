@@ -67,7 +67,7 @@ def get_first_message_for_session(db: Session, session_id: str, company_id: int)
         models_chat_message.ChatMessage.company_id == company_id
     ).order_by(models_chat_message.ChatMessage.timestamp).first()
 
-def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCreate, agent_id: int, session_id: str, company_id: int, sender: str, assignee_id: int = None, attachments: list = None):
+def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCreate, agent_id: int, session_id: str, company_id: int, sender: str, assignee_id: int = None, attachments: list = None, options: list = None):
 
     # Get the session to retrieve the contact_id (if available)
     session = db.query(models_conversation_session.ConversationSession).filter(
@@ -112,6 +112,7 @@ def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCr
         contact_id=session.contact_id,  # Can be NULL for anonymous chats
         assignee_id=assignee_id,  # Store the agent/user who sent this message
         attachments=cleaned_attachments,  # Store attachment metadata
+        options=options,  # Store prompt options for message_type='prompt'
         # issue=issue
     )
     db.add(db_message)
