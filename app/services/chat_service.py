@@ -53,8 +53,17 @@ def get_contact_for_session(db: Session, session_id: str, company_id: int):
 
 
 def get_first_message_for_session(db: Session, session_id: str, company_id: int):
+    # First lookup the session by conversation_id to get the actual session.id (bigint)
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+ 
+    if not session:
+        return None
+ 
     return db.query(models_chat_message.ChatMessage).filter(
-        models_chat_message.ChatMessage.session_id == session_id,
+        models_chat_message.ChatMessage.session_id == session.id,
         models_chat_message.ChatMessage.company_id == company_id
     ).order_by(models_chat_message.ChatMessage.timestamp).first()
 

@@ -592,6 +592,7 @@ async def websocket_endpoint(
 
                 user_message = message_data.get('message')
                 sender = message_data.get('sender')
+                option_key = message_data.get('option_key')  # Key for workflow variable (when user selects an option)
                 attachments = message_data.get('attachments', [])  # Get attachments from message
 
                 # Log attachment info
@@ -807,13 +808,14 @@ async def websocket_endpoint(
                             continue
 
                         # 3. Execute the matched workflow with the current state (conversation_id)
-                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s)")
+                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s), option_key={option_key}")
                         execution_result = await workflow_exec_service.execute_workflow(
                             user_message=user_message,
                             conversation_id=session_id,
                             company_id=company_id,
                             workflow=workflow,
-                            attachments=attachments
+                            attachments=attachments,
+                            option_key=option_key
                         )
                     finally:
                         # Turn off typing indicator after workflow/AI processing completes
@@ -838,20 +840,22 @@ async def websocket_endpoint(
 
                     elif execution_result.get("status") == "paused_for_prompt":
                         # The workflow is paused and wants to prompt the user.
-                        # We construct a special message to send to the frontend.
                         prompt_data = execution_result.get("prompt", {})
-                        prompt_message = {
-                            "message": prompt_data.get("text"),
-                            "message_type": "prompt", # A custom type for the frontend to recognize
-                            "options": prompt_data.get("options", []),
-                            "sender": "agent",
-                            "session_id": session_id,
-                            "agent_id": agent_id,
-                            "company_id": company_id,
-                        }
-                        # This message is not saved to the database, it's a transient prompt
-                        await manager.broadcast_to_session(session_id, json.dumps(prompt_message), "agent")
-                        print(f"[websocket_conversations] Broadcasted prompt to session: {session_id}")
+
+                        # Save prompt message to database
+                        prompt_chat_message = schemas_chat_message.ChatMessageCreate(
+                            message=prompt_data.get("text", ""),
+                            message_type="prompt"
+                        )
+                        db_prompt_message = chat_service.create_chat_message(
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                        )
+
+                        # Broadcast message with options for frontend display
+                        message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
+                        message_dict['options'] = prompt_data.get("options", [])
+                        await manager.broadcast_to_session(session_id, json.dumps(message_dict), "agent")
+                        print(f"[websocket_conversations] Saved and broadcasted prompt to session: {session_id}")
 
                     elif execution_result.get("status") == "paused_for_form":
                         form_data = execution_result.get("form", {})
@@ -942,6 +946,7 @@ async def public_websocket_endpoint(
                 continue
             user_message = message_data.get('message')
             sender = message_data.get('sender')
+            option_key = message_data.get('option_key')  # Key for workflow variable (when user selects an option)
             attachments = message_data.get('attachments', [])  # Get attachments from message
 
             # Log attachment info
@@ -1128,9 +1133,9 @@ async def public_websocket_endpoint(
                             # A workflow is already in progress, so we resume it.
                             workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                             if workflow:
-                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s)")
+                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s), option_key={option_key}")
                                  execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
@@ -1158,9 +1163,9 @@ async def public_websocket_endpoint(
                                 workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
 
                             if workflow:
-                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s)")
+                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s), option_key={option_key}")
                                 execution_result = await workflow_exec_service.execute_workflow(
-                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments
+                                    user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
 
                         # If no workflow was found or resumed, fallback to the default agent response
@@ -1266,13 +1271,21 @@ async def public_websocket_endpoint(
                         prompt_data = execution_result.get("prompt", {})
                         prompt_text = prompt_data.get("text", "")
                         options = prompt_data.get("options", [])
-                        prompt_message = {
-                            "message": prompt_text,
-                            "message_type": "prompt",
-                            "options": options,
-                            "sender": "agent",
-                        }
-                        await manager.broadcast_to_session(str(session_id), json.dumps(prompt_message), "agent")
+
+                        # Save prompt message to database
+                        prompt_chat_message = schemas_chat_message.ChatMessageCreate(
+                            message=prompt_text,
+                            message_type="prompt"
+                        )
+                        db_prompt_message = chat_service.create_chat_message(
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                        )
+
+                        # Broadcast message with options for frontend display
+                        message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
+                        message_dict['options'] = options
+                        await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
+                        print(f"[websocket_conversations] PUBLIC: Saved and broadcasted prompt to session: {session_id}")
 
                         # Generate TTS for chat_and_voice mode (prompt)
                         if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and prompt_text:
