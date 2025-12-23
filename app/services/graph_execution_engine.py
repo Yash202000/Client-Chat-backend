@@ -102,6 +102,31 @@ class GraphExecutionEngine:
                 print(f"WARNING: [GraphEngine] Question classifier node '{current_node_id}' did not produce valid result: {result}")
                 return None
 
+        elif node_type in ('foreach_loop', 'while_loop'):
+            # Loop nodes return either:
+            # - {"output": "loop"} to continue iterating (follow 'loop' handle)
+            # - {"output": "exit"} when loop is complete (follow 'exit' handle)
+            if result and 'output' in result:
+                handle_to_find = result['output']  # 'loop' or 'exit'
+                print(f"DEBUG: [GraphEngine] Loop node result: '{handle_to_find}'")
+
+                edge = next(
+                    (e for e in self.edges
+                     if e['source'] == current_node_id
+                     and e.get('sourceHandle') == handle_to_find),
+                    None
+                )
+
+                if edge:
+                    print(f"DEBUG: [GraphEngine] Found edge to '{edge['target']}' via loop handle '{handle_to_find}'.")
+                    return edge['target']
+                else:
+                    print(f"WARNING: [GraphEngine] No edge found for loop handle '{handle_to_find}' from node '{current_node_id}'.")
+                    return None
+            else:
+                print(f"WARNING: [GraphEngine] Loop node '{current_node_id}' did not produce valid result: {result}")
+                return None
+
         elif result and "error" in result:
             print(f"DEBUG: [GraphEngine] Node '{current_node_id}' produced an error. Looking for error path.")
             error_edge = next((edge for edge in self.edges if edge['source'] == current_node_id and edge.get('sourceHandle') == 'error'), None)

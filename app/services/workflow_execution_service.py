@@ -410,6 +410,136 @@ class WorkflowExecutionService:
             print(f"  - Condition evaluated to: {result}")
             return {"output": result}
 
+    def _execute_foreach_loop_node(self, node_data: dict, context: dict, results: dict, node_id: str):
+        """
+        Execute a For Each loop node.
+
+        On first execution: Initialize loop state, check if array is empty.
+        On subsequent executions: Increment index and check if more items.
+
+        Returns:
+            {"output": "loop"} - Continue iterating (body should execute)
+            {"output": "exit"} - Loop complete or empty array
+        """
+        array_source = node_data.get("array_source", "")
+        item_var = node_data.get("item_variable", "item")
+        index_var = node_data.get("index_variable", "index")
+
+        # Context keys for this specific loop instance
+        loop_index_key = f"_loop_{node_id}_index"
+        loop_array_key = f"_loop_{node_id}_array"
+
+        # Check if this is first execution (no index in context yet)
+        if loop_index_key not in context:
+            # First execution - resolve array and initialize
+            resolved_array = self._resolve_placeholders(array_source, context, results)
+
+            # Ensure it's a list
+            if isinstance(resolved_array, str):
+                try:
+                    resolved_array = json.loads(resolved_array)
+                except json.JSONDecodeError:
+                    resolved_array = []
+
+            if not isinstance(resolved_array, list):
+                # Try to convert dict keys to list
+                if isinstance(resolved_array, dict):
+                    resolved_array = list(resolved_array.items())
+                else:
+                    resolved_array = [resolved_array] if resolved_array else []
+
+            # Store array in context for iteration
+            context[loop_array_key] = resolved_array
+
+            if len(resolved_array) == 0:
+                # Empty array - exit immediately
+                print(f"DEBUG: [ForEach] Empty array, exiting loop")
+                return {"output": "exit"}
+
+            # Initialize index to 0
+            context[loop_index_key] = 0
+            context[item_var] = resolved_array[0]
+            context[index_var] = 0
+
+            print(f"DEBUG: [ForEach] Starting loop with {len(resolved_array)} items")
+            print(f"DEBUG: [ForEach] First item: {resolved_array[0]}")
+            return {"output": "loop"}
+
+        else:
+            # Subsequent execution - increment index
+            current_index = context[loop_index_key]
+            array = context[loop_array_key]
+            next_index = current_index + 1
+
+            if next_index >= len(array):
+                # Loop complete - clean up and exit
+                print(f"DEBUG: [ForEach] Loop complete after {len(array)} iterations")
+                del context[loop_index_key]
+                del context[loop_array_key]
+                return {"output": "exit"}
+
+            # Continue to next item
+            context[loop_index_key] = next_index
+            context[item_var] = array[next_index]
+            context[index_var] = next_index
+
+            print(f"DEBUG: [ForEach] Iteration {next_index + 1}/{len(array)}, item: {array[next_index]}")
+            return {"output": "loop"}
+
+    def _execute_while_loop_node(self, node_data: dict, context: dict, results: dict, node_id: str):
+        """
+        Execute a While loop node.
+
+        Evaluates condition(s) and returns 'loop' to continue or 'exit' when false.
+
+        Returns:
+            {"output": "loop"} - Condition is true, continue iterating
+            {"output": "exit"} - Condition is false, exit loop
+        """
+        iteration_key = f"_loop_{node_id}_iteration"
+
+        # Track iteration count (for debugging)
+        if iteration_key not in context:
+            context[iteration_key] = 0
+        else:
+            context[iteration_key] += 1
+
+        iteration = context[iteration_key]
+
+        conditions = node_data.get("conditions", [])
+
+        if conditions and isinstance(conditions, list) and len(conditions) > 0:
+            # Multi-condition: ALL conditions must be true (AND logic)
+            print(f"DEBUG: [While] Iteration {iteration}, evaluating {len(conditions)} conditions")
+
+            all_true = True
+            for idx, condition in enumerate(conditions):
+                variable = condition.get("variable", "")
+                operator = condition.get("operator", "equals")
+                value = condition.get("value", "")
+
+                result = self._evaluate_single_condition(variable, operator, value, context, results)
+                print(f"DEBUG: [While] Condition {idx}: {variable} {operator} {value} = {result}")
+
+                if not result:
+                    all_true = False
+                    break
+
+            if all_true:
+                print(f"DEBUG: [While] All conditions true, continuing loop")
+                return {"output": "loop"}
+            else:
+                print(f"DEBUG: [While] Condition(s) false, exiting loop after {iteration} iterations")
+                del context[iteration_key]
+                return {"output": "exit"}
+
+        else:
+            # No conditions - exit immediately (prevents infinite loop)
+            print(f"DEBUG: [While] No conditions configured, exiting loop")
+            if iteration_key in context:
+                del context[iteration_key]
+            return {"output": "exit"}
+
     async def _execute_http_request_node(self, node_data: dict, context: dict, results: dict):
         url = node_data.get("url", "")
         method = node_data.get("method", "GET").upper()
@@ -651,16 +781,51 @@ class WorkflowExecutionService:
     def _execute_update_context_node(self, node_data: dict, context: dict, results: dict):
         """
         Updates context with new variables or values.
+        Supports both single variable (variable_name/variable_value) and multiple variables (variables dict).
         """
-        variables = node_data.get("variables", {})
-
         updated_vars = {}
-        for var_name, var_value in variables.items():
+
+        # Handle single variable format from frontend (variable_name + variable_value)
+        var_name = node_data.get("variable_name")
+        var_value = node_data.get("variable_value")
+        update_mode = node_data.get("update_mode", "set")
+
+        if var_name:
             # Resolve placeholders in value
-            resolved_value = self._resolve_placeholders(str(var_value), context, results)
-            context[var_name] = resolved_value
-            updated_vars[var_name] = resolved_value
-            print(f"✓ Updated context: {var_name} = {resolved_value}")
+            resolved_value = self._resolve_placeholders(str(var_value) if var_value else "", context, results)
+
+            if update_mode == "append":
+                # Append to existing value (for strings/lists)
+                existing = context.get(var_name, "")
+                if isinstance(existing, list):
+                    if isinstance(resolved_value, list):
+                        context[var_name] = existing + resolved_value
+                    else:
+                        context[var_name] = existing + [resolved_value]
+                else:
+                    context[var_name] = str(existing) + str(resolved_value)
+            elif update_mode == "merge":
+                # Merge for dicts
+                existing = context.get(var_name, {})
+                if isinstance(existing, dict) and isinstance(resolved_value, dict):
+                    existing.update(resolved_value)
+                    context[var_name] = existing
+                else:
+                    context[var_name] = resolved_value
+            else:
+                # Default: set/replace
+                context[var_name] = resolved_value
+
+            updated_vars[var_name] = context[var_name]
+            print(f"✓ Updated context: {var_name} = {context[var_name]} (mode: {update_mode})")
+
+        # Also support legacy variables dict format
+        variables = node_data.get("variables", {})
+        for name, value in variables.items():
+            resolved_value = self._resolve_placeholders(str(value), context, results)
+            context[name] = resolved_value
+            updated_vars[name] = resolved_value
+            print(f"✓ Updated context: {name} = {resolved_value}")
 
         return {
             "output": "Context updated",
@@ -1685,9 +1850,13 @@ Return only valid JSON, nothing else:"""
 
                         # Save to database and broadcast properly formatted message
                         # Handle dict output (e.g., from Listen node with attachments)
-                        message_text = resolved_output
+                        # Ensure message_text is always a string
                         if isinstance(resolved_output, dict):
                             message_text = resolved_output.get("text", str(resolved_output))
+                        elif isinstance(resolved_output, str):
+                            message_text = resolved_output
+                        else:
+                            message_text = str(resolved_output)
                         agent_message = schemas_chat_message.ChatMessageCreate(message=message_text, message_type="message")
                         db_agent_message = chat_service.create_chat_message(
                             self.db, agent_message,
@@ -1791,6 +1960,14 @@ Return only valid JSON, nothing else:"""
                 result = await self._execute_subworkflow_node(
                     node_data, context, results, company_id, workflow_obj, conversation_id, current_depth
                 )
+
+            elif node_type == "foreach_loop":
+                # For Each Loop - iterates over an array
+                result = self._execute_foreach_loop_node(node_data, context, results, current_node_id)
+
+            elif node_type == "while_loop":
+                # While Loop - repeats while condition is true
+                result = self._execute_while_loop_node(node_data, context, results, current_node_id)
 
             results[current_node_id] = result
             last_executed_node_id = current_node_id
