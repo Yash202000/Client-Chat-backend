@@ -39,6 +39,13 @@ def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Check if user account is active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated. Please contact your administrator.",
+        )
+
     # Update user presence status to online
     user_service.update_user_presence(db, user.id, "online")
 

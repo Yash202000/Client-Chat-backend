@@ -7,7 +7,7 @@ import datetime
 from app.core.dependencies import get_db, get_current_active_user, get_current_company, require_permission
 from app.services import chat_service, agent_service, conversation_session_service
 from app.schemas import chat_message as schemas_chat_message, session as schemas_session, conversation_session as schemas_conversation_session
-from app.models import user as models_user, conversation_session as models_conversation_session
+from app.models import user as models_user, conversation_session as models_conversation_session, chat_message as models_chat_message
 
 router = APIRouter()
 
@@ -364,6 +364,18 @@ def reset_widget_workflow(session_id: str, db: Session = Depends(get_db)):
     session.next_step_id = None
     session.context = {}
     session.subworkflow_stack = None
+
+    # Add reset message to database so it persists after refresh
+    reset_message = models_chat_message.ChatMessage(
+        session_id=session.id,
+        agent_id=session.agent_id,
+        company_id=session.company_id,
+        sender="agent",
+        message="Conversation reset. How can I help you?",
+        message_type="message",
+        timestamp=datetime.datetime.utcnow()
+    )
+    db.add(reset_message)
     db.commit()
 
     return {"success": True, "message": "Workflow reset successfully"}
