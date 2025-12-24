@@ -79,5 +79,5 @@ def delete_user(
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account.")
 
-    user_service.delete_user(db, user_id=user_id)
-    return {"ok": True}
+    result = user_service.delete_user(db, user_id=user_id)
+    return {"ok": result["success"], "action": result["action"]}

@@ -7,7 +7,7 @@ import datetime
 from app.core.dependencies import get_db, get_current_active_user, get_current_company, require_permission
 from app.services import chat_service, agent_service, conversation_session_service
 from app.schemas import chat_message as schemas_chat_message, session as schemas_session, conversation_session as schemas_conversation_session
-from app.models import user as models_user, conversation_session as models_conversation_session
+from app.models import user as models_user, conversation_session as models_conversation_session, chat_message as models_chat_message
 
 router = APIRouter()
 
@@ -342,3 +342,40 @@ def update_priority(
     if not session:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"message": "Priority updated successfully", "priority": session.priority}
+
+
+# Public endpoint for widget (no authentication required)
+@router.post("/widget/{session_id}/reset-workflow")
+def reset_widget_workflow(session_id: str, db: Session = Depends(get_db)):
+    """
+    Public endpoint for widget to reset workflow state.
+    Clears workflow_id, next_step_id, context, and subworkflow_stack.
+    This allows the user to start fresh with a new conversation flow.
+    """
+    session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Clear workflow state
+    session.workflow_id = None
+    session.next_step_id = None
+    session.context = {}
+    session.subworkflow_stack = None
+
+    # Add reset message to database so it persists after refresh
+    reset_message = models_chat_message.ChatMessage(
+        session_id=session.id,
+        agent_id=session.agent_id,
+        company_id=session.company_id,
+        sender="agent",
+        message="Conversation reset. How can I help you?",
+        message_type="message",
+        timestamp=datetime.datetime.utcnow()
+    )
+    db.add(reset_message)
+    db.commit()
+
+    return {"success": True, "message": "Workflow reset successfully"}

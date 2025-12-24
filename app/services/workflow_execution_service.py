@@ -1687,6 +1687,34 @@ Return only valid JSON, nothing else:"""
                 print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
                 # Add attachments to context when resuming
                 context["user_attachments"] = attachments or []
+
+                # Validate prompt input if text input was not allowed
+                pending_allow_text = context.get("pending_allow_text_input", True)  # Default True for backward compatibility
+                pending_options = context.get("pending_prompt_options", [])
+
+                if not pending_allow_text and pending_options:
+                    # User must select from options, validate input
+                    input_value = option_key if option_key else user_message
+                    if input_value not in pending_options:
+                        print(f"DEBUG: Invalid prompt input '{input_value}' - not in valid options: {pending_options}")
+                        # Re-send the prompt with validation message
+                        return {
+                            "status": "paused_for_prompt",
+                            "prompt": {
+                                "text": "Please select one of the options below:",
+                                "options": [{"key": opt, "value": opt} for opt in pending_options],
+                                "allow_text_input": False
+                            }
+                        }
+                    else:
+                        # Valid input - clear pending validation data
+                        context.pop("pending_prompt_options", None)
+                        context.pop("pending_allow_text_input", None)
+                else:
+                    # Clear pending validation data (text input was allowed or no options)
+                    context.pop("pending_prompt_options", None)
+                    context.pop("pending_allow_text_input", None)
+
                 # The variable to save was stored in the context before pausing.
                 variable_to_save = context.get("variable_to_save")
                 print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
@@ -1815,11 +1843,18 @@ Return only valid JSON, nothing else:"""
                             for opt in options
                         ]
 
+                allow_text_input = params.get("allow_text_input", False)
+
+                # Store validation data in context for when user responds
+                context["pending_prompt_options"] = [opt.get("key", str(opt)) for opt in options_list]
+                context["pending_allow_text_input"] = allow_text_input
+
                 result = {
                     "status": "paused_for_prompt",
                     "prompt": {
                         "text": params.get("prompt_text", "Please provide input."),
-                        "options": options_list
+                        "options": options_list,
+                        "allow_text_input": allow_text_input
                     }
                 }
             

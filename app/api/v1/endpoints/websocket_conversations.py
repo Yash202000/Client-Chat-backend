@@ -841,19 +841,22 @@ async def websocket_endpoint(
                     elif execution_result.get("status") == "paused_for_prompt":
                         # The workflow is paused and wants to prompt the user.
                         prompt_data = execution_result.get("prompt", {})
+                        options = prompt_data.get("options", [])
+                        allow_text_input = prompt_data.get("allow_text_input", False)
 
-                        # Save prompt message to database
+                        # Save prompt message to database (including options for history)
                         prompt_chat_message = schemas_chat_message.ChatMessageCreate(
                             message=prompt_data.get("text", ""),
                             message_type="prompt"
                         )
                         db_prompt_message = chat_service.create_chat_message(
-                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None, options=options
                         )
 
-                        # Broadcast message with options for frontend display
+                        # Broadcast message with options and allow_text_input for frontend display
                         message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
-                        message_dict['options'] = prompt_data.get("options", [])
+                        message_dict['options'] = options
+                        message_dict['allow_text_input'] = allow_text_input
                         await manager.broadcast_to_session(session_id, json.dumps(message_dict), "agent")
                         print(f"[websocket_conversations] Saved and broadcasted prompt to session: {session_id}")
 
@@ -918,6 +921,31 @@ async def public_websocket_endpoint(
             return
 
     await manager.connect(websocket, session_id, user_type)
+
+    # Send message history for existing sessions (user reconnection)
+    if user_type == "user":
+        with get_db_session() as db:
+            # Check if session exists
+            existing_session = db.query(models_conversation_session.ConversationSession).filter(
+                models_conversation_session.ConversationSession.conversation_id == session_id,
+                models_conversation_session.ConversationSession.company_id == company_id
+            ).first()
+
+            if existing_session:
+                # Fetch last 20 messages for this session
+                history_messages = chat_service.get_chat_messages(
+                    db, agent_id, session_id, company_id, limit=20
+                )
+                if history_messages:
+                    history_payload = {
+                        "type": "history",
+                        "messages": [
+                            schemas_chat_message.ChatMessage.model_validate(msg).model_dump(mode='json')
+                            for msg in history_messages
+                        ]
+                    }
+                    await websocket.send_text(json.dumps(history_payload))
+                    print(f"[websocket] Sent {len(history_messages)} history messages to session {session_id}")
 
     # Update session status to active when user connects
     if user_type == "user":
@@ -1271,19 +1299,21 @@ async def public_websocket_endpoint(
                         prompt_data = execution_result.get("prompt", {})
                         prompt_text = prompt_data.get("text", "")
                         options = prompt_data.get("options", [])
+                        allow_text_input = prompt_data.get("allow_text_input", False)
 
-                        # Save prompt message to database
+                        # Save prompt message to database (including options for history)
                         prompt_chat_message = schemas_chat_message.ChatMessageCreate(
                             message=prompt_text,
                             message_type="prompt"
                         )
                         db_prompt_message = chat_service.create_chat_message(
-                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None
+                            db, prompt_chat_message, agent_id, session_id, company_id, "agent", assignee_id=None, options=options
                         )
 
-                        # Broadcast message with options for frontend display
+                        # Broadcast message with options and allow_text_input for frontend display
                         message_dict = schemas_chat_message.ChatMessage.model_validate(db_prompt_message).model_dump(mode='json')
                         message_dict['options'] = options
+                        message_dict['allow_text_input'] = allow_text_input
                         await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
                         print(f"[websocket_conversations] PUBLIC: Saved and broadcasted prompt to session: {session_id}")
 

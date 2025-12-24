@@ -9,6 +9,7 @@ class ChatMessageBase(BaseModel):
 class ChatMessageCreate(ChatMessageBase):
     token: Optional[str] = None
     attachments: Optional[List[Dict[str, Any]]] = None  # Attachment metadata
+    options: Optional[List[Dict[str, Any]]] = None  # Prompt options for message_type='prompt'
 
 class ChatMessage(ChatMessageBase):
     id: int
@@ -26,6 +27,7 @@ class ChatMessage(ChatMessageBase):
     feedback_notes: Optional[str] = None
     issue: Optional[str] = None
     attachments: Optional[List[Dict[str, Any]]] = None  # Attachment metadata (file_name, file_url, file_type, file_size, location)
+    options: Optional[List[Dict[str, Any]]] = None  # Prompt options for message_type='prompt'
 
     model_config = {
         "from_attributes": True
