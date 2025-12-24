@@ -1848,11 +1848,14 @@ Return only valid JSON, nothing else:"""
                 # Store validation data in context for when user responds
                 context["pending_prompt_options"] = [opt.get("key", str(opt)) for opt in options_list]
                 context["pending_allow_text_input"] = allow_text_input
+                
+                prompt_text = params.get("prompt_text", "Please provide input.")
+                resolved_prompt_text = self._resolve_placeholders(prompt_text, context, results)
 
                 result = {
                     "status": "paused_for_prompt",
                     "prompt": {
-                        "text": params.get("prompt_text", "Please provide input."),
+                        "text": resolved_prompt_text,
                         "options": options_list,
                         "allow_text_input": allow_text_input
                     }
@@ -1860,10 +1863,14 @@ Return only valid JSON, nothing else:"""
             
             elif node_type == "form":
                 params = node_data.get("params", {})
+
+                form_title = params.get("title", "Please fill out this form.")
+                resolved_form_title = self._resolve_placeholders(form_title, context, results)
+
                 result = {
                     "status": "paused_for_form",
                     "form": {
-                        "title": params.get("title", "Please fill out this form."),
+                        "title": resolved_form_title,
                         "fields": params.get("fields", [])
                     }
                 }
