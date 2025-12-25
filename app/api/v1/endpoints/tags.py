@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import tag as schemas_tag
 from app.models import user as models_user
 from app.models.tag import Tag, lead_tags, contact_tags
@@ -13,7 +13,7 @@ from app.models.contact import Contact
 router = APIRouter()
 
 
-@router.get("/", response_model=schemas_tag.TagList)
+@router.get("/", response_model=schemas_tag.TagList, dependencies=[Depends(require_permission("tag:read"))])
 def list_tags(
     entity_type: Optional[str] = None,
     search: Optional[str] = None,
@@ -64,7 +64,7 @@ def list_tags(
     return schemas_tag.TagList(tags=tags_with_counts, total=total)
 
 
-@router.post("/", response_model=schemas_tag.Tag)
+@router.post("/", response_model=schemas_tag.Tag, dependencies=[Depends(require_permission("tag:create"))])
 def create_tag(
     tag_data: schemas_tag.TagCreate,
     db: Session = Depends(get_db),
@@ -95,7 +95,7 @@ def create_tag(
     return tag
 
 
-@router.get("/{tag_id}", response_model=schemas_tag.TagWithCounts)
+@router.get("/{tag_id}", response_model=schemas_tag.TagWithCounts, dependencies=[Depends(require_permission("tag:read"))])
 def get_tag(
     tag_id: int,
     db: Session = Depends(get_db),
@@ -134,7 +134,7 @@ def get_tag(
     )
 
 
-@router.put("/{tag_id}", response_model=schemas_tag.Tag)
+@router.put("/{tag_id}", response_model=schemas_tag.Tag, dependencies=[Depends(require_permission("tag:update"))])
 def update_tag(
     tag_id: int,
     tag_data: schemas_tag.TagUpdate,
@@ -171,7 +171,7 @@ def update_tag(
     return tag
 
 
-@router.delete("/{tag_id}")
+@router.delete("/{tag_id}", dependencies=[Depends(require_permission("tag:delete"))])
 def delete_tag(
     tag_id: int,
     db: Session = Depends(get_db),
@@ -193,7 +193,7 @@ def delete_tag(
     return {"message": "Tag deleted successfully"}
 
 
-@router.post("/{tag_id}/assign")
+@router.post("/{tag_id}/assign", dependencies=[Depends(require_permission("tag:update"))])
 def assign_tag(
     tag_id: int,
     assign_data: schemas_tag.TagAssign,
@@ -244,7 +244,7 @@ def assign_tag(
     }
 
 
-@router.post("/{tag_id}/unassign")
+@router.post("/{tag_id}/unassign", dependencies=[Depends(require_permission("tag:update"))])
 def unassign_tag(
     tag_id: int,
     assign_data: schemas_tag.TagAssign,

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import campaign_service, campaign_execution_service, campaign_analytics_service
 from app.schemas import campaign as schemas_campaign
 from app.schemas.campaign_message import CampaignMessageCreate, CampaignMessageUpdate, CampaignMessage
@@ -18,7 +18,7 @@ router = APIRouter()
 # Campaign CRUD
 
 
-@router.get("/", response_model=List[schemas_campaign.Campaign])
+@router.get("/", response_model=List[schemas_campaign.Campaign], dependencies=[Depends(require_permission("campaign:read"))])
 def list_campaigns(
     skip: int = 0,
     limit: int = 100,
@@ -64,7 +64,7 @@ def list_campaigns(
     return campaigns
 
 
-@router.get("/active", response_model=List[schemas_campaign.Campaign])
+@router.get("/active", response_model=List[schemas_campaign.Campaign], dependencies=[Depends(require_permission("campaign:read"))])
 def get_active_campaigns(
     skip: int = 0,
     limit: int = 100,
@@ -82,7 +82,7 @@ def get_active_campaigns(
     return campaigns
 
 
-@router.get("/{campaign_id}", response_model=schemas_campaign.Campaign)
+@router.get("/{campaign_id}", response_model=schemas_campaign.Campaign, dependencies=[Depends(require_permission("campaign:read"))])
 def get_campaign(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -101,7 +101,7 @@ def get_campaign(
     return campaign
 
 
-@router.post("/", response_model=schemas_campaign.Campaign)
+@router.post("/", response_model=schemas_campaign.Campaign, dependencies=[Depends(require_permission("campaign:create"))])
 def create_campaign(
     campaign: schemas_campaign.CampaignCreate,
     db: Session = Depends(get_db),
@@ -118,7 +118,7 @@ def create_campaign(
     )
 
 
-@router.put("/{campaign_id}", response_model=schemas_campaign.Campaign)
+@router.put("/{campaign_id}", response_model=schemas_campaign.Campaign, dependencies=[Depends(require_permission("campaign:update"))])
 def update_campaign(
     campaign_id: int,
     campaign: schemas_campaign.CampaignUpdate,
@@ -139,7 +139,7 @@ def update_campaign(
     return updated
 
 
-@router.delete("/{campaign_id}")
+@router.delete("/{campaign_id}", dependencies=[Depends(require_permission("campaign:delete"))])
 def delete_campaign(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -161,7 +161,7 @@ def delete_campaign(
 # Campaign Messages
 
 
-@router.get("/{campaign_id}/messages", response_model=List[CampaignMessage])
+@router.get("/{campaign_id}/messages", response_model=List[CampaignMessage], dependencies=[Depends(require_permission("campaign:read"))])
 def list_campaign_messages(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -176,7 +176,7 @@ def list_campaign_messages(
     return campaign.messages
 
 
-@router.post("/{campaign_id}/messages", response_model=CampaignMessage)
+@router.post("/{campaign_id}/messages", response_model=CampaignMessage, dependencies=[Depends(require_permission("campaign:update"))])
 def create_campaign_message(
     campaign_id: int,
     message: CampaignMessageCreate,
@@ -199,7 +199,7 @@ def create_campaign_message(
     return db_message
 
 
-@router.put("/{campaign_id}/messages/{message_id}", response_model=CampaignMessage)
+@router.put("/{campaign_id}/messages/{message_id}", response_model=CampaignMessage, dependencies=[Depends(require_permission("campaign:update"))])
 def update_campaign_message(
     campaign_id: int,
     message_id: int,
@@ -236,7 +236,7 @@ def update_campaign_message(
     return db_message
 
 
-@router.delete("/{campaign_id}/messages/{message_id}")
+@router.delete("/{campaign_id}/messages/{message_id}", dependencies=[Depends(require_permission("campaign:update"))])
 def delete_campaign_message(
     campaign_id: int,
     message_id: int,
@@ -270,7 +270,7 @@ def delete_campaign_message(
 # Campaign Contacts/Enrollment
 
 
-@router.get("/{campaign_id}/contacts", response_model=List[CampaignContact])
+@router.get("/{campaign_id}/contacts", response_model=List[CampaignContact], dependencies=[Depends(require_permission("campaign:read"))])
 def list_campaign_contacts(
     campaign_id: int,
     status: Optional[str] = None,
@@ -299,7 +299,7 @@ def list_campaign_contacts(
     )
 
 
-@router.post("/{campaign_id}/enroll")
+@router.post("/{campaign_id}/enroll", dependencies=[Depends(require_permission("campaign:update"))])
 def enroll_contacts_in_campaign(
     campaign_id: int,
     enrollment_request: schemas_campaign.CampaignEnrollmentRequest,
@@ -329,7 +329,7 @@ def enroll_contacts_in_campaign(
     }
 
 
-@router.post("/{campaign_id}/enroll-from-criteria")
+@router.post("/{campaign_id}/enroll-from-criteria", dependencies=[Depends(require_permission("campaign:update"))])
 def enroll_from_targeting_criteria(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -394,7 +394,7 @@ def enroll_from_targeting_criteria(
     }
 
 
-@router.post("/{campaign_id}/contacts/{contact_id}/unenroll")
+@router.post("/{campaign_id}/contacts/{contact_id}/unenroll", dependencies=[Depends(require_permission("campaign:update"))])
 def unenroll_contact(
     campaign_id: int,
     contact_id: int,
@@ -422,7 +422,7 @@ def unenroll_contact(
 # Campaign Execution
 
 
-@router.post("/{campaign_id}/start")
+@router.post("/{campaign_id}/start", dependencies=[Depends(require_permission("campaign:update"))])
 async def start_campaign(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -482,7 +482,7 @@ async def start_campaign(
     return {"success": success, "status": "active"}
 
 
-@router.post("/{campaign_id}/pause")
+@router.post("/{campaign_id}/pause", dependencies=[Depends(require_permission("campaign:update"))])
 def pause_campaign(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -503,7 +503,7 @@ def pause_campaign(
     return {"success": True, "status": campaign.status.value}
 
 
-@router.post("/{campaign_id}/resume")
+@router.post("/{campaign_id}/resume", dependencies=[Depends(require_permission("campaign:update"))])
 def resume_campaign(
     campaign_id: int,
     background_tasks: BackgroundTasks,
@@ -533,7 +533,7 @@ def resume_campaign(
     return {"success": True, "status": campaign.status.value}
 
 
-@router.post("/{campaign_id}/relaunch")
+@router.post("/{campaign_id}/relaunch", dependencies=[Depends(require_permission("campaign:update"))])
 async def relaunch_campaign(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -587,7 +587,7 @@ async def relaunch_campaign(
 # Campaign Analytics
 
 
-@router.get("/{campaign_id}/analytics/performance")
+@router.get("/{campaign_id}/analytics/performance", dependencies=[Depends(require_permission("campaign:read"))])
 def get_campaign_performance(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -608,7 +608,7 @@ def get_campaign_performance(
     return metrics
 
 
-@router.get("/{campaign_id}/analytics/funnel")
+@router.get("/{campaign_id}/analytics/funnel", dependencies=[Depends(require_permission("campaign:read"))])
 def get_campaign_funnel(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -626,7 +626,7 @@ def get_campaign_funnel(
     return {"campaign_id": campaign_id, "funnel": funnel}
 
 
-@router.get("/{campaign_id}/analytics/messages")
+@router.get("/{campaign_id}/analytics/messages", dependencies=[Depends(require_permission("campaign:read"))])
 def get_message_performance(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -644,7 +644,7 @@ def get_message_performance(
     return {"campaign_id": campaign_id, "messages": performance}
 
 
-@router.get("/{campaign_id}/analytics/time-series")
+@router.get("/{campaign_id}/analytics/time-series", dependencies=[Depends(require_permission("campaign:read"))])
 def get_time_series_metrics(
     campaign_id: int,
     metric: str = "conversions",
@@ -676,7 +676,7 @@ def get_time_series_metrics(
 # CRM Analytics
 
 
-@router.get("/analytics/pipeline")
+@router.get("/analytics/pipeline", dependencies=[Depends(require_permission("campaign:read"))])
 def get_pipeline_metrics(
     date_range_days: Optional[int] = 30,
     db: Session = Depends(get_db),
@@ -692,7 +692,7 @@ def get_pipeline_metrics(
     )
 
 
-@router.post("/analytics/compare")
+@router.post("/analytics/compare", dependencies=[Depends(require_permission("campaign:read"))])
 def compare_campaigns(
     campaign_ids: List[int],
     db: Session = Depends(get_db),
@@ -710,7 +710,7 @@ def compare_campaigns(
     return {"campaigns": comparison}
 
 
-@router.get("/by-type/{campaign_type}", response_model=List[schemas_campaign.Campaign])
+@router.get("/by-type/{campaign_type}", response_model=List[schemas_campaign.Campaign], dependencies=[Depends(require_permission("campaign:read"))])
 def get_campaigns_by_type(
     campaign_type: str,
     skip: int = 0,
@@ -731,7 +731,7 @@ def get_campaigns_by_type(
     return campaigns
 
 
-@router.post("/{campaign_id}/clone", response_model=schemas_campaign.Campaign)
+@router.post("/{campaign_id}/clone", response_model=schemas_campaign.Campaign, dependencies=[Depends(require_permission("campaign:create"))])
 def clone_campaign(
     campaign_id: int,
     new_name: Optional[str] = None,
@@ -810,7 +810,7 @@ def clone_campaign(
     return cloned_campaign
 
 
-@router.get("/{campaign_id}/summary")
+@router.get("/{campaign_id}/summary", dependencies=[Depends(require_permission("campaign:read"))])
 def get_campaign_summary(
     campaign_id: int,
     db: Session = Depends(get_db),
@@ -864,7 +864,7 @@ def get_campaign_summary(
     }
 
 
-@router.post("/{campaign_id}/test-send")
+@router.post("/{campaign_id}/test-send", dependencies=[Depends(require_permission("campaign:update"))])
 def test_campaign_send(
     campaign_id: int,
     test_contact_id: int,

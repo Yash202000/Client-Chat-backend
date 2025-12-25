@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Optional
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import template as schemas_template
 from app.models import user as models_user
 from app.models.template import Template, TemplateType
@@ -11,7 +11,7 @@ from app.models.template import Template, TemplateType
 router = APIRouter()
 
 
-@router.get("", response_model=schemas_template.TemplateList)
+@router.get("", response_model=schemas_template.TemplateList, dependencies=[Depends(require_permission("email_template:read"))])
 def list_templates(
     search: Optional[str] = None,
     template_type: Optional[str] = None,
@@ -60,7 +60,7 @@ def list_templates(
     )
 
 
-@router.post("", response_model=schemas_template.Template)
+@router.post("", response_model=schemas_template.Template, dependencies=[Depends(require_permission("email_template:create"))])
 def create_template(
     template_data: schemas_template.TemplateCreate,
     db: Session = Depends(get_db),
@@ -94,7 +94,7 @@ def create_template(
     return template
 
 
-@router.get("/{template_id}", response_model=schemas_template.Template)
+@router.get("/{template_id}", response_model=schemas_template.Template, dependencies=[Depends(require_permission("email_template:read"))])
 def get_template(
     template_id: int,
     db: Session = Depends(get_db),
@@ -114,7 +114,7 @@ def get_template(
     return template
 
 
-@router.put("/{template_id}", response_model=schemas_template.Template)
+@router.put("/{template_id}", response_model=schemas_template.Template, dependencies=[Depends(require_permission("email_template:update"))])
 def update_template(
     template_id: int,
     template_data: schemas_template.TemplateUpdate,
@@ -147,7 +147,7 @@ def update_template(
     return template
 
 
-@router.delete("/{template_id}")
+@router.delete("/{template_id}", dependencies=[Depends(require_permission("email_template:delete"))])
 def delete_template(
     template_id: int,
     db: Session = Depends(get_db),
@@ -170,7 +170,7 @@ def delete_template(
     return {"message": "Template deleted successfully"}
 
 
-@router.post("/{template_id}/duplicate", response_model=schemas_template.Template)
+@router.post("/{template_id}/duplicate", response_model=schemas_template.Template, dependencies=[Depends(require_permission("email_template:create"))])
 def duplicate_template(
     template_id: int,
     duplicate_data: schemas_template.TemplateDuplicate,
@@ -214,7 +214,7 @@ def duplicate_template(
     return duplicate
 
 
-@router.get("/types/available")
+@router.get("/types/available", dependencies=[Depends(require_permission("email_template:read"))])
 def get_available_types(
     current_user: models_user.User = Depends(get_current_active_user)
 ):
@@ -231,7 +231,7 @@ def get_available_types(
     }
 
 
-@router.get("/tokens/available")
+@router.get("/tokens/available", dependencies=[Depends(require_permission("email_template:read"))])
 def get_available_tokens(
     current_user: models_user.User = Depends(get_current_active_user)
 ):

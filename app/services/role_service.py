@@ -75,6 +75,46 @@ PERMISSIONS = {
     "image:read": "View AI image gallery",
     "image:update": "Update AI images",
     "image:delete": "Delete AI images",
+    # CRM - Leads
+    "lead:create": "Create leads",
+    "lead:read": "Read leads",
+    "lead:update": "Update leads",
+    "lead:delete": "Delete leads",
+    # CRM - Contacts
+    "contact:create": "Create contacts",
+    "contact:read": "Read contacts",
+    "contact:update": "Update contacts",
+    "contact:delete": "Delete contacts",
+    # CRM - Campaigns
+    "campaign:create": "Create campaigns",
+    "campaign:read": "Read campaigns",
+    "campaign:update": "Update campaigns",
+    "campaign:delete": "Delete campaigns",
+    # CRM - Tags
+    "tag:create": "Create tags",
+    "tag:read": "Read tags",
+    "tag:update": "Update tags",
+    "tag:delete": "Delete tags",
+    # CRM - Segments
+    "segment:create": "Create segments",
+    "segment:read": "Read segments",
+    "segment:update": "Update segments",
+    "segment:delete": "Delete segments",
+    # CRM - Email Templates
+    "email_template:create": "Create email templates",
+    "email_template:read": "Read email templates",
+    "email_template:update": "Update email templates",
+    "email_template:delete": "Delete email templates",
+    # Message Templates
+    "message_template:create": "Create message templates",
+    "message_template:read": "Read message templates",
+    "message_template:update": "Update message templates",
+    "message_template:delete": "Delete message templates",
+    # Companies Management (Super Admin)
+    "company:create": "Create companies",
+    "company:read": "Read companies",
+    "company:update": "Update companies",
+    "company:delete": "Delete companies",
 }
 
 def get_role(db: Session, role_id: int, company_id: int = None):
@@ -146,31 +186,37 @@ def create_global_permissions_and_super_admin(db: Session):
     """
     Creates all permissions and the Super Admin role.
     This should be run once on application startup.
+    Also updates Super Admin with any new permissions.
     """
     # Create permissions if they don't exist
+    new_permissions_added = False
     for name, desc in PERMISSIONS.items():
         db_perm = db.query(models_permission.Permission).filter_by(name=name).first()
         if not db_perm:
             db_perm = models_permission.Permission(name=name, description=desc)
             db.add(db_perm)
+            new_permissions_added = True
     db.commit()
 
-    # Create Super Admin role
+    # Create or update Super Admin role
     super_admin_role = get_role_by_name(db, "Super Admin")
     if not super_admin_role:
         super_admin_role = create_role(db, schemas_role.RoleCreate(name="Super Admin", description="Has all permissions"), company_id=None)
-        
-        # Assign all permissions to Super Admin
-        all_permissions = db.query(models_permission.Permission).all()
-        permission_ids = [p.id for p in all_permissions]
-        assign_permissions_to_role(db, role_id=super_admin_role.id, permission_ids=permission_ids)
+
+    # Always assign all permissions to Super Admin (in case new ones were added)
+    all_permissions = db.query(models_permission.Permission).all()
+    permission_ids = [p.id for p in all_permissions]
+    assign_permissions_to_role(db, role_id=super_admin_role.id, permission_ids=permission_ids)
+
+    if new_permissions_added:
+        print(f"[Startup] Added new permissions and updated Super Admin role")
 
 def create_initial_roles_for_company(db: Session, company_id: int):
     """
     Creates the initial roles for a new company.
     """
     roles_to_permissions = {
-        "Admin": [p for p in PERMISSIONS.keys() if p not in ["client:read_dashboard"]],
+        "Admin": [p for p in PERMISSIONS.keys() if p not in ["client:read_dashboard", "company:create", "company:read", "company:update", "company:delete"]],
         "Agent Builder": [
             "agent:create", "agent:read", "agent:update", "agent:delete",
             "workflow:create", "workflow:read", "workflow:update", "workflow:delete",
@@ -180,11 +226,28 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             "voice:create", "voice:read", "voice:update", "voice:delete",
             "chat:read", "chat:create",
             "ai-chat:read",
-            "image:create", "image:read"
+            "image:create", "image:read",
+            # CRM permissions (limited)
+            "lead:read", "lead:create", "lead:update",
+            "contact:read", "contact:create", "contact:update",
+            "campaign:read",
+            "tag:read",
+            "segment:read",
+            "email_template:read",
+            # Message Templates
+            "message_template:read", "message_template:create",
         ],
         "Analyst": [
             "agent:read", "workflow:read", "analytics:read",
-            "conversation:read"
+            "conversation:read",
+            # CRM read-only permissions
+            "lead:read",
+            "contact:read",
+            "campaign:read",
+            "tag:read",
+            "segment:read",
+            "email_template:read",
+            "message_template:read",
         ],
         "Client": [
             "client:read_dashboard", "agent:read"
@@ -195,8 +258,9 @@ def create_initial_roles_for_company(db: Session, company_id: int):
         db_role = get_role_by_name(db, name, company_id)
         if not db_role:
             db_role = create_role(db, schemas_role.RoleCreate(name=name, description=f"The {name} role"), company_id=company_id)
-            
-            permissions = db.query(models_permission.Permission).filter(models_permission.Permission.name.in_(perm_names)).all()
-            permission_ids = [p.id for p in permissions]
-            assign_permissions_to_role(db, role_id=db_role.id, permission_ids=permission_ids)
+
+        # Always update permissions (in case new ones were added)
+        permissions = db.query(models_permission.Permission).filter(models_permission.Permission.name.in_(perm_names)).all()
+        permission_ids = [p.id for p in permissions]
+        assign_permissions_to_role(db, role_id=db_role.id, permission_ids=permission_ids)
 

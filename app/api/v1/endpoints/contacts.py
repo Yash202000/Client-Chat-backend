@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import contact_service
 from app.schemas import contact as schemas_contact
 from app.models import conversation_session as models_conversation_session
@@ -10,7 +10,7 @@ from app.models import user as models_user
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas_contact.Contact])
+@router.get("/", response_model=List[schemas_contact.Contact], dependencies=[Depends(require_permission("contact:read"))])
 def read_contacts(
     skip: int = 0,
     limit: int = 100,
@@ -43,7 +43,7 @@ def read_contacts(
         result.append(contact_dict)
     return result
 
-@router.get("/{contact_id}", response_model=schemas_contact.Contact)
+@router.get("/{contact_id}", response_model=schemas_contact.Contact, dependencies=[Depends(require_permission("contact:read"))])
 def read_contact(
     contact_id: int,
     db: Session = Depends(get_db),
@@ -54,7 +54,7 @@ def read_contact(
         raise HTTPException(status_code=404, detail="Contact not found")
     return db_contact
 
-@router.put("/{contact_id}", response_model=schemas_contact.Contact)
+@router.put("/{contact_id}", response_model=schemas_contact.Contact, dependencies=[Depends(require_permission("contact:update"))])
 def update_contact(
     contact_id: int,
     contact: schemas_contact.ContactUpdate,
@@ -63,7 +63,7 @@ def update_contact(
 ):
     return contact_service.update_contact(db=db, contact_id=contact_id, contact=contact, company_id=current_user.company_id)
 
-@router.get("/by_session/{session_id}", response_model=Optional[schemas_contact.Contact])
+@router.get("/by_session/{session_id}", response_model=Optional[schemas_contact.Contact], dependencies=[Depends(require_permission("contact:read"))])
 def get_contact_by_session(
     session_id: str,
     db: Session = Depends(get_db),
