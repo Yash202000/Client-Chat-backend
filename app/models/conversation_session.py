@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, JSON, ForeignKey, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, JSON, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 import datetime
@@ -34,6 +34,10 @@ class ConversationSession(Base):
 
     # Subworkflow execution state
     subworkflow_stack = Column(JSON, nullable=True)  # Stack for nested subworkflow execution
+
+    # AI-generated conversation summary
+    summary = Column(Text, nullable=True)  # AI-generated summary of the conversation
+    summary_generated_at = Column(DateTime, nullable=True)  # When summary was last generated
 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

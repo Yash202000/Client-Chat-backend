@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import datetime
 
 from app.core.dependencies import get_db, get_current_active_user, get_current_company, require_permission
-from app.services import chat_service, agent_service, conversation_session_service
+from app.services import chat_service, agent_service, conversation_session_service, summary_service
 from app.schemas import chat_message as schemas_chat_message, session as schemas_session, conversation_session as schemas_conversation_session
 from app.models import user as models_user, conversation_session as models_conversation_session, chat_message as models_chat_message
 
@@ -156,6 +156,57 @@ def get_all_sessions(
             priority=s.priority
         ))
     return sessions
+
+
+# Summary endpoints - must be defined BEFORE /{agent_id}/{session_id} routes to avoid route conflicts
+@router.get("/{session_id}/summary", response_model=schemas_conversation_session.ConversationSummaryResponse, dependencies=[Depends(require_permission("conversation:read"))])
+def get_conversation_summary(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Get the existing summary for a conversation session.
+    Returns summary text, generation timestamp, and whether a summary exists.
+    """
+    result = summary_service.get_session_summary(
+        db=db,
+        session_id=session_id,
+        company_id=current_user.company_id
+    )
+    return schemas_conversation_session.ConversationSummaryResponse(
+        summary=result["summary"],
+        generated_at=result["generated_at"],
+        exists=result["exists"]
+    )
+
+
+@router.post("/{session_id}/summary", response_model=schemas_conversation_session.ConversationSummaryResponse, dependencies=[Depends(require_permission("conversation:read"))])
+async def generate_conversation_summary_endpoint(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Generate a new AI summary for a conversation session.
+    Uses the session's agent LLM or company's first agent as fallback.
+    """
+    try:
+        summary = await summary_service.generate_conversation_summary(
+            db=db,
+            session_id=session_id,
+            company_id=current_user.company_id
+        )
+        return schemas_conversation_session.ConversationSummaryResponse(
+            summary=summary,
+            generated_at=datetime.datetime.utcnow(),
+            exists=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate summary: {str(e)}")
+
 
 @router.get("/{agent_id}/sessions", response_model=List[schemas_session.Session], deprecated=True, dependencies=[Depends(require_permission("conversation:read"))])
 def get_sessions_by_agent(agent_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
