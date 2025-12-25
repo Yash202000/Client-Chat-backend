@@ -43,6 +43,7 @@ class Agent(Base):
     webhooks = relationship("Webhook", back_populates="agent")
     workflows = relationship("Workflow", back_populates="agent")
     widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")
+    published_settings = relationship("PublishedWidgetSettings", uselist=False, back_populates="agent")
     parent_version = relationship("Agent", remote_side=[id])
     campaigns = relationship("Campaign", back_populates="agent")
     voice_id = Column(String, nullable=True, default='default')

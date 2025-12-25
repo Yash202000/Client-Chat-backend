@@ -21,20 +21,71 @@ def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):
 def update_widget_settings(agent_id: int, widget_settings: schemas_widget_settings.WidgetSettingsUpdate, db: Session = Depends(get_db)):
     return widget_settings_service.update_widget_settings(db, agent_id=agent_id, widget_settings=widget_settings)
 
-@router.post("/{agent_id}/publish", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("agent:update"))])
+@router.post("/{agent_id}/publish", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("agent:update"))])
 def publish_agent_settings(
     agent_id: int,
     settings: dict,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    # Optional: Add validation to ensure the agent belongs to the user's company
+    """Publish or update agent widget settings. Same agent always gets the same publish URL."""
     db_agent = agent_service.get_agent(db, agent_id=agent_id, company_id=current_user.company_id)
     if not db_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    published_settings = crud_published_widget_settings.create_published_widget_settings(db, settings=settings)
-    return {"publish_id": published_settings.publish_id}
+    published_settings, is_new = crud_published_widget_settings.create_or_update(db, agent_id=agent_id, settings=settings)
+    return {
+        "publish_id": published_settings.publish_id,
+        "is_new": is_new,
+        "is_active": published_settings.is_active
+    }
+
+
+@router.post("/{agent_id}/unpublish", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("agent:update"))])
+def unpublish_agent_settings(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Unpublish agent widget - disables public access but keeps the publish_id for re-publishing."""
+    db_agent = agent_service.get_agent(db, agent_id=agent_id, company_id=current_user.company_id)
+    if not db_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    result = crud_published_widget_settings.set_active_status(db, agent_id=agent_id, is_active=False)
+    if not result:
+        raise HTTPException(status_code=404, detail="Agent has not been published yet")
+
+    return {"success": True, "message": "Agent unpublished successfully"}
+
+
+@router.get("/{agent_id}/publish-status", dependencies=[Depends(require_permission("agent:read"))])
+def get_publish_status(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Get the publish status for an agent."""
+    db_agent = agent_service.get_agent(db, agent_id=agent_id, company_id=current_user.company_id)
+    if not db_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    published = crud_published_widget_settings.get_by_agent_id(db, agent_id=agent_id)
+
+    if not published:
+        return {
+            "is_published": False,
+            "publish_id": None,
+            "is_active": False
+        }
+
+    return {
+        "is_published": True,
+        "publish_id": published.publish_id,
+        "is_active": published.is_active,
+        "created_at": published.created_at,
+        "updated_at": published.updated_at
+    }
 
 @router.post("/", response_model=schemas_agent.Agent, dependencies=[Depends(require_permission("agent:create"))])
 def create_agent(agent: schemas_agent.AgentCreate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
