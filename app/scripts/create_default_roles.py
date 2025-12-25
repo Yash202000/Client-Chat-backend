@@ -78,6 +78,46 @@ PERMISSIONS = {
     "image:read": "View AI image gallery",
     "image:update": "Update AI images",
     "image:delete": "Delete AI images",
+    # CRM - Leads
+    "lead:create": "Create leads",
+    "lead:read": "Read leads",
+    "lead:update": "Update leads",
+    "lead:delete": "Delete leads",
+    # CRM - Contacts
+    "contact:create": "Create contacts",
+    "contact:read": "Read contacts",
+    "contact:update": "Update contacts",
+    "contact:delete": "Delete contacts",
+    # CRM - Campaigns
+    "campaign:create": "Create campaigns",
+    "campaign:read": "Read campaigns",
+    "campaign:update": "Update campaigns",
+    "campaign:delete": "Delete campaigns",
+    # CRM - Tags
+    "tag:create": "Create tags",
+    "tag:read": "Read tags",
+    "tag:update": "Update tags",
+    "tag:delete": "Delete tags",
+    # CRM - Segments
+    "segment:create": "Create segments",
+    "segment:read": "Read segments",
+    "segment:update": "Update segments",
+    "segment:delete": "Delete segments",
+    # CRM - Email Templates
+    "email_template:create": "Create email templates",
+    "email_template:read": "Read email templates",
+    "email_template:update": "Update email templates",
+    "email_template:delete": "Delete email templates",
+    # Message Templates
+    "message_template:create": "Create message templates",
+    "message_template:read": "Read message templates",
+    "message_template:update": "Update message templates",
+    "message_template:delete": "Delete message templates",
+    # Companies Management (Super Admin)
+    "company:create": "Create companies",
+    "company:read": "Read companies",
+    "company:update": "Update companies",
+    "company:delete": "Delete companies",
 }
 
 # Define all roles and their associated permissions
@@ -95,6 +135,15 @@ ROLES = {
             "workflow:create", "workflow:read", "workflow:update", "workflow:delete",
             "analytics:read",
             "company_settings:update",
+            # CRM permissions
+            "lead:create", "lead:read", "lead:update", "lead:delete",
+            "contact:create", "contact:read", "contact:update", "contact:delete",
+            "campaign:create", "campaign:read", "campaign:update", "campaign:delete",
+            "tag:create", "tag:read", "tag:update", "tag:delete",
+            "segment:create", "segment:read", "segment:update", "segment:delete",
+            "email_template:create", "email_template:read", "email_template:update", "email_template:delete",
+            # Message Templates
+            "message_template:create", "message_template:read", "message_template:update", "message_template:delete",
         ],
     },
     "Agent Builder": {
@@ -109,6 +158,15 @@ ROLES = {
             "chat:read", "chat:create",
             "ai-chat:read",
             "image:create", "image:read",
+            # CRM permissions (limited)
+            "lead:read", "lead:create", "lead:update",
+            "contact:read", "contact:create", "contact:update",
+            "campaign:read",
+            "tag:read",
+            "segment:read",
+            "email_template:read",
+            # Message Templates
+            "message_template:read", "message_template:create",
         ],
     },
     "Analyst": {
@@ -116,6 +174,14 @@ ROLES = {
         "permissions": [
             "agent:read", "workflow:read", "analytics:read",
             "conversation:read",
+            # CRM read-only permissions
+            "lead:read",
+            "contact:read",
+            "campaign:read",
+            "tag:read",
+            "segment:read",
+            "email_template:read",
+            "message_template:read",
         ],
     },
     "Client": {

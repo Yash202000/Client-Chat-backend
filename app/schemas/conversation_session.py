@@ -43,6 +43,14 @@ class ConversationSessionUpdate(BaseModel):
 
 class ConversationSession(ConversationSessionBase):
     id: int
+    summary: Optional[str] = None
+    summary_generated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class ConversationSummaryResponse(BaseModel):
+    summary: Optional[str] = None
+    generated_at: Optional[datetime] = None
+    exists: bool = False

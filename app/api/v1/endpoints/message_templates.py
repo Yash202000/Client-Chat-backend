@@ -10,7 +10,7 @@ from sqlalchemy import or_, and_
 from typing import List, Optional
 from datetime import datetime
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import message_template as schemas
 from app.models import user as models_user
 from app.models.message_template import MessageTemplate, TemplateScope
@@ -21,7 +21,7 @@ from app.services.message_template_service import replace_template_variables, ge
 router = APIRouter()
 
 
-@router.get("/", response_model=schemas.MessageTemplateList)
+@router.get("/", response_model=schemas.MessageTemplateList, dependencies=[Depends(require_permission("message_template:read"))])
 def list_templates(
     search: Optional[str] = None,
     tags: Optional[str] = None,  # Comma-separated
@@ -95,7 +95,7 @@ def list_templates(
     )
 
 
-@router.get("/search", response_model=List[schemas.TemplateSearchResult])
+@router.get("/search", response_model=List[schemas.TemplateSearchResult], dependencies=[Depends(require_permission("message_template:read"))])
 def search_templates(
     query: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(10, ge=1, le=20, description="Maximum number of results"),
@@ -150,7 +150,7 @@ def search_templates(
     return results
 
 
-@router.post("/", response_model=schemas.MessageTemplate)
+@router.post("/", response_model=schemas.MessageTemplate, dependencies=[Depends(require_permission("message_template:create"))])
 def create_template(
     template_data: schemas.MessageTemplateCreate,
     db: Session = Depends(get_db),
@@ -207,7 +207,7 @@ def create_template(
     return template
 
 
-@router.get("/{template_id}", response_model=schemas.MessageTemplate)
+@router.get("/{template_id}", response_model=schemas.MessageTemplate, dependencies=[Depends(require_permission("message_template:read"))])
 def get_template(
     template_id: int,
     db: Session = Depends(get_db),
@@ -243,7 +243,7 @@ def get_template(
     return template
 
 
-@router.put("/{template_id}", response_model=schemas.MessageTemplate)
+@router.put("/{template_id}", response_model=schemas.MessageTemplate, dependencies=[Depends(require_permission("message_template:update"))])
 def update_template(
     template_id: int,
     template_data: schemas.MessageTemplateUpdate,
@@ -317,7 +317,7 @@ def update_template(
     return template
 
 
-@router.delete("/{template_id}")
+@router.delete("/{template_id}", dependencies=[Depends(require_permission("message_template:delete"))])
 def delete_template(
     template_id: int,
     db: Session = Depends(get_db),
@@ -354,7 +354,7 @@ def delete_template(
     return {"message": "Template deleted successfully"}
 
 
-@router.post("/{template_id}/use")
+@router.post("/{template_id}/use", dependencies=[Depends(require_permission("message_template:read"))])
 def track_template_usage(
     template_id: int,
     db: Session = Depends(get_db),
@@ -382,7 +382,7 @@ def track_template_usage(
     return {"message": "Usage tracked"}
 
 
-@router.get("/variables/available")
+@router.get("/variables/available", dependencies=[Depends(require_permission("message_template:read"))])
 def get_available_template_variables(
     current_user: models_user.User = Depends(get_current_active_user)
 ):
@@ -395,7 +395,7 @@ def get_available_template_variables(
     return get_available_variables()
 
 
-@router.post("/replace-variables")
+@router.post("/replace-variables", dependencies=[Depends(require_permission("message_template:read"))])
 def replace_variables_endpoint(
     request: schemas.ReplaceVariablesRequest,
     db: Session = Depends(get_db),

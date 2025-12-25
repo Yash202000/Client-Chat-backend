@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, and_
 from typing import List, Optional
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import segment as schemas_segment
 from app.models import user as models_user
 from app.models.segment import Segment, SegmentType
@@ -94,7 +94,7 @@ def count_segment_members(db: Session, segment: Segment, company_id: int):
     return len(contacts), len(leads)
 
 
-@router.get("/", response_model=schemas_segment.SegmentList)
+@router.get("/", response_model=schemas_segment.SegmentList, dependencies=[Depends(require_permission("segment:read"))])
 def list_segments(
     search: Optional[str] = None,
     segment_type: Optional[str] = None,
@@ -120,7 +120,7 @@ def list_segments(
     return schemas_segment.SegmentList(segments=segments, total=total)
 
 
-@router.post("/", response_model=schemas_segment.Segment)
+@router.post("/", response_model=schemas_segment.Segment, dependencies=[Depends(require_permission("segment:create"))])
 def create_segment(
     segment_data: schemas_segment.SegmentCreate,
     db: Session = Depends(get_db),
@@ -154,7 +154,7 @@ def create_segment(
     return segment
 
 
-@router.get("/{segment_id}", response_model=schemas_segment.Segment)
+@router.get("/{segment_id}", response_model=schemas_segment.Segment, dependencies=[Depends(require_permission("segment:read"))])
 def get_segment(
     segment_id: int,
     refresh_counts: bool = Query(default=True, description="Recalculate member counts"),
@@ -184,7 +184,7 @@ def get_segment(
     return segment
 
 
-@router.put("/{segment_id}", response_model=schemas_segment.Segment)
+@router.put("/{segment_id}", response_model=schemas_segment.Segment, dependencies=[Depends(require_permission("segment:update"))])
 def update_segment(
     segment_id: int,
     segment_data: schemas_segment.SegmentUpdate,
@@ -226,7 +226,7 @@ def update_segment(
     return segment
 
 
-@router.delete("/{segment_id}")
+@router.delete("/{segment_id}", dependencies=[Depends(require_permission("segment:delete"))])
 def delete_segment(
     segment_id: int,
     db: Session = Depends(get_db),
@@ -248,7 +248,7 @@ def delete_segment(
     return {"message": "Segment deleted successfully"}
 
 
-@router.get("/{segment_id}/preview", response_model=schemas_segment.SegmentPreview)
+@router.get("/{segment_id}/preview", response_model=schemas_segment.SegmentPreview, dependencies=[Depends(require_permission("segment:read"))])
 def preview_segment(
     segment_id: int,
     db: Session = Depends(get_db),
@@ -274,7 +274,7 @@ def preview_segment(
     )
 
 
-@router.post("/preview", response_model=schemas_segment.SegmentPreview)
+@router.post("/preview", response_model=schemas_segment.SegmentPreview, dependencies=[Depends(require_permission("segment:read"))])
 def preview_criteria(
     criteria: schemas_segment.SegmentCriteria,
     db: Session = Depends(get_db),
@@ -300,7 +300,7 @@ def preview_criteria(
     )
 
 
-@router.get("/{segment_id}/members", response_model=schemas_segment.SegmentMemberList)
+@router.get("/{segment_id}/members", response_model=schemas_segment.SegmentMemberList, dependencies=[Depends(require_permission("segment:read"))])
 def get_segment_members_list(
     segment_id: int,
     page: int = 1,
@@ -357,7 +357,7 @@ def get_segment_members_list(
     )
 
 
-@router.post("/{segment_id}/refresh", response_model=schemas_segment.Segment)
+@router.post("/{segment_id}/refresh", response_model=schemas_segment.Segment, dependencies=[Depends(require_permission("segment:update"))])
 def refresh_segment(
     segment_id: int,
     db: Session = Depends(get_db),

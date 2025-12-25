@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import lead_service, lead_qualification_service
 from app.schemas import lead as schemas_lead
 from app.schemas.lead_score import LeadScoreCreate
@@ -12,7 +12,7 @@ from app.models.lead import LeadStage, QualificationStatus
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def list_leads(
     skip: int = 0,
     limit: int = 100,
@@ -56,7 +56,7 @@ def list_leads(
     return leads
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_permission("lead:read"))])
 def get_lead_stats(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
@@ -67,7 +67,7 @@ def get_lead_stats(
     return lead_service.get_lead_stats(db=db, company_id=current_user.company_id)
 
 
-@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def list_leads_by_stage(
     stage: str,
     skip: int = 0,
@@ -92,7 +92,7 @@ def list_leads_by_stage(
     )
 
 
-@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def list_leads_by_assignee(
     assignee_id: int,
     skip: int = 0,
@@ -112,7 +112,7 @@ def list_leads_by_assignee(
     )
 
 
-@router.get("/available-contacts")
+@router.get("/available-contacts", dependencies=[Depends(require_permission("lead:read"))])
 def get_available_contacts(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
@@ -142,7 +142,7 @@ def get_available_contacts(
     return available_contacts
 
 
-@router.get("/{lead_id}", response_model=schemas_lead.LeadWithContact)
+@router.get("/{lead_id}", response_model=schemas_lead.LeadWithContact, dependencies=[Depends(require_permission("lead:read"))])
 def get_lead(
     lead_id: int,
     db: Session = Depends(get_db),
@@ -157,7 +157,7 @@ def get_lead(
     return lead
 
 
-@router.get("/{lead_id}/scores")
+@router.get("/{lead_id}/scores", dependencies=[Depends(require_permission("lead:read"))])
 def get_lead_scores(
     lead_id: int,
     db: Session = Depends(get_db),
@@ -173,7 +173,7 @@ def get_lead_scores(
     return lead_qualification_service.get_lead_scoring_breakdown(db=db, lead_id=lead_id)
 
 
-@router.post("/", response_model=schemas_lead.Lead)
+@router.post("/", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:create"))])
 def create_lead(
     lead: schemas_lead.LeadCreate,
     db: Session = Depends(get_db),
@@ -189,7 +189,7 @@ def create_lead(
     )
 
 
-@router.post("/with-contact", response_model=schemas_lead.Lead)
+@router.post("/with-contact", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:create"))])
 def create_lead_with_contact(
     lead_data: Dict[str, Any],
     db: Session = Depends(get_db),
@@ -228,7 +228,7 @@ def create_lead_with_contact(
     )
 
 
-@router.put("/{lead_id}", response_model=schemas_lead.Lead)
+@router.put("/{lead_id}", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:update"))])
 def update_lead(
     lead_id: int,
     lead: schemas_lead.LeadUpdate,
@@ -249,7 +249,7 @@ def update_lead(
     return updated_lead
 
 
-@router.put("/{lead_id}/stage", response_model=schemas_lead.Lead)
+@router.put("/{lead_id}/stage", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:update"))])
 def update_lead_stage(
     lead_id: int,
     stage_update: schemas_lead.LeadStageUpdate,
@@ -270,7 +270,7 @@ def update_lead_stage(
     return updated_lead
 
 
-@router.put("/{lead_id}/assign", response_model=schemas_lead.Lead)
+@router.put("/{lead_id}/assign", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:update"))])
 def assign_lead(
     lead_id: int,
     assignment: schemas_lead.LeadAssignment,
@@ -291,7 +291,7 @@ def assign_lead(
     return updated_lead
 
 
-@router.post("/{lead_id}/score")
+@router.post("/{lead_id}/score", dependencies=[Depends(require_permission("lead:update"))])
 def score_lead_manually(
     lead_id: int,
     score_value: int = Query(..., ge=0, le=100),
@@ -320,7 +320,7 @@ def score_lead_manually(
     return {"success": True, "score": score_value}
 
 
-@router.post("/{lead_id}/qualify")
+@router.post("/{lead_id}/qualify", dependencies=[Depends(require_permission("lead:update"))])
 def auto_qualify_lead(
     lead_id: int,
     min_score_threshold: int = Query(70, ge=0, le=100),
@@ -349,7 +349,7 @@ def auto_qualify_lead(
     }
 
 
-@router.delete("/{lead_id}")
+@router.delete("/{lead_id}", dependencies=[Depends(require_permission("lead:delete"))])
 def delete_lead(
     lead_id: int,
     db: Session = Depends(get_db),
@@ -368,7 +368,7 @@ def delete_lead(
     return {"success": True}
 
 
-@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/by-stage/{stage}", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def get_leads_by_stage(
     stage: str,
     skip: int = 0,
@@ -389,7 +389,7 @@ def get_leads_by_stage(
     return leads
 
 
-@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/by-assignee/{assignee_id}", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def get_leads_by_assignee(
     assignee_id: int,
     skip: int = 0,
@@ -410,7 +410,7 @@ def get_leads_by_assignee(
     return leads
 
 
-@router.get("/high-value", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/high-value", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def get_high_value_leads(
     min_deal_value: float = Query(10000, description="Minimum deal value"),
     skip: int = 0,
@@ -434,7 +434,7 @@ def get_high_value_leads(
     return leads
 
 
-@router.get("/unassigned", response_model=List[schemas_lead.LeadWithContact])
+@router.get("/unassigned", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def get_unassigned_leads(
     skip: int = 0,
     limit: int = 100,
@@ -454,7 +454,7 @@ def get_unassigned_leads(
     return leads
 
 
-@router.post("/bulk-assign")
+@router.post("/bulk-assign", dependencies=[Depends(require_permission("lead:update"))])
 def bulk_assign_leads(
     lead_ids: List[int],
     assignee_id: int,
@@ -482,7 +482,7 @@ def bulk_assign_leads(
     }
 
 
-@router.post("/bulk-update-stage")
+@router.post("/bulk-update-stage", dependencies=[Depends(require_permission("lead:update"))])
 def bulk_update_stage(
     lead_ids: List[int],
     stage: str,
