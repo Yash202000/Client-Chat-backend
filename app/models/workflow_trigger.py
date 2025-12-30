@@ -10,6 +10,8 @@ class TriggerChannel(str, enum.Enum):
     WHATSAPP = "whatsapp"
     TELEGRAM = "telegram"
     INSTAGRAM = "instagram"
+    TWILIO_VOICE = "twilio_voice"
+    FREESWITCH = "freeswitch"
 
 class WorkflowTrigger(Base):
     """

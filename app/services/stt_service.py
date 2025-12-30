@@ -46,6 +46,40 @@ class OpenAISTTService:
                 response.raise_for_status()
                 return await response.json()
 
+    async def transcribe_pcm(self, pcm_bytes: bytes, sample_rate: int = 16000, model: str = "whisper-1") -> dict:
+        """
+        Transcribe raw PCM audio bytes using OpenAI Whisper.
+        Creates a temporary WAV buffer for the API.
+
+        Args:
+            pcm_bytes: Raw PCM 16-bit audio bytes
+            sample_rate: Sample rate of the audio (default 16000 for Whisper)
+            model: Whisper model to use
+
+        Returns:
+            Transcription result dict with 'text' field
+        """
+        from app.services.audio_conversion_service import AudioConversionService
+
+        wav_buffer = AudioConversionService.create_wav_buffer(pcm_bytes, sample_rate)
+
+        url = f"{self.base_url}/transcriptions"
+        async with aiohttp.ClientSession() as session:
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                wav_buffer.read(),
+                filename="audio.wav",
+                content_type="audio/wav"
+            )
+            form.add_field("model", model)
+
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+
+            async with session.post(url, data=form, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+
 
 class GroqSTTService:
     def __init__(self, api_key: str = None):

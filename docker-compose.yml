@@ -68,7 +68,7 @@ services:
 
   # frontend:
   #   # IMPORTANT: Replace 'your-frontend-image:latest' with the actual name and tag of your built Docker image.
-  #   image: yashplg/agentconnect-frontend:v1.2
+  #   image: yashplg/agentconnect-frontend:v1.7
   #   container_name: frontend_service
   #   ports:
   #     # Maps port 8080 on your local machine to port 80 in the container.

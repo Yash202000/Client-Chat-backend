@@ -87,6 +87,44 @@ class OpenAITTSService:
         except Exception as e:
             print(f"Error streaming from OpenAI TTS: {e}")
 
+    async def text_to_speech_pcm(
+        self,
+        text: str,
+        voice: str = "alloy"
+    ) -> bytes:
+        """
+        Convert text to raw PCM audio bytes for Twilio streaming.
+        OpenAI TTS returns 24kHz 16-bit mono PCM when response_format is "pcm".
+
+        Args:
+            text: Text to convert to speech
+            voice: OpenAI voice name (alloy, echo, fable, onyx, nova, shimmer)
+
+        Returns:
+            Raw PCM 16-bit 24kHz mono audio bytes
+        """
+        if not self.api_key:
+            raise ValueError("OpenAI API key not configured for TTS")
+
+        valid_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        voice = voice if voice in valid_voices else self.DEFAULT_VOICE
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "tts-1",
+            "input": text,
+            "voice": voice,
+            "response_format": "pcm"  # Raw PCM output at 24kHz
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(OPENAI_TTS_URL, json=data, headers=headers) as response:
+                response.raise_for_status()
+                return await response.read()
+
 
 # --- Main TTS Router Service ---
 class TTSService:

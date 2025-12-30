@@ -28,7 +28,9 @@ def extract_trigger_nodes_from_visual_steps(visual_steps: dict) -> List[dict]:
         'trigger_websocket',
         'trigger_whatsapp',
         'trigger_telegram',
-        'trigger_instagram'
+        'trigger_instagram',
+        'trigger_twilio_voice',
+        'trigger_freeswitch'
     ]
 
     trigger_nodes = []
@@ -54,6 +56,8 @@ def map_trigger_type_to_channel(node_type: str) -> Optional[TriggerChannel]:
         'trigger_whatsapp': TriggerChannel.WHATSAPP,
         'trigger_telegram': TriggerChannel.TELEGRAM,
         'trigger_instagram': TriggerChannel.INSTAGRAM,
+        'trigger_twilio_voice': TriggerChannel.TWILIO_VOICE,
+        'trigger_freeswitch': TriggerChannel.FREESWITCH,
     }
     return mapping.get(node_type)
 

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     CORS_ORIGINS: str = "http://localhost:8080,http://localhost:5173,*"
+    PUBLIC_HOST: Optional[str] = None  # Public hostname for WebSocket URLs (e.g., api.example.com)
 
     # WebSocket session cleanup settings
     WS_PING_INTERVAL: int = 30  # Send ping every 30 seconds
