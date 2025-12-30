@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from typing import Optional
 
 class CompanySettingsBase(BaseModel):
@@ -8,7 +8,7 @@ class CompanySettingsBase(BaseModel):
     timezone: str
     language: str
     business_hours: bool
-    logo_url: Optional[HttpUrl] = None
+    logo_url: Optional[str] = None
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     custom_domain: Optional[str] = None
@@ -30,7 +30,7 @@ class CompanySettingsUpdate(BaseModel):
     timezone: Optional[str] = None
     language: Optional[str] = None
     business_hours: Optional[bool] = None
-    logo_url: Optional[HttpUrl] = None
+    logo_url: Optional[str] = None
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     custom_domain: Optional[str] = None

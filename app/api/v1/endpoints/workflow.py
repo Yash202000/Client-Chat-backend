@@ -204,6 +204,40 @@ def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate,
         raise HTTPException(status_code=404, detail="Workflow not found")
     return db_workflow
 
+@router.post("/{workflow_id}/regenerate-description", dependencies=[Depends(require_permission("workflow:update"))])
+def regenerate_workflow_description(
+    workflow_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Regenerate workflow description from visual_steps.
+    Useful when the workflow has been updated and you want to refresh the auto-generated description.
+    """
+    workflow = workflow_service.get_workflow(db, workflow_id, current_user.company_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    visual_steps = workflow.visual_steps
+    if isinstance(visual_steps, str):
+        try:
+            visual_steps = json.loads(visual_steps)
+        except json.JSONDecodeError:
+            visual_steps = None
+
+    if not visual_steps:
+        raise HTTPException(status_code=400, detail="Workflow has no visual_steps to generate description from")
+
+    new_description = workflow_service.generate_workflow_description(visual_steps)
+    if not new_description:
+        raise HTTPException(status_code=400, detail="Could not generate description from workflow steps")
+
+    workflow.description = new_description
+    db.commit()
+    db.refresh(workflow)
+
+    return {"description": new_description, "workflow_id": workflow_id}
+
 @router.delete("/{workflow_id}", dependencies=[Depends(require_permission("workflow:delete"))])
 def delete_workflow(workflow_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     success = workflow_service.delete_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
