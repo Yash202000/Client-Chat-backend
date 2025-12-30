@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -9,10 +9,10 @@ class Integration(Base):
     name = Column(String, nullable=False)
     type = Column(String, nullable=False, index=True)  # e.g., "whatsapp"
     enabled = Column(Boolean, default=True)
-    
-    # This will store the encrypted credentials as a single string/text block.
+
+    # Store encrypted credentials as binary (same as Credential model).
     # The vault_service will handle the encryption/decryption.
-    credentials = Column(String, nullable=False)
+    credentials = Column(LargeBinary, nullable=False)
 
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     company = relationship("Company", back_populates="integrations")
