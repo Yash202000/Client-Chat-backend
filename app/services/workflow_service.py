@@ -36,6 +36,10 @@ def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, comp
                 visual_steps_data = workflow_data[field]
             workflow_data[field] = json.dumps(workflow_data[field])
 
+    # Auto-generate description if not provided and visual_steps exist
+    if not workflow_data.get('description') and visual_steps_data:
+        workflow_data['description'] = generate_workflow_description(visual_steps_data)
+
     workflow_data['version'] = 1
     workflow_data['is_active'] = True
     workflow_data['company_id'] = company_id
@@ -137,6 +141,11 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
                 # Flag JSONB columns as modified so SQLAlchemy detects the change
                 if key == 'intent_config':
                     flag_modified(db_workflow, 'intent_config')
+
+        # Auto-generate description if empty and visual_steps were updated
+        if visual_steps_updated and visual_steps_data and not db_workflow.description:
+            db_workflow.description = generate_workflow_description(visual_steps_data)
+
         db.commit()
         db.refresh(db_workflow)
 
@@ -173,6 +182,147 @@ def _parse_json_field(value, default):
         except json.JSONDecodeError:
             return default
     return value  # Already a dict
+
+
+def _extract_action(prompt_text: str) -> str:
+    """Extract action verb/purpose from prompt text."""
+    prompt_lower = prompt_text.lower()
+    if 'analyze' in prompt_lower:
+        return 'analyze user input'
+    elif 'classify' in prompt_lower:
+        return 'classify the request'
+    elif 'qualify' in prompt_lower:
+        return 'qualify leads'
+    elif 'support' in prompt_lower:
+        return 'provide support'
+    elif 'summarize' in prompt_lower:
+        return 'summarize information'
+    elif 'extract' in prompt_lower:
+        return 'extract information'
+    elif 'generate' in prompt_lower:
+        return 'generate responses'
+    elif 'answer' in prompt_lower:
+        return 'answer questions'
+    elif 'recommend' in prompt_lower:
+        return 'make recommendations'
+    elif 'translate' in prompt_lower:
+        return 'translate content'
+    elif 'schedule' in prompt_lower:
+        return 'handle scheduling'
+    elif 'book' in prompt_lower:
+        return 'handle bookings'
+    elif 'order' in prompt_lower:
+        return 'process orders'
+    else:
+        return 'process the request'
+
+
+def generate_workflow_description(visual_steps) -> str:
+    """
+    Generate concise workflow description from visual_steps for LLM context.
+
+    Args:
+        visual_steps: Dict or JSON string containing nodes and edges
+
+    Returns:
+        Concise description string describing what the workflow does
+    """
+    # Parse if string
+    if isinstance(visual_steps, str):
+        try:
+            visual_steps = json.loads(visual_steps)
+        except json.JSONDecodeError:
+            return ""
+
+    if not visual_steps or 'nodes' not in visual_steps:
+        return ""
+
+    nodes = visual_steps.get('nodes', [])
+    if not nodes:
+        return ""
+
+    descriptions = []
+
+    for node in nodes:
+        node_type = node.get('type', '')
+        data = node.get('data', {})
+
+        if node_type == 'llm':
+            # Extract purpose from prompt
+            prompt = data.get('prompt', '')
+            if prompt:
+                first_line = prompt.split('\n')[0][:100]
+                descriptions.append(f"uses AI to {_extract_action(first_line)}")
+
+        elif node_type == 'response':
+            output = data.get('output_value', '')
+            if output and not output.startswith('{{'):
+                # Get meaningful text, not just variables
+                clean = output.split('{{')[0].strip()[:50]
+                if clean:
+                    descriptions.append(f"responds with \"{clean}...\"")
+
+        elif node_type == 'listen':
+            var_name = data.get('variable_name', '')
+            if var_name:
+                readable = var_name.replace('_', ' ')
+                descriptions.append(f"collects {readable}")
+
+        elif node_type == 'tool':
+            tool_name = data.get('tool_name') or data.get('tool') or data.get('name', '')
+            if tool_name:
+                descriptions.append(f"executes {tool_name.replace('_', ' ')} tool")
+
+        elif node_type == 'question_classifier':
+            classes = data.get('classes', [])
+            if classes:
+                class_names = [c.get('name', '') for c in classes[:3] if c.get('name')]
+                if class_names:
+                    descriptions.append(f"classifies into {', '.join(class_names)}")
+
+        elif node_type == 'condition':
+            var = data.get('variable', '')
+            if var:
+                var_name = var.replace('{{context.', '').replace('}}', '').replace('_', ' ')
+                descriptions.append(f"checks {var_name}")
+
+        elif node_type == 'http_request':
+            method = data.get('method', 'GET')
+            descriptions.append(f"makes {method} API call")
+
+        elif node_type == 'knowledge':
+            descriptions.append("searches knowledge base")
+
+        elif node_type == 'form':
+            fields = data.get('params', {}).get('fields', [])
+            if fields:
+                field_names = [f.get('name', '') for f in fields[:2] if f.get('name')]
+                if field_names:
+                    descriptions.append(f"collects {', '.join(field_names)} via form")
+
+        elif node_type == 'subworkflow':
+            descriptions.append("runs sub-workflow")
+
+        elif node_type.startswith('trigger_'):
+            channel = node_type.replace('trigger_', '').replace('_', ' ')
+            descriptions.append(f"triggered from {channel}")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique = []
+    for d in descriptions:
+        if d not in seen:
+            seen.add(d)
+            unique.append(d)
+
+    if not unique:
+        return ""
+
+    # Build final description
+    if len(unique) == 1:
+        return f"Workflow that {unique[0]}."
+    else:
+        return f"Workflow that {', '.join(unique[:-1])}, and {unique[-1]}."
 
 def export_workflow(db: Session, workflow_id: int, company_id: int) -> dict:
     """
