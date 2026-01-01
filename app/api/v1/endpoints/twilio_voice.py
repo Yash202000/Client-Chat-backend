@@ -19,7 +19,15 @@ from app.services.twilio_voice_service import TwilioVoiceService, get_voice_call
 from app.services.audio_conversion_service import AudioConversionService
 from app.services.stt_service import OpenAISTTService
 from app.services.tts_service import OpenAITTSService
-from app.services import credential_service, integration_service
+from app.services.vad_service import SileroVADService, VADEvent, VADResult
+from app.services.openai_realtime_service import (
+    OpenAIRealtimeService,
+    convert_mulaw_8k_to_pcm_24k,
+    convert_pcm_24k_to_mulaw_8k,
+)
+from app.services import credential_service, integration_service, agent_service
+from app.services.agent_execution_service import _get_tools_for_agent
+from app.services.tool_execution_service import execute_tool
 from app.models.integration import Integration
 from twilio.rest import Client as TwilioClient
 from app.schemas.twilio_voice import (
@@ -33,13 +41,12 @@ from app.schemas.twilio_voice import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Configuration
-SILENCE_THRESHOLD = float(getattr(settings, 'TWILIO_VOICE_SILENCE_THRESHOLD', 0.6))  # seconds of silence to trigger processing
+# Configuration - Silero VAD settings (matching LiveKit defaults)
+VAD_THRESHOLD = float(getattr(settings, 'VAD_THRESHOLD', 0.5))  # Speech probability threshold
+VAD_MIN_SPEECH_MS = int(getattr(settings, 'VAD_MIN_SPEECH_MS', 50))  # Minimum speech duration (ms) - LiveKit: 0.05s
+VAD_MIN_SILENCE_MS = int(getattr(settings, 'VAD_MIN_SILENCE_MS', 550))  # Minimum silence to end speech (ms) - LiveKit: 0.55s
 MIN_AUDIO_LENGTH = 3200  # Minimum audio buffer size (~0.4 seconds at 8kHz)
-MAX_BUFFER_SECONDS = 8  # Maximum seconds to buffer before forcing processing (prevents endless buffering)
-# VAD thresholds with hysteresis to prevent rapid toggling
-VAD_SPEECH_START_THRESHOLD = 55  # Energy level to start detecting speech (higher = more certain it's speech)
-VAD_SPEECH_END_THRESHOLD = 40    # Energy level to stop detecting speech (lower = more certain it's silence)
+MAX_BUFFER_SECONDS = 8  # Maximum seconds to buffer before forcing processing
 
 
 def get_twiml_response(content: str, content_type: str = "application/xml") -> Response:
@@ -173,6 +180,149 @@ async def handle_call_status(request: Request, db: Session = Depends(get_db)):
     return Response(status_code=200)
 
 
+# --- OpenAI Realtime Mode Handler ---
+
+async def handle_realtime_mode(
+    websocket: WebSocket,
+    stream_sid: str,
+    agent,
+    openai_api_key: str,
+    voice_service: TwilioVoiceService,
+    db: Session,
+):
+    """
+    Handle voice call using OpenAI Realtime API for ultra-low latency.
+    Bridges Twilio Media Stream WebSocket to OpenAI Realtime API WebSocket.
+    """
+    logger.info(f"Starting OpenAI Realtime mode for stream {stream_sid}")
+
+    # Get agent tools for function calling
+    tools = []
+    try:
+        tool_definitions = await _get_tools_for_agent(agent)
+        # Convert to Realtime API format
+        for tool_def in tool_definitions:
+            if tool_def.get("type") == "function":
+                func = tool_def["function"]
+                tools.append({
+                    "type": "function",
+                    "name": func["name"],
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+                })
+        logger.info(f"Configured {len(tools)} tools for Realtime API")
+    except Exception as e:
+        logger.error(f"Error getting agent tools: {e}")
+
+    # Initialize Realtime service
+    realtime = OpenAIRealtimeService(
+        model=settings.OPENAI_REALTIME_MODEL,
+        voice=settings.OPENAI_REALTIME_VOICE,
+        system_prompt=agent.prompt if agent else None,
+        tools=tools,
+    )
+
+    # Connect to OpenAI Realtime API
+    if not await realtime.connect():
+        logger.error("Failed to connect to OpenAI Realtime API, falling back to standard mode")
+        return False  # Signal to fall back to standard mode
+
+    # Track transcripts for saving
+    transcripts = []
+
+    async def forward_twilio_to_openai():
+        """Forward audio from Twilio to OpenAI Realtime API."""
+        try:
+            while True:
+                message = await websocket.receive_text()
+                data = json.loads(message)
+                event_type = data.get("event")
+
+                if event_type == "media":
+                    media_data = data.get("media", {})
+                    payload = media_data.get("payload", "")
+                    if payload:
+                        # Decode mulaw and convert to PCM 24kHz
+                        mulaw_bytes = base64.b64decode(payload)
+                        pcm_24k = convert_mulaw_8k_to_pcm_24k(mulaw_bytes)
+                        await realtime.send_audio(pcm_24k)
+
+                elif event_type == "stop":
+                    logger.info("Twilio stream stopped")
+                    break
+
+        except WebSocketDisconnect:
+            logger.info("Twilio WebSocket disconnected")
+        except Exception as e:
+            logger.error(f"Error forwarding Twilio to OpenAI: {e}")
+
+    async def forward_openai_to_twilio():
+        """Forward audio from OpenAI Realtime API to Twilio."""
+        try:
+            async for event in realtime.receive_events():
+                # Handle audio output
+                audio_bytes = realtime.extract_audio_delta(event)
+                if audio_bytes:
+                    # Convert PCM 24kHz to mulaw 8kHz
+                    mulaw_bytes = convert_pcm_24k_to_mulaw_8k(audio_bytes)
+                    mulaw_b64 = base64.b64encode(mulaw_bytes).decode("utf-8")
+
+                    media_message = {
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": mulaw_b64}
+                    }
+                    await websocket.send_json(media_message)
+
+                # Handle function calls
+                func_call = realtime.extract_function_call(event)
+                if func_call:
+                    logger.info(f"Realtime function call: {func_call.name}")
+                    try:
+                        # Execute the tool
+                        import json as json_module
+                        args = json_module.loads(func_call.arguments)
+                        result = await execute_tool(
+                            db=db,
+                            tool_name=func_call.name,
+                            parameters=args,
+                            session_id=stream_sid or "",
+                            company_id=agent.company_id if agent else 0,
+                        )
+                        result_str = json_module.dumps(result) if isinstance(result, dict) else str(result)
+                        await realtime.submit_function_result(func_call.call_id, result_str)
+                        logger.info(f"Function {func_call.name} completed")
+                    except Exception as e:
+                        logger.error(f"Error executing function {func_call.name}: {e}")
+                        await realtime.submit_function_result(func_call.call_id, f"Error: {str(e)}")
+
+                # Handle transcripts
+                transcript = realtime.extract_transcript(event)
+                if transcript:
+                    role, text = transcript
+                    transcripts.append({"role": role, "text": text})
+                    logger.info(f"Transcript [{role}]: {text[:50]}...")
+
+                # Handle errors
+                if event.type == "error":
+                    logger.error(f"Realtime API error: {event.data}")
+
+        except Exception as e:
+            logger.error(f"Error forwarding OpenAI to Twilio: {e}")
+
+    try:
+        # Run both directions concurrently
+        await asyncio.gather(
+            forward_twilio_to_openai(),
+            forward_openai_to_twilio(),
+        )
+    finally:
+        await realtime.disconnect()
+        logger.info(f"Realtime mode ended, transcripts: {len(transcripts)}")
+
+    return True  # Success
+
+
 # --- Media Stream WebSocket ---
 
 @router.websocket("/media-stream/{call_sid}")
@@ -200,36 +350,44 @@ async def twilio_media_stream(
 
     # Audio buffering for VAD (Voice Activity Detection)
     audio_buffer = bytearray()
-    last_speech_time = None  # Last time we detected actual speech (not just audio packets)
     buffer_start_time = None  # When we started buffering (to enforce max buffer time)
     is_processing = False
-    is_speaking = False  # Track if user is currently speaking
+    is_speech_active = False  # Track if we're currently in a speech segment
 
-    def calculate_audio_energy(audio_bytes: bytes) -> float:
-        """Calculate RMS energy of mulaw audio to detect voice activity."""
-        if not audio_bytes:
-            return 0
-        # Mulaw audio is 8-bit, center is at 127
-        # Calculate deviation from center (which indicates sound amplitude)
-        total = sum(abs(b - 127) for b in audio_bytes)
-        return total / len(audio_bytes)
+    # Initialize Silero VAD
+    vad_service = SileroVADService(
+        threshold=VAD_THRESHOLD,
+        min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+        min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+        sample_rate=8000,  # Twilio uses 8kHz mulaw
+    )
+    logger.info(f"Silero VAD initialized for call {call_sid}")
 
     async def process_audio_buffer():
         """Process accumulated audio through STT and get AI response."""
         nonlocal audio_buffer, is_processing, buffer_start_time
 
         if not audio_buffer or is_processing or len(audio_buffer) < MIN_AUDIO_LENGTH:
+            logger.debug(f"Skipping process_audio_buffer: buffer={len(audio_buffer)}, processing={is_processing}")
             return
 
+        logger.info(f"Processing audio buffer: {len(audio_buffer)} bytes")
         is_processing = True
         buffer_start_time = None  # Reset buffer timer
         try:
             # Convert accumulated mulaw to PCM for Whisper
             pcm_16k = audio_converter.buffer_to_whisper_format(audio_buffer)
+            logger.info(f"Converted to PCM: {len(pcm_16k)} bytes")
 
             # Transcribe with Whisper
+            if not openai_api_key:
+                logger.error("No OpenAI API key available for STT")
+                return
+
             stt_service = OpenAISTTService(api_key=openai_api_key)
+            logger.info("Calling Whisper STT...")
             result = await stt_service.transcribe_pcm(pcm_16k)
+            logger.info(f"STT result: {result}")
 
             transcribed_text = result.get("text", "").strip()
 
@@ -310,43 +468,26 @@ async def twilio_media_stream(
         except Exception as e:
             logger.error(f"Error streaming TTS: {e}", exc_info=True)
 
-    async def check_silence():
-        """Background task to detect end of speech using VAD."""
-        nonlocal last_speech_time, is_speaking, buffer_start_time
+    async def check_buffer_timeout():
+        """Background task to enforce max buffer time."""
+        nonlocal buffer_start_time
         check_count = 0
         while True:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
             check_count += 1
-            current_time = asyncio.get_event_loop().time()
 
             # Skip if no buffer or already processing
             if not audio_buffer or is_processing or len(audio_buffer) < MIN_AUDIO_LENGTH:
                 continue
 
-            # Calculate times
-            silence_elapsed = current_time - last_speech_time if last_speech_time else 0
-            buffer_elapsed = current_time - buffer_start_time if buffer_start_time else 0
+            # Check max buffer time
+            if buffer_start_time:
+                buffer_elapsed = asyncio.get_event_loop().time() - buffer_start_time
+                if buffer_elapsed > MAX_BUFFER_SECONDS:
+                    logger.info(f"Max buffer time exceeded ({buffer_elapsed:.1f}s), forcing processing")
+                    await process_audio_buffer()
 
-            # Log every 10 checks (1 second)
-            if check_count % 10 == 0:
-                logger.info(f"VAD: buffer={len(audio_buffer)} bytes ({buffer_elapsed:.1f}s), silence={silence_elapsed:.2f}s, speaking={is_speaking}")
-
-            # Process if: (silence detected AND not speaking) OR (max buffer time exceeded)
-            should_process = False
-            reason = ""
-
-            if not is_speaking and silence_elapsed > SILENCE_THRESHOLD:
-                should_process = True
-                reason = f"silence detected ({silence_elapsed:.2f}s)"
-            elif buffer_elapsed > MAX_BUFFER_SECONDS:
-                should_process = True
-                reason = f"max buffer time exceeded ({buffer_elapsed:.1f}s)"
-
-            if should_process:
-                logger.info(f"Processing audio: {reason}, buffer={len(audio_buffer)} bytes")
-                await process_audio_buffer()
-
-    silence_task = asyncio.create_task(check_silence())
+    timeout_task = asyncio.create_task(check_buffer_timeout())
 
     try:
         while True:
@@ -384,47 +525,79 @@ async def twilio_media_stream(
 
                 logger.info(f"Stream started: {stream_sid}, company: {company_id}, agent: {agent_id}")
 
+                # Check if we should use OpenAI Realtime mode
+                agent = None
+                use_realtime = False
+                if agent_id and settings.OPENAI_REALTIME_ENABLED:
+                    agent = agent_service.get_agent(db, agent_id, company_id)
+                    if agent and agent.llm_provider == "openai":
+                        use_realtime = True
+                        logger.info(f"Agent {agent_id} uses OpenAI, enabling Realtime mode")
+
+                if use_realtime and openai_api_key:
+                    # Switch to OpenAI Realtime mode
+                    timeout_task.cancel()
+                    try:
+                        await timeout_task
+                    except asyncio.CancelledError:
+                        pass
+
+                    realtime_success = await handle_realtime_mode(
+                        websocket=websocket,
+                        stream_sid=stream_sid,
+                        agent=agent,
+                        openai_api_key=openai_api_key,
+                        voice_service=voice_service,
+                        db=db,
+                    )
+                    if realtime_success:
+                        # Realtime mode handled everything, exit
+                        break
+                    else:
+                        # Fallback to standard mode - restart timeout task
+                        logger.info("Falling back to standard VAD+STT+LLM+TTS mode")
+                        timeout_task = asyncio.create_task(check_buffer_timeout())
+
             elif event_type == "media":
                 # Incoming audio from caller
                 media_data = data.get("media", {})
                 payload = media_data.get("payload", "")
 
                 if payload:
-                    # Decode base64 mulaw audio and add to buffer
+                    # Decode base64 mulaw audio
                     try:
                         audio_bytes = base64.b64decode(payload)
 
-                        # Calculate audio energy for VAD
-                        energy = calculate_audio_energy(audio_bytes)
+                        # Process through Silero VAD
+                        vad_result = vad_service.process_mulaw(audio_bytes)
 
-                        # Use hysteresis for speech detection to prevent rapid toggling
-                        # Higher threshold to START speaking, lower threshold to STOP
-                        if is_speaking:
-                            # Currently speaking - need energy to drop below lower threshold to stop
-                            if energy < VAD_SPEECH_END_THRESHOLD:
-                                is_speaking = False
-                                logger.info(f"Speech ended (energy: {energy:.1f}, buffer: {len(audio_buffer)} bytes)")
-                            else:
-                                # Still speaking - add to buffer
-                                audio_buffer.extend(audio_bytes)
-                                last_speech_time = asyncio.get_event_loop().time()
-                        else:
-                            # Not speaking - need energy above higher threshold to start
-                            if energy > VAD_SPEECH_START_THRESHOLD:
-                                is_speaking = True
-                                audio_buffer.extend(audio_bytes)
-                                current_time = asyncio.get_event_loop().time()
-                                last_speech_time = current_time
-                                # Start buffer timer if this is first speech
-                                if buffer_start_time is None:
-                                    buffer_start_time = current_time
-                                logger.info(f"Speech started (energy: {energy:.1f})")
+                        # Buffer audio while speech is active
+                        if is_speech_active:
+                            audio_buffer.extend(audio_bytes)
 
-                        # Log first audio packet
-                        if len(audio_buffer) == len(audio_bytes):
-                            logger.info(f"First audio packet: {len(audio_bytes)} bytes, energy: {energy:.1f}")
+                        if vad_result:
+                            if vad_result.event == VADEvent.SPEECH_START:
+                                # Speech started - begin buffering
+                                is_speech_active = True
+                                audio_buffer.extend(audio_bytes)  # Add the chunk that triggered start
+                                buffer_start_time = asyncio.get_event_loop().time()
+                                logger.info(f"Silero VAD: Speech started (prob={vad_result.probability:.2f})")
+
+                            elif vad_result.event == VADEvent.SPEECH_END:
+                                # Speech ended - process the buffer
+                                is_speech_active = False
+                                logger.info(f"Silero VAD: Speech ended (prob={vad_result.probability:.2f}, duration={vad_result.speech_duration_ms:.0f}ms, buffer={len(audio_buffer)} bytes)")
+                                if len(audio_buffer) >= MIN_AUDIO_LENGTH:
+                                    await process_audio_buffer()
+                                else:
+                                    logger.warning(f"Buffer too small ({len(audio_buffer)} bytes), skipping STT")
+                                    audio_buffer.clear()
+                                    buffer_start_time = None
+
+                            # SPEECH_CONTINUE and SILENCE - audio already buffered above if speech is active
+
                     except Exception as e:
-                        logger.error(f"Error decoding audio: {e}")
+                        logger.error(f"Error processing audio: {e}")
 
             elif event_type == "stop":
                 logger.info(f"Stream stopped: {stream_sid}")
@@ -442,11 +615,14 @@ async def twilio_media_stream(
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
-        silence_task.cancel()
+        timeout_task.cancel()
         try:
-            await silence_task
+            await timeout_task
         except asyncio.CancelledError:
             pass
+
+        # Reset VAD state
+        vad_service.reset()
 
         # Save transcript before cleanup
         voice_service.save_transcript(call_sid)

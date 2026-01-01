@@ -84,8 +84,8 @@ class FreeSwitchVoiceService:
             name=caller_name
         )
 
-        # Create conversation session
-        conversation_id = f"freeswitch_{call_uuid}"
+        # Create conversation session using phone number for session continuity
+        conversation_id = f"freeswitch_{from_number}"
         session = conversation_session_service.get_or_create_session(
             self.db,
             conversation_id=conversation_id,
@@ -95,6 +95,13 @@ class FreeSwitchVoiceService:
             company_id=company_id,
             agent_id=agent_id
         )
+
+        # Reactivate session if it was previously resolved
+        if session.status == 'resolved':
+            session.status = 'active'
+            session.is_client_connected = True
+            self.db.commit()
+            logger.info(f"Reactivated session {conversation_id} for returning caller")
 
         # Create voice call record (reusing VoiceCall model)
         voice_call = VoiceCall(
@@ -185,6 +192,17 @@ class FreeSwitchVoiceService:
                     voice_call.ended_at - voice_call.answered_at
                 ).total_seconds()
             self.db.commit()
+
+            # Mark conversation session as resolved
+            if voice_call.conversation_id:
+                session = conversation_session_service.get_session_by_conversation_id(
+                    self.db, voice_call.conversation_id, voice_call.company_id
+                )
+                if session:
+                    session.status = 'resolved'
+                    session.is_client_connected = False
+                    self.db.commit()
+                    logger.info(f"Session {voice_call.conversation_id} marked as resolved")
 
             # Save transcript before cleanup
             self.save_transcript(call_uuid)

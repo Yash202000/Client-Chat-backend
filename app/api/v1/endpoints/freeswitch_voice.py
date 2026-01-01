@@ -22,7 +22,15 @@ from app.services.freeswitch_voice_service import FreeSwitchVoiceService, get_fr
 from app.services.audio_conversion_service import AudioConversionService
 from app.services.stt_service import OpenAISTTService
 from app.services.tts_service import OpenAITTSService
-from app.services import credential_service
+from app.services.vad_service import SileroVADService, VADEvent, VADResult
+from app.services.openai_realtime_service import (
+    OpenAIRealtimeService,
+    convert_l16_8k_to_pcm_24k,
+    convert_pcm_24k_to_l16_8k,
+)
+from app.services import credential_service, agent_service
+from app.services.agent_execution_service import _get_tools_for_agent
+from app.services.tool_execution_service import execute_tool
 from app.schemas.freeswitch_voice import (
     FreeSwitchPhoneNumberCreate,
     FreeSwitchPhoneNumberUpdate,
@@ -33,9 +41,136 @@ from app.schemas.freeswitch_voice import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Configuration
-SILENCE_THRESHOLD = float(getattr(settings, 'FREESWITCH_SILENCE_THRESHOLD', 0.8))  # seconds
+# Configuration - Silero VAD settings (matching LiveKit defaults)
+VAD_THRESHOLD = float(getattr(settings, 'VAD_THRESHOLD', 0.5))  # Speech probability threshold
+VAD_MIN_SPEECH_MS = int(getattr(settings, 'VAD_MIN_SPEECH_MS', 50))  # Minimum speech duration (ms) - LiveKit: 0.05s
+VAD_MIN_SILENCE_MS = int(getattr(settings, 'VAD_MIN_SILENCE_MS', 550))  # Minimum silence to end speech (ms) - LiveKit: 0.55s
 MIN_AUDIO_LENGTH = 3200  # Minimum audio buffer size (~0.2 seconds at 8kHz, 16-bit)
+MAX_BUFFER_SECONDS = 8  # Maximum seconds to buffer before forcing processing
+
+
+# --- OpenAI Realtime Mode Handler ---
+
+async def handle_freeswitch_realtime_mode(
+    websocket: WebSocket,
+    call_uuid: str,
+    agent,
+    openai_api_key: str,
+    voice_service: FreeSwitchVoiceService,
+    db: Session,
+    sample_rate: int = 8000,
+):
+    """
+    Handle FreeSWITCH call using OpenAI Realtime API for ultra-low latency.
+    """
+    logger.info(f"Starting OpenAI Realtime mode for FreeSWITCH call {call_uuid}")
+
+    # Get agent tools for function calling
+    tools = []
+    try:
+        tool_definitions = await _get_tools_for_agent(agent)
+        for tool_def in tool_definitions:
+            if tool_def.get("type") == "function":
+                func = tool_def["function"]
+                tools.append({
+                    "type": "function",
+                    "name": func["name"],
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+                })
+        logger.info(f"Configured {len(tools)} tools for Realtime API")
+    except Exception as e:
+        logger.error(f"Error getting agent tools: {e}")
+
+    # Initialize Realtime service
+    realtime = OpenAIRealtimeService(
+        model=settings.OPENAI_REALTIME_MODEL,
+        voice=settings.OPENAI_REALTIME_VOICE,
+        system_prompt=agent.prompt if agent else None,
+        tools=tools,
+    )
+
+    if not await realtime.connect():
+        logger.error("Failed to connect to OpenAI Realtime API")
+        return False
+
+    transcripts = []
+
+    async def forward_freeswitch_to_openai():
+        """Forward audio from FreeSWITCH to OpenAI Realtime API."""
+        try:
+            while True:
+                message = await websocket.receive_text()
+                data = json.loads(message)
+                event_type = data.get("event")
+
+                if event_type == "audio":
+                    audio_data = data.get("audio", "")
+                    if audio_data:
+                        l16_bytes = base64.b64decode(audio_data)
+                        pcm_24k = convert_l16_8k_to_pcm_24k(l16_bytes)
+                        await realtime.send_audio(pcm_24k)
+
+                elif event_type == "disconnect":
+                    logger.info(f"FreeSWITCH disconnect: {data.get('hangup_cause')}")
+                    break
+
+        except WebSocketDisconnect:
+            logger.info("FreeSWITCH WebSocket disconnected")
+        except Exception as e:
+            logger.error(f"Error forwarding FreeSWITCH to OpenAI: {e}")
+
+    async def forward_openai_to_freeswitch():
+        """Forward audio from OpenAI Realtime API to FreeSWITCH."""
+        try:
+            async for event in realtime.receive_events():
+                audio_bytes = realtime.extract_audio_delta(event)
+                if audio_bytes:
+                    l16_bytes = convert_pcm_24k_to_l16_8k(audio_bytes)
+                    l16_b64 = base64.b64encode(l16_bytes).decode("utf-8")
+                    await websocket.send_json({"event": "audio", "audio": l16_b64})
+
+                func_call = realtime.extract_function_call(event)
+                if func_call:
+                    logger.info(f"Realtime function call: {func_call.name}")
+                    try:
+                        import json as json_module
+                        args = json_module.loads(func_call.arguments)
+                        result = await execute_tool(
+                            db=db,
+                            tool_name=func_call.name,
+                            parameters=args,
+                            session_id=call_uuid or "",
+                            company_id=agent.company_id if agent else 0,
+                        )
+                        result_str = json_module.dumps(result) if isinstance(result, dict) else str(result)
+                        await realtime.submit_function_result(func_call.call_id, result_str)
+                    except Exception as e:
+                        logger.error(f"Error executing function: {e}")
+                        await realtime.submit_function_result(func_call.call_id, f"Error: {str(e)}")
+
+                transcript = realtime.extract_transcript(event)
+                if transcript:
+                    role, text = transcript
+                    transcripts.append({"role": role, "text": text})
+                    logger.info(f"Transcript [{role}]: {text[:50]}...")
+
+                if event.type == "error":
+                    logger.error(f"Realtime API error: {event.data}")
+
+        except Exception as e:
+            logger.error(f"Error forwarding OpenAI to FreeSWITCH: {e}")
+
+    try:
+        await asyncio.gather(
+            forward_freeswitch_to_openai(),
+            forward_openai_to_freeswitch(),
+        )
+    finally:
+        await realtime.disconnect()
+        logger.info(f"Realtime mode ended for {call_uuid}")
+
+    return True
 
 
 # --- Audio Stream WebSocket ---
@@ -62,6 +197,9 @@ async def freeswitch_audio_stream(
     await websocket.accept()
     logger.info("FreeSWITCH audio stream WebSocket connected")
 
+    # Send initial handshake acknowledgment - mod_audio_stream expects this before sending connect event
+    await websocket.send_json({"event": "connected", "protocol": "audio_stream", "version": "1.0"})
+
     voice_service = FreeSwitchVoiceService(db)
     audio_converter = AudioConversionService()
 
@@ -74,8 +212,18 @@ async def freeswitch_audio_stream(
 
     # Audio buffering for VAD (Voice Activity Detection)
     audio_buffer = bytearray()
-    last_audio_time = None
+    buffer_start_time = None
     is_processing = False
+    is_speech_active = False  # Track if we're currently in a speech segment
+
+    # Initialize Silero VAD (will be re-initialized with correct sample rate after connect)
+    vad_service = SileroVADService(
+        threshold=VAD_THRESHOLD,
+        min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+        min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+        sample_rate=8000,  # Default, will be updated on connect
+    )
+    logger.info("Silero VAD initialized for FreeSWITCH connection")
 
     async def process_audio_buffer():
         """Process accumulated audio through STT and get AI response."""
@@ -145,17 +293,24 @@ async def freeswitch_audio_stream(
         except Exception as e:
             logger.error(f"Error streaming TTS: {e}")
 
-    async def check_silence():
-        """Background task to detect end of speech."""
-        nonlocal last_audio_time
+    async def check_buffer_timeout():
+        """Background task to enforce max buffer time."""
+        nonlocal buffer_start_time
         while True:
-            await asyncio.sleep(0.1)
-            if last_audio_time and audio_buffer:
-                elapsed = asyncio.get_event_loop().time() - last_audio_time
-                if elapsed > SILENCE_THRESHOLD and not is_processing:
+            await asyncio.sleep(0.5)
+
+            # Skip if no buffer or already processing
+            if not audio_buffer or is_processing or len(audio_buffer) < MIN_AUDIO_LENGTH:
+                continue
+
+            # Check max buffer time
+            if buffer_start_time:
+                buffer_elapsed = asyncio.get_event_loop().time() - buffer_start_time
+                if buffer_elapsed > MAX_BUFFER_SECONDS:
+                    logger.info(f"Max buffer time exceeded ({buffer_elapsed:.1f}s), forcing processing")
                     await process_audio_buffer()
 
-    silence_task = asyncio.create_task(check_silence())
+    timeout_task = asyncio.create_task(check_buffer_timeout())
 
     try:
         while True:
@@ -192,6 +347,16 @@ async def freeswitch_audio_stream(
                 agent_id = call_config.get("agent_id")
                 sample_rate = call_config.get("sample_rate", 8000)
 
+                # Reinitialize VAD with correct sample rate if different
+                if sample_rate != 8000:
+                    vad_service = SileroVADService(
+                        threshold=VAD_THRESHOLD,
+                        min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+                        min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+                        sample_rate=sample_rate,
+                    )
+                    logger.info(f"Reinitialized VAD with sample rate: {sample_rate}")
+
                 # Get OpenAI API key for the company
                 openai_cred = credential_service.get_credential_by_service_name(
                     db, "openai", company_id
@@ -207,24 +372,83 @@ async def freeswitch_audio_stream(
                 # Mark call as connected
                 await voice_service.handle_call_connected(call_uuid)
 
-                # Send welcome message if configured
+                # Check if we should use OpenAI Realtime mode
+                agent = None
+                use_realtime = False
+                if agent_id and settings.OPENAI_REALTIME_ENABLED:
+                    agent = agent_service.get_agent(db, agent_id, company_id)
+                    if agent and agent.llm_provider == "openai":
+                        use_realtime = True
+                        logger.info(f"Agent {agent_id} uses OpenAI, enabling Realtime mode")
+
+                if use_realtime and openai_api_key:
+                    # Switch to OpenAI Realtime mode
+                    timeout_task.cancel()
+                    try:
+                        await timeout_task
+                    except asyncio.CancelledError:
+                        pass
+
+                    realtime_success = await handle_freeswitch_realtime_mode(
+                        websocket=websocket,
+                        call_uuid=call_uuid,
+                        agent=agent,
+                        openai_api_key=openai_api_key,
+                        voice_service=voice_service,
+                        db=db,
+                        sample_rate=sample_rate,
+                    )
+                    if realtime_success:
+                        break
+                    else:
+                        logger.info("Falling back to standard VAD+STT+LLM+TTS mode")
+                        timeout_task = asyncio.create_task(check_buffer_timeout())
+
+                # Send welcome message if configured (only in standard mode)
                 welcome_message = call_config.get("welcome_message")
-                if welcome_message and openai_api_key:
+                if welcome_message and openai_api_key and not use_realtime:
                     await stream_tts_response(welcome_message)
 
                 logger.info(f"Call setup complete: {call_uuid}, company: {company_id}, agent: {agent_id}")
 
             elif event_type == "audio":
-                # Incoming audio from caller
+                # Incoming audio from caller (L16 PCM)
                 audio_data = data.get("audio", "")
 
                 if audio_data:
                     try:
                         audio_bytes = base64.b64decode(audio_data)
-                        audio_buffer.extend(audio_bytes)
-                        last_audio_time = asyncio.get_event_loop().time()
+
+                        # Process through Silero VAD
+                        vad_result = vad_service.process_l16(audio_bytes)
+
+                        # Buffer audio while speech is active
+                        if is_speech_active:
+                            audio_buffer.extend(audio_bytes)
+
+                        if vad_result:
+                            if vad_result.event == VADEvent.SPEECH_START:
+                                # Speech started - begin buffering
+                                is_speech_active = True
+                                audio_buffer.extend(audio_bytes)  # Add the chunk that triggered start
+                                buffer_start_time = asyncio.get_event_loop().time()
+                                logger.info(f"Silero VAD: Speech started (prob={vad_result.probability:.2f})")
+
+                            elif vad_result.event == VADEvent.SPEECH_END:
+                                # Speech ended - process the buffer
+                                is_speech_active = False
+                                logger.info(f"Silero VAD: Speech ended (prob={vad_result.probability:.2f}, duration={vad_result.speech_duration_ms:.0f}ms, buffer={len(audio_buffer)} bytes)")
+                                if len(audio_buffer) >= MIN_AUDIO_LENGTH:
+                                    await process_audio_buffer()
+                                else:
+                                    logger.warning(f"Buffer too small ({len(audio_buffer)} bytes), skipping STT")
+                                    audio_buffer.clear()
+                                    buffer_start_time = None
+
+                            # SPEECH_CONTINUE and SILENCE - audio already buffered above if speech is active
+
                     except Exception as e:
-                        logger.error(f"Error decoding audio: {e}")
+                        logger.error(f"Error processing audio: {e}")
 
             elif event_type == "disconnect":
                 hangup_cause = data.get("hangup_cause", "NORMAL_CLEARING")
@@ -248,7 +472,14 @@ async def freeswitch_audio_stream(
         if call_uuid:
             await voice_service.handle_call_ended(call_uuid, "ERROR")
     finally:
-        silence_task.cancel()
+        timeout_task.cancel()
+        try:
+            await timeout_task
+        except asyncio.CancelledError:
+            pass
+
+        # Reset VAD state
+        vad_service.reset()
 
 
 # --- Phone Number Management Endpoints (Authenticated) ---
