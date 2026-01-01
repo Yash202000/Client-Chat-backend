@@ -25,9 +25,11 @@ from app.services.openai_realtime_service import (
     convert_mulaw_8k_to_pcm_24k,
     convert_pcm_24k_to_mulaw_8k,
 )
-from app.services import credential_service, integration_service, agent_service
+from app.services import credential_service, integration_service, agent_service, chat_service
 from app.services.agent_execution_service import _get_tools_for_agent
 from app.services.tool_execution_service import execute_tool
+from app.services.connection_manager import manager
+from app.schemas.chat_message import ChatMessageCreate
 from app.models.integration import Integration
 from twilio.rest import Client as TwilioClient
 from app.schemas.twilio_voice import (
@@ -189,12 +191,15 @@ async def handle_realtime_mode(
     openai_api_key: str,
     voice_service: TwilioVoiceService,
     db: Session,
+    conversation_id: str,
+    company_id: int,
 ):
     """
     Handle voice call using OpenAI Realtime API for ultra-low latency.
     Bridges Twilio Media Stream WebSocket to OpenAI Realtime API WebSocket.
     """
     logger.info(f"Starting OpenAI Realtime mode for stream {stream_sid}")
+    agent_id = agent.id if agent else None
 
     # Get agent tools for function calling
     tools = []
@@ -296,12 +301,39 @@ async def handle_realtime_mode(
                         logger.error(f"Error executing function {func_call.name}: {e}")
                         await realtime.submit_function_result(func_call.call_id, f"Error: {str(e)}")
 
-                # Handle transcripts
+                # Handle transcripts - save to DB and broadcast
                 transcript = realtime.extract_transcript(event)
                 if transcript:
                     role, text = transcript
                     transcripts.append({"role": role, "text": text})
                     logger.info(f"Transcript [{role}]: {text[:50]}...")
+
+                    # Save message to database
+                    try:
+                        sender = "user" if role == "user" else "agent"
+                        msg_create = ChatMessageCreate(message=text, message_type="voice")
+                        saved_msg = chat_service.create_chat_message(
+                            db, msg_create, agent_id, conversation_id, company_id, sender
+                        )
+
+                        # Broadcast to frontend via WebSocket
+                        if saved_msg:
+                            broadcast_msg = {
+                                "type": "message",
+                                "message": {
+                                    "id": saved_msg.id,
+                                    "message": text,
+                                    "sender": sender,
+                                    "message_type": "voice",
+                                    "timestamp": saved_msg.timestamp.isoformat() if saved_msg.timestamp else None,
+                                }
+                            }
+                            await manager.broadcast_to_session(
+                                conversation_id, json.dumps(broadcast_msg), sender
+                            )
+                            logger.debug(f"Broadcast {sender} message to session {conversation_id}")
+                    except Exception as e:
+                        logger.error(f"Error saving/broadcasting transcript: {e}")
 
                 # Handle errors
                 if event.type == "error":
@@ -507,6 +539,7 @@ async def twilio_media_stream(
                 company_id = int(custom_params.get("company_id", 0))
                 agent_id_str = custom_params.get("agent_id", "")
                 agent_id = int(agent_id_str) if agent_id_str else None
+                conversation_id = custom_params.get("conversation_id", "")
 
                 # Get OpenAI API key for the company
                 openai_cred = credential_service.get_credential_by_service_name(
@@ -549,6 +582,8 @@ async def twilio_media_stream(
                         openai_api_key=openai_api_key,
                         voice_service=voice_service,
                         db=db,
+                        conversation_id=conversation_id,
+                        company_id=company_id,
                     )
                     if realtime_success:
                         # Realtime mode handled everything, exit

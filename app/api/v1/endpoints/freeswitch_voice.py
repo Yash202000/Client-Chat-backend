@@ -28,9 +28,11 @@ from app.services.openai_realtime_service import (
     convert_l16_8k_to_pcm_24k,
     convert_pcm_24k_to_l16_8k,
 )
-from app.services import credential_service, agent_service
+from app.services import credential_service, agent_service, chat_service
 from app.services.agent_execution_service import _get_tools_for_agent
 from app.services.tool_execution_service import execute_tool
+from app.services.connection_manager import manager
+from app.schemas.chat_message import ChatMessageCreate
 from app.schemas.freeswitch_voice import (
     FreeSwitchPhoneNumberCreate,
     FreeSwitchPhoneNumberUpdate,
@@ -58,12 +60,15 @@ async def handle_freeswitch_realtime_mode(
     openai_api_key: str,
     voice_service: FreeSwitchVoiceService,
     db: Session,
+    conversation_id: str,
+    company_id: int,
     sample_rate: int = 8000,
 ):
     """
     Handle FreeSWITCH call using OpenAI Realtime API for ultra-low latency.
     """
     logger.info(f"Starting OpenAI Realtime mode for FreeSWITCH call {call_uuid}")
+    agent_id = agent.id if agent else None
 
     # Get agent tools for function calling
     tools = []
@@ -149,11 +154,39 @@ async def handle_freeswitch_realtime_mode(
                         logger.error(f"Error executing function: {e}")
                         await realtime.submit_function_result(func_call.call_id, f"Error: {str(e)}")
 
+                # Handle transcripts - save to DB and broadcast
                 transcript = realtime.extract_transcript(event)
                 if transcript:
                     role, text = transcript
                     transcripts.append({"role": role, "text": text})
                     logger.info(f"Transcript [{role}]: {text[:50]}...")
+
+                    # Save message to database
+                    try:
+                        sender = "user" if role == "user" else "agent"
+                        msg_create = ChatMessageCreate(message=text, message_type="voice")
+                        saved_msg = chat_service.create_chat_message(
+                            db, msg_create, agent_id, conversation_id, company_id, sender
+                        )
+
+                        # Broadcast to frontend via WebSocket
+                        if saved_msg:
+                            broadcast_msg = {
+                                "type": "message",
+                                "message": {
+                                    "id": saved_msg.id,
+                                    "message": text,
+                                    "sender": sender,
+                                    "message_type": "voice",
+                                    "timestamp": saved_msg.timestamp.isoformat() if saved_msg.timestamp else None,
+                                }
+                            }
+                            await manager.broadcast_to_session(
+                                conversation_id, json.dumps(broadcast_msg), sender
+                            )
+                            logger.debug(f"Broadcast {sender} message to session {conversation_id}")
+                    except Exception as e:
+                        logger.error(f"Error saving/broadcasting transcript: {e}")
 
                 if event.type == "error":
                     logger.error(f"Realtime API error: {event.data}")
@@ -345,6 +378,7 @@ async def freeswitch_audio_stream(
 
                 company_id = call_config["company_id"]
                 agent_id = call_config.get("agent_id")
+                conversation_id = call_config.get("conversation_id", "")
                 sample_rate = call_config.get("sample_rate", 8000)
 
                 # Reinitialize VAD with correct sample rate if different
@@ -396,6 +430,8 @@ async def freeswitch_audio_stream(
                         openai_api_key=openai_api_key,
                         voice_service=voice_service,
                         db=db,
+                        conversation_id=conversation_id,
+                        company_id=company_id,
                         sample_rate=sample_rate,
                     )
                     if realtime_success:
