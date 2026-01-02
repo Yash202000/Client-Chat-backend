@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     LLM_REQUEST_TIMEOUT: int = 120  # Timeout for LLM API calls in seconds
     HTTP_REQUEST_TIMEOUT: int = 30  # Timeout for workflow HTTP requests in seconds
 
+    # OpenAI Realtime API Configuration
+    OPENAI_REALTIME_ENABLED: bool = True  # Use OpenAI Realtime API for voice calls
+    OPENAI_REALTIME_MODEL: str = "gpt-4o-realtime-preview-2024-12-17"
+    OPENAI_REALTIME_VOICE: str = "alloy"  # alloy, echo, shimmer, ash, ballad, coral, sage, verse
+
     # LiveKit AI Agents Configuration
     OPENAI_API_KEY: str = ""
     DEEPGRAM_API_KEY: str = ""

@@ -482,9 +482,19 @@ async def public_voice_websocket_endpoint(
                                     prompt_text = prompt_data.get("text", "")
                                     options = prompt_data.get("options", [])
                                     # Format response with options for voice
+                                    # Handle options as list of dicts, list of strings, or comma-separated string
+                                    option_names = []
                                     if options:
-                                        options_text = ", ".join(options)
-                                        agent_response_text = f"{prompt_text} Your options are: {options_text}"
+                                        if isinstance(options, str):
+                                            option_names = [o.strip() for o in options.split(',')]
+                                        elif isinstance(options, list) and options:
+                                            if isinstance(options[0], dict):
+                                                option_names = [o.get('label', o.get('value', str(o))) for o in options]
+                                            else:
+                                                option_names = [str(o) for o in options]
+
+                                    if option_names:
+                                        agent_response_text = f"{prompt_text} Your options are: {', '.join(option_names)}"
                                     else:
                                         agent_response_text = prompt_text
                                     workflow_executed = True

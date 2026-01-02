@@ -13,6 +13,7 @@ from app.services import (
     contact_service,
     conversation_session_service,
     chat_service,
+    memory_service,
 )
 from app.services import agent_execution_service
 from app.services import workflow_trigger_service
@@ -84,8 +85,8 @@ class FreeSwitchVoiceService:
             name=caller_name
         )
 
-        # Create conversation session
-        conversation_id = f"freeswitch_{call_uuid}"
+        # Create conversation session using phone number for session continuity
+        conversation_id = f"freeswitch_{from_number}"
         session = conversation_session_service.get_or_create_session(
             self.db,
             conversation_id=conversation_id,
@@ -95,6 +96,25 @@ class FreeSwitchVoiceService:
             company_id=company_id,
             agent_id=agent_id
         )
+
+        # For voice calls, ALWAYS clear workflow state for fresh start on each new call
+        # Voice calls should not resume from previous workflow state
+        session.next_step_id = None
+        session.context = {}
+        session.workflow_id = None
+        session.is_client_connected = True
+
+        # Reactivate session if it was previously resolved
+        if session.status == 'resolved':
+            session.status = 'active'
+            logger.info(f"Reactivated session {conversation_id} for returning caller")
+
+        self.db.commit()
+
+        # Clear workflow memories for fresh start
+        if agent_id:
+            memory_service.delete_all_memories(self.db, agent_id, conversation_id)
+            logger.info(f"Cleared workflow state for session {conversation_id}")
 
         # Create voice call record (reusing VoiceCall model)
         voice_call = VoiceCall(
@@ -186,6 +206,17 @@ class FreeSwitchVoiceService:
                 ).total_seconds()
             self.db.commit()
 
+            # Mark conversation session as resolved
+            if voice_call.conversation_id:
+                session = conversation_session_service.get_session_by_conversation_id(
+                    self.db, voice_call.conversation_id, voice_call.company_id
+                )
+                if session:
+                    session.status = 'resolved'
+                    session.is_client_connected = False
+                    self.db.commit()
+                    logger.info(f"Session {voice_call.conversation_id} marked as resolved")
+
             # Save transcript before cleanup
             self.save_transcript(call_uuid)
 
@@ -240,6 +271,7 @@ class FreeSwitchVoiceService:
             logger.error(f"Error saving user message: {e}")
 
         response_text = None
+        workflow_triggered = False  # Track if workflow was triggered
 
         # Try workflow trigger first
         try:
@@ -252,6 +284,7 @@ class FreeSwitchVoiceService:
             )
 
             if workflow:
+                workflow_triggered = True  # Mark workflow as triggered
                 logger.info(f"Found workflow {workflow.id} for voice message")
                 # Execute workflow
                 workflow_exec = WorkflowExecutionService(self.db)
@@ -261,14 +294,16 @@ class FreeSwitchVoiceService:
                     company_id=company_id,
                     workflow=workflow
                 )
-                if result and result.get("status") == "completed":
+                # Extract response regardless of status (workflow may have response nodes before pausing)
+                if result:
                     response_text = result.get("response", "")
-                    logger.info(f"Workflow response: {response_text[:100]}...")
+                    if response_text:
+                        logger.info(f"Workflow response ({result.get('status')}): {response_text[:100]}...")
         except Exception as e:
             logger.error(f"Error in workflow processing: {e}")
 
-        # Fallback to agent response if no workflow matched or workflow failed
-        if not response_text and agent_id:
+        # Fallback to agent response ONLY if no workflow was triggered
+        if not workflow_triggered and not response_text and agent_id:
             try:
                 response_text = await agent_execution_service.generate_agent_response(
                     self.db,
