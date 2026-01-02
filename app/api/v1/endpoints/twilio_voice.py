@@ -25,10 +25,12 @@ from app.services.openai_realtime_service import (
     convert_mulaw_8k_to_pcm_24k,
     convert_pcm_24k_to_mulaw_8k,
 )
-from app.services import credential_service, integration_service, agent_service, chat_service
+from app.services import credential_service, integration_service, agent_service, chat_service, workflow_trigger_service
 from app.services.agent_execution_service import _get_tools_for_agent
 from app.services.tool_execution_service import execute_tool
 from app.services.connection_manager import manager
+from app.services.workflow_execution_service import WorkflowExecutionService
+from app.models.workflow_trigger import TriggerChannel
 from app.schemas.chat_message import ChatMessageCreate
 from app.models.integration import Integration
 from twilio.rest import Client as TwilioClient
@@ -235,6 +237,38 @@ async def handle_realtime_mode(
     # Track transcripts for saving
     transcripts = []
 
+    # Flag to track when workflow has taken over (skip OpenAI response)
+    workflow_active = False
+
+    async def send_workflow_tts_response(text: str):
+        """Convert workflow text response to audio and send to Twilio."""
+        # Note: We do NOT reset workflow_active here - it stays True until
+        # the next user speech cycle begins (on speech_started event).
+        # This ensures any lingering OpenAI responses are discarded.
+        try:
+            tts_service = OpenAITTSService(api_key=openai_api_key)
+            pcm_audio = await tts_service.text_to_speech_pcm(text)
+
+            # Convert PCM 24kHz to mulaw 8kHz for Twilio
+            mulaw_bytes = convert_pcm_24k_to_mulaw_8k(pcm_audio)
+
+            # Send in chunks (640 bytes = 40ms at 8kHz mulaw)
+            chunk_size = 640
+            for i in range(0, len(mulaw_bytes), chunk_size):
+                chunk = mulaw_bytes[i:i+chunk_size]
+                mulaw_b64 = base64.b64encode(chunk).decode("utf-8")
+                media_message = {
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {"payload": mulaw_b64}
+                }
+                await websocket.send_json(media_message)
+                await asyncio.sleep(0.04)  # 40ms between chunks
+
+            logger.info(f"Sent workflow TTS response: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"Error sending workflow TTS response: {e}")
+
     async def forward_twilio_to_openai():
         """Forward audio from Twilio to OpenAI Realtime API."""
         try:
@@ -263,25 +297,69 @@ async def handle_realtime_mode(
 
     async def forward_openai_to_twilio():
         """Forward audio from OpenAI Realtime API to Twilio."""
+        nonlocal workflow_active
+
+        # Audio buffering for workflow priority
+        # We buffer ALL OpenAI audio for each response until we receive the user transcript
+        # The transcript may arrive before, during, or after the response audio
+        audio_buffer = []
+        awaiting_transcript = False
+        current_response_id = None  # Track which response we're buffering
+
+        async def flush_audio_buffer():
+            """Forward all buffered audio to Twilio."""
+            nonlocal audio_buffer
+            for chunk in audio_buffer:
+                mulaw_bytes = convert_pcm_24k_to_mulaw_8k(chunk)
+                mulaw_b64 = base64.b64encode(mulaw_bytes).decode("utf-8")
+                await websocket.send_json({
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {"payload": mulaw_b64}
+                })
+            audio_buffer = []
+
         try:
             async for event in realtime.receive_events():
-                # Handle audio output
+                # Detect when user starts speaking - we'll need to check for workflow
+                if event.type == "input_audio_buffer.speech_started":
+                    awaiting_transcript = True
+                    audio_buffer = []
+                    current_response_id = None
+                    # Reset workflow_active for new speech cycle - allows fresh workflow check
+                    workflow_active = False
+                    logger.debug("User speech started, will buffer OpenAI response")
+
+                # Detect when OpenAI starts generating a response - buffer from here
+                if event.type == "response.created":
+                    # If we're still waiting for user transcript, buffer this response
+                    if awaiting_transcript:
+                        current_response_id = event.data.get("response", {}).get("id")
+                        logger.debug(f"Response created while awaiting transcript, buffering: {current_response_id}")
+
+                # Handle audio output with buffering
                 audio_bytes = realtime.extract_audio_delta(event)
                 if audio_bytes:
-                    # Convert PCM 24kHz to mulaw 8kHz
-                    mulaw_bytes = convert_pcm_24k_to_mulaw_8k(audio_bytes)
-                    mulaw_b64 = base64.b64encode(mulaw_bytes).decode("utf-8")
+                    if workflow_active:
+                        pass  # Skip - workflow is handling response
+                    elif awaiting_transcript:
+                        # Buffer audio until we check for workflow trigger
+                        audio_buffer.append(audio_bytes)
+                    else:
+                        # No pending workflow check, forward immediately
+                        mulaw_bytes = convert_pcm_24k_to_mulaw_8k(audio_bytes)
+                        mulaw_b64 = base64.b64encode(mulaw_bytes).decode("utf-8")
 
-                    media_message = {
-                        "event": "media",
-                        "streamSid": stream_sid,
-                        "media": {"payload": mulaw_b64}
-                    }
-                    await websocket.send_json(media_message)
+                        media_message = {
+                            "event": "media",
+                            "streamSid": stream_sid,
+                            "media": {"payload": mulaw_b64}
+                        }
+                        await websocket.send_json(media_message)
 
-                # Handle function calls
+                # Handle function calls (only if workflow not active)
                 func_call = realtime.extract_function_call(event)
-                if func_call:
+                if func_call and not workflow_active:
                     logger.info(f"Realtime function call: {func_call.name}")
                     try:
                         # Execute the tool
@@ -308,7 +386,128 @@ async def handle_realtime_mode(
                     transcripts.append({"role": role, "text": text})
                     logger.info(f"Transcript [{role}]: {text[:50]}...")
 
+                    # Check for workflow trigger on user messages
+                    if role == "user":
+                        # Got user transcript, stop buffering
+                        awaiting_transcript = False
+
+                        try:
+                            workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                                db=db,
+                                channel=TriggerChannel.TWILIO_VOICE,
+                                company_id=company_id,
+                                message=text,
+                                session_data={"session_id": conversation_id, "agent_id": agent_id}
+                            )
+
+                            if workflow:
+                                logger.info(f"Workflow {workflow.id} matched for voice message: {text[:30]}...")
+                                workflow_active = True
+
+                                # Discard buffered OpenAI audio - workflow will respond instead
+                                discarded_count = len(audio_buffer)
+                                audio_buffer.clear()
+                                logger.info(f"Discarded {discarded_count} buffered OpenAI audio chunks")
+
+                                # Cancel any in-progress OpenAI response to prevent it from speaking
+                                await realtime.cancel_response()
+                                logger.info("Cancelled OpenAI response for workflow execution")
+
+                                # Execute workflow
+                                workflow_exec = WorkflowExecutionService(db)
+                                result = await workflow_exec.execute_workflow(
+                                    user_message=text,
+                                    conversation_id=conversation_id,
+                                    company_id=company_id,
+                                    workflow=workflow
+                                )
+
+                                if result:
+                                    status = result.get("status")
+                                    response_text = result.get("response", "")
+
+                                    # Handle response for any status that has one
+                                    if response_text:
+                                        # Save workflow response to DB
+                                        msg_create = ChatMessageCreate(message=response_text, message_type="voice")
+                                        saved_msg = chat_service.create_chat_message(
+                                            db, msg_create, agent_id, conversation_id, company_id, "agent"
+                                        )
+
+                                        # Broadcast workflow response
+                                        if saved_msg:
+                                            broadcast_msg = {
+                                                "type": "message",
+                                                "message": {
+                                                    "id": saved_msg.id,
+                                                    "message": response_text,
+                                                    "sender": "agent",
+                                                    "message_type": "voice",
+                                                    "timestamp": saved_msg.timestamp.isoformat() if saved_msg.timestamp else None,
+                                                }
+                                            }
+                                            await manager.broadcast_to_session(
+                                                conversation_id, json.dumps(broadcast_msg), "agent"
+                                            )
+
+                                        # Send workflow response via TTS
+                                        await send_workflow_tts_response(response_text)
+                                        logger.info(f"Sent TTS for workflow response ({status}): {response_text[:50]}...")
+
+                                    # Also handle prompt text for paused_for_prompt status
+                                    if status == "paused_for_prompt":
+                                        prompt_data = result.get("prompt", {})
+                                        prompt_text = prompt_data.get("text", "")
+                                        options = prompt_data.get("options", [])
+
+                                        # Format prompt with options for voice
+                                        # Handle options as list of dicts, list of strings, or comma-separated string
+                                        option_names = []
+                                        if options:
+                                            if isinstance(options, str):
+                                                option_names = [o.strip() for o in options.split(',')]
+                                            elif isinstance(options, list) and options:
+                                                if isinstance(options[0], dict):
+                                                    option_names = [o.get('label', o.get('value', str(o))) for o in options]
+                                                else:
+                                                    option_names = [str(o) for o in options]
+
+                                        if option_names:
+                                            full_prompt_text = f"{prompt_text}. Your options are: {', '.join(option_names)}"
+                                        else:
+                                            full_prompt_text = prompt_text
+
+                                        if full_prompt_text and full_prompt_text != response_text:
+                                            # Send prompt text via TTS as well
+                                            await send_workflow_tts_response(full_prompt_text)
+                                            logger.info(f"Sent TTS for prompt: {full_prompt_text[:50]}...")
+
+                                    continue  # Skip OpenAI response processing
+                                else:
+                                    logger.warning(f"Workflow returned no result")
+                                    workflow_active = False
+                            else:
+                                # No workflow matched - forward buffered OpenAI audio
+                                if audio_buffer:
+                                    logger.info(f"No workflow, forwarding {len(audio_buffer)} buffered audio chunks")
+                                    await flush_audio_buffer()
+                        except Exception as e:
+                            logger.error(f"Error checking/executing workflow trigger: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            # Only forward buffered audio if no workflow was matched
+                            # If workflow was matched (workflow_active=True), keep it True to block OpenAI responses
+                            if not workflow_active:
+                                if audio_buffer:
+                                    await flush_audio_buffer()
+
                     # Save message to database
+                    # - Always save user messages
+                    # - Skip OpenAI assistant responses when workflow is active (workflow already responded)
+                    if role == "assistant" and workflow_active:
+                        logger.debug(f"Skipping OpenAI assistant transcript (workflow active): {text[:50]}...")
+                        continue
+
                     try:
                         sender = "user" if role == "user" else "agent"
                         msg_create = ChatMessageCreate(message=text, message_type="voice")
