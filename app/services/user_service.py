@@ -6,6 +6,12 @@ from app.core.security import get_password_hash
 from app.services import user_settings_service
 from app.schemas import user_settings as schemas_user_settings
 import datetime
+import asyncio
+from typing import Dict, Callable
+
+# Track pending offline tasks by user_id
+_pending_offline_tasks: Dict[int, asyncio.Task] = {}
+OFFLINE_GRACE_PERIOD = 5  # seconds
 
 def get_user(db: Session, user_id: int):
     return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.id == user_id).first()
@@ -74,6 +80,74 @@ def update_user_presence(db: Session, user_id: int, status: str):
         db.refresh(user)
         return user
     return None
+
+
+async def schedule_offline_update(db_factory: Callable, user_id: int, grace_period: int = None):
+    """
+    Schedule a delayed offline update with grace period.
+    Allows user to reconnect without going offline.
+    Skips offline if user is in_call.
+
+    Args:
+        db_factory: Function to create a new DB session (e.g., SessionLocal)
+        user_id: User ID to set offline
+        grace_period: Seconds to wait before setting offline (default: OFFLINE_GRACE_PERIOD)
+    """
+    global _pending_offline_tasks
+
+    if grace_period is None:
+        grace_period = OFFLINE_GRACE_PERIOD
+
+    # Cancel any existing pending task for this user
+    if user_id in _pending_offline_tasks:
+        _pending_offline_tasks[user_id].cancel()
+        try:
+            await _pending_offline_tasks[user_id]
+        except asyncio.CancelledError:
+            pass
+
+    async def delayed_offline():
+        try:
+            await asyncio.sleep(grace_period)
+            db = db_factory()
+            try:
+                user = get_user(db, user_id)
+                if user:
+                    # Don't set offline if user is in a call
+                    if user.presence_status == "in_call":
+                        print(f"[Presence] Skipping offline for user {user_id} - currently in_call")
+                        return
+                    # Don't set offline if user came back online
+                    if user.presence_status == "online":
+                        print(f"[Presence] Skipping offline for user {user_id} - already online")
+                        return
+                    user.presence_status = "offline"
+                    user.last_seen = datetime.datetime.now(datetime.UTC)
+                    db.commit()
+                    print(f"[Presence] Set user {user_id} to offline after {grace_period}s grace period")
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            print(f"[Presence] Cancelled pending offline for user {user_id}")
+        finally:
+            _pending_offline_tasks.pop(user_id, None)
+
+    task = asyncio.create_task(delayed_offline())
+    _pending_offline_tasks[user_id] = task
+
+
+def cancel_pending_offline(user_id: int):
+    """
+    Cancel pending offline task when user reconnects.
+
+    Args:
+        user_id: User ID to cancel offline for
+    """
+    global _pending_offline_tasks
+    if user_id in _pending_offline_tasks:
+        _pending_offline_tasks[user_id].cancel()
+        _pending_offline_tasks.pop(user_id, None)
+        print(f"[Presence] Cancelled pending offline for user {user_id} - reconnected")
 
 def delete_user(db: Session, user_id: int):
     """Delete or deactivate a user by ID.

@@ -1,11 +1,11 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from app.models.team_membership import TeamMembership
 from app.models.team import Team
 from app.models.user import User
 from app.models.conversation_session import ConversationSession
 from app.schemas.conversation_session import ConversationSessionUpdate
-from app.services import conversation_session_service, livekit_service
+from app.services import conversation_session_service, livekit_service, messaging_service, integration_service
 from app.services.connection_manager import manager
 from datetime import datetime
 from typing import Optional
@@ -27,20 +27,43 @@ def find_available_agent(db: Session, team_name: str, company_id: int) -> Option
     Returns:
         User object if available agent found, None otherwise
     """
-    # First find the team by name
+    # Case-insensitive team lookup
     team = db.query(Team).filter(
         and_(
-            Team.name == team_name,
+            func.lower(Team.name) == team_name.lower(),
             Team.company_id == company_id
         )
     ).first()
 
     if not team:
         logger.warning(f"Team '{team_name}' not found for company {company_id}")
+        # Log available teams for debugging
+        available_teams = db.query(Team.name).filter(Team.company_id == company_id).all()
+        logger.warning(f"Available teams for company {company_id}: {[t.name for t in available_teams]}")
         return None
 
+    # Log team found
+    logger.info(f"Found team '{team.name}' (id={team.id}) for handoff")
+
+    # Query all team members for detailed logging
+    all_members = db.query(TeamMembership).join(User).filter(
+        and_(
+            TeamMembership.team_id == team.id,
+            TeamMembership.company_id == company_id
+        )
+    ).all()
+
+    # Log each member's status for debugging
+    for member in all_members:
+        user = member.user
+        logger.info(
+            f"Team member: {user.email}, "
+            f"presence={user.presence_status}, "
+            f"is_available={member.is_available}, "
+            f"sessions={member.current_session_count}/{member.max_concurrent_sessions}"
+        )
+
     # Query for available team members
-    print(team.id, company_id, TeamMembership.is_available, User.presence_status,TeamMembership.current_session_count < TeamMembership.max_concurrent_sessions)
     available_membership = db.query(TeamMembership).join(User).filter(
         and_(
             TeamMembership.team_id == team.id,
@@ -55,6 +78,7 @@ def find_available_agent(db: Session, team_name: str, company_id: int) -> Option
     ).first()
 
     if available_membership:
+        logger.info(f"Found available agent: {available_membership.user.email}")
         return available_membership.user
 
     logger.warning(f"No available agents found in team '{team_name}' for company {company_id}")
@@ -179,6 +203,31 @@ async def request_handoff(
                 user_name=customer_name,
                 agent_name=agent_name
             )
+
+            # Generate meeting link for the customer
+            meeting_link = livekit_service.generate_meeting_link(
+                room_name=call_room["room_name"],
+                user_token=call_room["user_token"]
+            )
+
+            # Send meeting link to customer via their messaging channel
+            if session.channel in ['whatsapp', 'telegram', 'instagram', 'messenger']:
+                try:
+                    integration = integration_service.get_integration_by_type_and_company(
+                        db, session.channel, session.company_id
+                    )
+                    if integration:
+                        await messaging_service.send_meeting_link(
+                            channel=session.channel,
+                            recipient_id=session.conversation_id,
+                            meeting_link=meeting_link,
+                            agent_name=agent_name,
+                            integration=integration,
+                            db=db
+                        )
+                        logger.info(f"Sent meeting link to customer via {session.channel}")
+                except Exception as e:
+                    logger.warning(f"Failed to send meeting link to customer via {session.channel}: {e}")
 
             # Broadcast incoming call notification to the company channel
             # The frontend will filter by agent_id to show only to the intended agent

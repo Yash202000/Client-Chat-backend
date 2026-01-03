@@ -71,6 +71,48 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                             db, conversation_id=sender_id, workflow_id=None, contact_id=contact.id, channel='instagram', company_id=company_id
                         )
 
+                        # Reopen resolved sessions when a new message arrives
+                        if session.status == 'resolved':
+                            session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                            logging.info(f"Reopened resolved session {session.conversation_id} for incoming Instagram message")
+
+                        # Check for restart command ("0", "restart", "start over", "cancel", "reset")
+                        if conversation_session_service.is_restart_command(message_text):
+                            logging.info(f"[Instagram] Restart command received from {sender_id}")
+
+                            # Reset workflow state
+                            was_reset = await conversation_session_service.reset_session_workflow(db, session, company_id)
+
+                            # Save user's restart message to chat history
+                            user_chat_message = ChatMessageCreate(message=message_text, message_type="text")
+                            user_db_message = chat_service.create_chat_message(db, user_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(user_db_message).json(),
+                                "user"
+                            )
+
+                            # Send confirmation message
+                            confirmation = "Conversation restarted. How can I help you?"
+                            await messaging_service.send_instagram_message(
+                                recipient_psid=sender_id,
+                                message_text=confirmation,
+                                integration=integration
+                            )
+
+                            # Save confirmation to chat history
+                            agent_chat_message = ChatMessageCreate(message=confirmation, message_type="text")
+                            agent_db_message = chat_service.create_chat_message(db, agent_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="agent")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(agent_db_message).json(),
+                                "agent"
+                            )
+
+                            return Response(status_code=200)
+
                         chat_message = ChatMessageCreate(message=message_text, message_type="text")
                         created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
 
@@ -130,6 +172,12 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                             return Response(status_code=200)
 
                         # --- Workflow Execution ---
+                        # Update session with workflow's agent_id (needed for handoff team lookup)
+                        if workflow.agent_id and session.agent_id != workflow.agent_id:
+                            session.agent_id = workflow.agent_id
+                            db.commit()
+                            db.refresh(session)
+
                         workflow_exec_service = WorkflowExecutionService(db)
                         execution_result = await workflow_exec_service.execute_workflow(
                             workflow_id=workflow.id,

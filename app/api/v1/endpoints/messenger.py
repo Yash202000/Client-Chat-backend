@@ -7,7 +7,7 @@ import json
 
 from app.core.dependencies import get_db
 from app.core.config import settings
-from app.services import contact_service, conversation_session_service, chat_service, integration_service
+from app.services import contact_service, conversation_session_service, chat_service, integration_service, messaging_service
 from app.services.connection_manager import manager
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import session as schemas_session, websocket as schemas_websocket, chat_message as schemas_chat_message
@@ -71,6 +71,48 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                         # 2. Get or create a conversation session
                         session = conversation_session_service.get_or_create_session(db, conversation_id=sender_psid, workflow_id=workflow_id, contact_id=contact.id, channel='messenger', company_id=company_id)
+
+                        # Reopen resolved sessions when a new message arrives
+                        if session.status == 'resolved':
+                            session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                            print(f"Reopened resolved session {session.conversation_id} for incoming Messenger message")
+
+                        # Check for restart command ("0", "restart", "start over", "cancel", "reset")
+                        if conversation_session_service.is_restart_command(message_text):
+                            print(f"[Messenger] Restart command received from {sender_psid}")
+
+                            # Reset workflow state
+                            was_reset = await conversation_session_service.reset_session_workflow(db, session, company_id)
+
+                            # Save user's restart message to chat history
+                            user_chat_message = ChatMessageCreate(message=message_text, message_type="text")
+                            user_db_message = chat_service.create_chat_message(db, user_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(user_db_message).json(),
+                                "user"
+                            )
+
+                            # Send confirmation message
+                            confirmation = "Conversation restarted. How can I help you?"
+                            await messaging_service.send_messenger_message(
+                                recipient_psid=sender_psid,
+                                message_text=confirmation,
+                                integration=integration
+                            )
+
+                            # Save confirmation to chat history
+                            agent_chat_message = ChatMessageCreate(message=confirmation, message_type="text")
+                            agent_db_message = chat_service.create_chat_message(db, agent_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="agent")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(agent_db_message).json(),
+                                "agent"
+                            )
+
+                            continue  # Process next message event
 
                         # 3. Save the incoming message
                         chat_message = ChatMessageCreate(message=message_text, message_type="text")

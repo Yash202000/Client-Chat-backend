@@ -156,6 +156,9 @@ async def internal_chat_websocket_endpoint(
     # Note: User-specific channels are available but incoming calls use company channel
     # This provides better reliability as agents are always connected to company channel
 
+    # Cancel any pending offline task (user reconnected)
+    user_service.cancel_pending_offline(current_user.id)
+
     # Update presence with temporary DB session
     with get_db_session() as db:
         user_service.update_user_presence(db, user_id=current_user.id, status="online")
@@ -169,9 +172,8 @@ async def internal_chat_websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(websocket, channel_id_str)
 
-        # Update presence with temporary DB session
-        with get_db_session() as db:
-            user_service.update_user_presence(db, user_id=current_user.id, status="offline")
+        # Schedule delayed offline update (allows reconnection within grace period)
+        await user_service.schedule_offline_update(SessionLocal, current_user.id)
 
         presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "offline"})
         await manager.broadcast(presence_message.model_dump_json(), channel_id_str)
@@ -705,17 +707,18 @@ async def websocket_endpoint(
                             try:
                                 # Decrypt credentials to get api_token and phone_number_id
                                 whatsapp_credentials = integration_service.get_decrypted_credentials(whatsapp_integration)
-                                api_token = whatsapp_credentials.get("api_token")
+                                api_token = whatsapp_credentials.get("api_token") or whatsapp_credentials.get("access_token")
                                 phone_number_id = whatsapp_credentials.get("phone_number_id")
 
                                 if not api_token or not phone_number_id:
-                                    print(f"[websocket_conversations] WhatsApp credentials missing for company {company_id}")
+                                    print(f"[websocket_conversations] WhatsApp credentials missing for company {company_id}. api_token: {bool(api_token)}, phone_number_id: {bool(phone_number_id)}")
                                     continue  # Changed from return to continue
 
                                 await messaging_service.send_whatsapp_message(
                                     recipient_phone_number=session_obj.contact.phone_number,
                                     message_text=user_message,
-                                    integration=whatsapp_integration
+                                    integration=whatsapp_integration,
+                                    db=db
                                 )
                                 print(f"[websocket_conversations] Sent message to WhatsApp for session {session_id}")
                             except Exception as e:

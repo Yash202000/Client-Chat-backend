@@ -57,13 +57,18 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                         )
 
                         session = conversation_session_service.get_or_create_session(
-                            db, 
-                            conversation_id=sender_id, 
-                            workflow_id=None, 
-                            contact_id=contact.id, 
-                            channel='linkedin', 
+                            db,
+                            conversation_id=sender_id,
+                            workflow_id=None,
+                            contact_id=contact.id,
+                            channel='linkedin',
                             company_id=company_id
                         )
+
+                        # Reopen resolved sessions when a new message arrives
+                        if session.status == 'resolved':
+                            session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                            print(f"Reopened resolved session {session.conversation_id} for incoming LinkedIn message")
 
                         chat_message = ChatMessageCreate(message=message_text, message_type="text")
                         created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")

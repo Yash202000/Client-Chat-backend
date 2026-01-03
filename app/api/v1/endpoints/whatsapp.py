@@ -4,8 +4,10 @@ import os
 import logging
 import traceback
 import json
+import base64
 
 from app.core.dependencies import get_db
+from app.api.v1.endpoints.websocket_conversations import process_attachments_for_storage
 from app.core.config import settings
 from app.services import (
     contact_service,
@@ -59,20 +61,65 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 
                 message_text = ""
                 message_type = message_data.get("type")
+                attachments = []  # List to hold any media attachments
+                pending_media = None  # Will be set if this is a media message
 
                 if message_type == "text":
                     message_text = message_data["text"]["body"]
                 elif message_type == "interactive":
                     interactive_type = message_data["interactive"]["type"]
                     if interactive_type == "button_reply":
-                        message_text = message_data["interactive"]["button_reply"]["title"]
+                        # Use id (contains the key/value) instead of title (display text)
+                        message_text = message_data["interactive"]["button_reply"]["id"]
                     elif interactive_type == "list_reply":
-                        message_text = message_data["interactive"]["list_reply"]["title"]
+                        # Use id (contains the key/value) instead of title (display text)
+                        message_text = message_data["interactive"]["list_reply"]["id"]
                     else:
                         print(f"Ignoring unknown interactive type: {interactive_type}")
                         return Response(status_code=200)
+                elif message_type in ["image", "document", "audio", "video"]:
+                    # Handle media messages
+                    media_data = message_data.get(message_type, {})
+                    media_id = media_data.get("id")
+
+                    if not media_id:
+                        print(f"No media ID found for {message_type} message")
+                        return Response(status_code=200)
+
+                    # Get caption if available (images/videos can have captions)
+                    message_text = media_data.get("caption", "")
+
+                    # We need the integration to download media, but we get it later
+                    # Store media info for processing after we get the integration
+                    pending_media = {
+                        "media_id": media_id,
+                        "media_type": message_type,
+                        "mime_type": media_data.get("mime_type", "application/octet-stream"),
+                        "filename": media_data.get("filename")  # Only documents have filename
+                    }
+                elif message_type == "location":
+                    # Handle location messages
+                    location_data = message_data.get("location", {})
+                    latitude = location_data.get("latitude")
+                    longitude = location_data.get("longitude")
+
+                    if latitude is None or longitude is None:
+                        print(f"Invalid location data received")
+                        return Response(status_code=200)
+
+                    # Create location attachment (same format as websocket)
+                    attachments.append({
+                        "location": {
+                            "latitude": latitude,
+                            "longitude": longitude,
+                            "name": location_data.get("name"),
+                            "address": location_data.get("address")
+                        }
+                    })
+                    message_text = f"📍 Location ({latitude:.4f}, {longitude:.4f})"
+                    print(f"[WhatsApp] Received location: {latitude}, {longitude}")
                 else:
-                    print(f"Ignoring non-text/interactive message type: {message_type}")
+                    print(f"Ignoring unsupported message type: {message_type}")
                     return Response(status_code=200)
 
                 integration = integration_service.get_integration_by_phone_number_id(db, phone_number_id=phone_number_id)
@@ -81,6 +128,41 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     return Response(status_code=200)
 
                 company_id = integration.company_id
+
+                # Download and process media if this is a media message
+                if pending_media:
+                    try:
+                        print(f"[WhatsApp] Downloading {pending_media['media_type']} media: {pending_media['media_id']}")
+                        media_result = await messaging_service.download_whatsapp_media(
+                            media_id=pending_media["media_id"],
+                            integration=integration,
+                            db=db
+                        )
+
+                        # Create attachment dict in the format expected by process_attachments_for_storage
+                        file_data_base64 = base64.b64encode(media_result["data"]).decode('utf-8')
+                        attachment = {
+                            "file_data": file_data_base64,
+                            "file_name": pending_media.get("filename") or media_result["file_name"],
+                            "file_type": media_result["mime_type"],
+                            "file_size": len(media_result["data"])
+                        }
+                        attachments.append(attachment)
+
+                        # Process attachments to upload to S3
+                        attachment_text = process_attachments_for_storage(attachments)
+                        print(f"[WhatsApp] Processed attachment: {attachment_text}")
+
+                        # If no caption was provided, use attachment text as message
+                        if not message_text:
+                            message_text = attachment_text
+
+                    except Exception as e:
+                        print(f"[WhatsApp] Error downloading media: {e}")
+                        # Continue processing without attachment if download fails
+                        if not message_text:
+                            message_text = f"[Media attachment - {pending_media['media_type']}]"
+
                 contact = contact_service.get_or_create_contact_for_channel(
                     db, 
                     company_id=company_id, 
@@ -93,8 +175,51 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     db, conversation_id=sender_phone, workflow_id=None, contact_id=contact.id, channel='whatsapp', company_id=company_id
                 )
 
+                # Reopen resolved sessions when a new message arrives
+                if session.status == 'resolved':
+                    session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                    print(f"Reopened resolved session {session.conversation_id} for incoming WhatsApp message")
+
+                # Check for restart command ("0", "restart", "start over", "cancel", "reset")
+                if conversation_session_service.is_restart_command(message_text):
+                    print(f"[WhatsApp] Restart command received from {sender_phone}")
+
+                    # Reset workflow state
+                    was_reset = await conversation_session_service.reset_session_workflow(db, session, company_id)
+
+                    # Save user's restart message to chat history
+                    user_chat_message = ChatMessageCreate(message=message_text, message_type="text")
+                    user_db_message = chat_service.create_chat_message(db, user_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+
+                    await session_ws_manager.broadcast_to_session(
+                        session.conversation_id,
+                        schemas_chat_message.ChatMessage.from_orm(user_db_message).json(),
+                        "user"
+                    )
+
+                    # Send confirmation message
+                    confirmation = "Conversation restarted. How can I help you?"
+                    await messaging_service.send_whatsapp_message(
+                        recipient_phone_number=sender_phone,
+                        message_text=confirmation,
+                        integration=integration,
+                        db=db
+                    )
+
+                    # Save confirmation to chat history
+                    agent_chat_message = ChatMessageCreate(message=confirmation, message_type="text")
+                    agent_db_message = chat_service.create_chat_message(db, agent_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="agent")
+
+                    await session_ws_manager.broadcast_to_session(
+                        session.conversation_id,
+                        schemas_chat_message.ChatMessage.from_orm(agent_db_message).json(),
+                        "agent"
+                    )
+
+                    return Response(status_code=200)
+
                 chat_message = ChatMessageCreate(message=message_text, message_type="text")
-                created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+                created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user", attachments=attachments if attachments else None)
 
                 await session_ws_manager.broadcast_to_session(
                     session.conversation_id, 
@@ -128,7 +253,7 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     agent = agents[0]
 
                     agent_response_text = await agent_execution_service.generate_agent_response(
-                        db, agent.id, session.conversation_id, company_id, message_text
+                        db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
                     )
                     
                     print(agent_response_text)
@@ -139,7 +264,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     await messaging_service.send_whatsapp_message(
                         recipient_phone_number=sender_phone,
                         message_text=agent_response_text,
-                        integration=integration
+                        integration=integration,
+                        db=db
                     )
 
                     await session_ws_manager.broadcast_to_session(
@@ -150,11 +276,19 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     return Response(status_code=200)
 
                 # --- Workflow Execution ---
+                # Update session with workflow's agent_id (needed for handoff team lookup)
+                if workflow.agent_id and session.agent_id != workflow.agent_id:
+                    session.agent_id = workflow.agent_id
+                    db.commit()
+                    db.refresh(session)
+
                 workflow_exec_service = WorkflowExecutionService(db)
                 execution_result = await workflow_exec_service.execute_workflow(
                     workflow_id=workflow.id,
                     user_message=message_text,
-                    conversation_id=session.conversation_id
+                    conversation_id=session.conversation_id,
+                    company_id=company_id,
+                    attachments=attachments if attachments else None
                 )
 
                 if execution_result.get("status") == "completed":
@@ -165,7 +299,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     await messaging_service.send_whatsapp_message(
                         recipient_phone_number=sender_phone,
                         message_text=response_text,
-                        integration=integration
+                        integration=integration,
+                        db=db
                     )
                     
                     await session_ws_manager.broadcast_to_session(
@@ -180,7 +315,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         recipient_phone_number=sender_phone,
                         message_text=prompt_data.get("text", "Please choose an option:"),
                         options=prompt_data.get("options", []),
-                        integration=integration
+                        integration=integration,
+                        db=db
                     )
                 
                 elif execution_result.get("status") == "paused_for_input":

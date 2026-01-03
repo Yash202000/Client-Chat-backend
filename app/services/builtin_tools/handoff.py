@@ -32,13 +32,15 @@ async def execute_handoff_tool(db: Session, session_id: str, parameters: dict):
     else:
         # Get the agent to find the configured handoff team
         agent = db.query(Agent).filter(Agent.id == session.agent_id).first()
+        print(f"[HANDOFF TOOL] Agent: {agent.name if agent else 'None'}, handoff_team_id: {agent.handoff_team_id if agent else 'None'}")
         if agent and agent.handoff_team_id and agent.handoff_team:
             team_name = agent.handoff_team.name
-            print(f"[HANDOFF TOOL] Using agent's configured team: {team_name}")
+            print(f"[HANDOFF TOOL] Using agent's configured team: {team_name} (id={agent.handoff_team_id})")
         else:
             # Use parameter if provided, otherwise default to "Support"
             team_name = parameters.get("pool", "Support")
-            print(f"[HANDOFF TOOL] Agent has no configured team, using: {team_name}")
+            print(f"[HANDOFF TOOL] Agent has no configured handoff team! Using default: {team_name}")
+            print(f"[HANDOFF TOOL] TIP: Configure the handoff team in your AI Agent settings")
 
     print(f"[HANDOFF TOOL] Session: {session_id}, Reason: {reason}, Team: {team_name}, Priority: {priority}")
     print(f"[HANDOFF TOOL] Summary: {summary}")

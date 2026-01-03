@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.dependencies import get_db, get_current_user
 from app.models.user import User
-from app.services import conversation_session_service, agent_assignment_service
+from app.services import conversation_session_service, agent_assignment_service, livekit_service, messaging_service, integration_service
 from app.services.connection_manager import manager
 from app.api.v1.endpoints.video_calls import get_livekit_token
 from app.core.config import settings
@@ -229,3 +229,92 @@ async def end_handoff(
         "session_id": request.session_id,
         "message": "Handoff call ended successfully"
     }
+
+
+class SendMeetingLinkRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/send-meeting-link")
+async def send_meeting_link(
+    request: SendMeetingLinkRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Manually send/resend a meeting link to the customer.
+    This allows agents to send the meeting link again if the customer didn't receive it.
+    """
+    logger.info(f"[MEETING LINK] Agent {current_user.id} sending meeting link for session {request.session_id}")
+
+    # Get the session
+    session = conversation_session_service.get_session(db, request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Check if session belongs to agent's company
+    if session.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if the session is from a supported channel
+    supported_channels = ['whatsapp', 'telegram', 'instagram', 'messenger']
+    if session.channel not in supported_channels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Meeting links not supported for channel: {session.channel}. Supported: {', '.join(supported_channels)}"
+        )
+
+    # Get integration for the channel
+    integration = integration_service.get_integration_by_type_and_company(
+        db, session.channel, session.company_id
+    )
+    if not integration:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No {session.channel} integration configured for this company"
+        )
+
+    # Create or get LiveKit room
+    agent_name = f"{current_user.first_name} {current_user.last_name}".strip() if current_user.first_name else current_user.email
+    customer_name = session.contact.name if session.contact and session.contact.name else "Customer"
+
+    try:
+        call_room = livekit_service.create_call_room(
+            session_id=request.session_id,
+            user_identity=f"user_{request.session_id}",
+            agent_identity=f"agent_{current_user.id}",
+            user_name=customer_name,
+            agent_name=agent_name
+        )
+
+        # Generate meeting link
+        meeting_link = livekit_service.generate_meeting_link(
+            room_name=call_room["room_name"],
+            user_token=call_room["user_token"]
+        )
+
+        # Send meeting link to customer
+        await messaging_service.send_meeting_link(
+            channel=session.channel,
+            recipient_id=session.conversation_id,
+            meeting_link=meeting_link,
+            agent_name=agent_name,
+            integration=integration,
+            db=db
+        )
+
+        logger.info(f"[MEETING LINK] Sent meeting link to customer via {session.channel}")
+
+        return {
+            "status": "sent",
+            "session_id": request.session_id,
+            "channel": session.channel,
+            "meeting_link": meeting_link,
+            "room_name": call_room["room_name"],
+            "agent_token": call_room["agent_token"],
+            "livekit_url": settings.LIVEKIT_URL
+        }
+
+    except Exception as e:
+        logger.error(f"[MEETING LINK] Failed to send meeting link: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send meeting link: {str(e)}")

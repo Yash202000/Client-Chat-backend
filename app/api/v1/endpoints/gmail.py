@@ -62,6 +62,11 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 db, conversation_id=sender_email, workflow_id=None, contact_id=contact.id, channel='gmail', company_id=company_id
             )
 
+            # Reopen resolved sessions when a new message arrives
+            if session.status == 'resolved':
+                session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                logging.info(f"Reopened resolved session {session.conversation_id} for incoming Gmail message")
+
             chat_message = ChatMessageCreate(message=message_text, message_type="text")
             created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
 
@@ -111,6 +116,12 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 return Response(status_code=200)
 
             # --- Workflow Execution ---
+            # Update session with workflow's agent_id (needed for handoff team lookup)
+            if workflow.agent_id and session.agent_id != workflow.agent_id:
+                session.agent_id = workflow.agent_id
+                db.commit()
+                db.refresh(session)
+
             workflow_exec_service = WorkflowExecutionService(db)
             execution_result = await workflow_exec_service.execute_workflow(
                 workflow_id=workflow.id,
