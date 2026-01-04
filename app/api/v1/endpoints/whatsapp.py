@@ -252,28 +252,53 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         return Response(status_code=200)
                     agent = agents[0]
 
-                    agent_response_text = await agent_execution_service.generate_agent_response(
+                    agent_response = await agent_execution_service.generate_agent_response(
                         db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
                     )
-                    
-                    print(agent_response_text)
 
-                    agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
-                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
+                    # Check if LLM decided to trigger a workflow
+                    if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                        workflow_id = agent_response.get("workflow_id")
+                        print(f"[WhatsApp] LLM triggered workflow {workflow_id}")
+                        workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                        if not workflow:
+                            print(f"[WhatsApp] Workflow {workflow_id} not found")
+                            return Response(status_code=200)
+                        # Continue to workflow execution below
+                    elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                        # LLM routing failed - notify user and initiate handoff
+                        reason = agent_response.get("reason", "AI routing unavailable")
+                        print(f"[WhatsApp] LLM failed, initiating handoff: {reason}")
+                        error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                        await messaging_service.send_whatsapp_message(
+                            recipient_phone_number=sender_phone,
+                            message_text=error_msg,
+                            integration=integration,
+                            db=db
+                        )
+                        # TODO: Trigger actual handoff to human agent here
+                        return Response(status_code=200)
+                    else:
+                        # Regular text response from LLM
+                        agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+                        print(agent_response_text)
 
-                    await messaging_service.send_whatsapp_message(
-                        recipient_phone_number=sender_phone,
-                        message_text=agent_response_text,
-                        integration=integration,
-                        db=db
-                    )
+                        agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
 
-                    await session_ws_manager.broadcast_to_session(
-                        session.conversation_id,
-                        schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
-                        "agent"
-                    )
-                    return Response(status_code=200)
+                        await messaging_service.send_whatsapp_message(
+                            recipient_phone_number=sender_phone,
+                            message_text=agent_response_text,
+                            integration=integration,
+                            db=db
+                        )
+
+                        await session_ws_manager.broadcast_to_session(
+                            session.conversation_id,
+                            schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                            "agent"
+                        )
+                        return Response(status_code=200)
 
                 # --- Workflow Execution ---
                 # Update session with workflow's agent_id (needed for handoff team lookup)

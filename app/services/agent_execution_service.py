@@ -182,11 +182,13 @@ def _sanitize_schema_for_openai(schema: dict) -> dict:
 
     return sanitized
 
-async def _get_tools_for_agent(agent):
+async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None):
     """
-    Builds a list of tool definitions for the LLM, including custom, MCP, and built-in tools.
+    Builds a list of tool definitions for the LLM, including custom, MCP, built-in tools,
+    and workflows as callable functions.
     Uses provider-specific schemas for compatibility.
     Built-in tools are now configurable per agent (added from agent.tools).
+    Workflows are presented as functions so LLM can decide when to trigger them.
     """
     tool_definitions = []
 
@@ -261,7 +263,38 @@ async def _get_tools_for_agent(agent):
                     })
             except Exception as e:
                 print(f"Error fetching tools from MCP server {tool.mcp_server_url}: {e}")
-    
+
+    # Add workflows as callable functions (LLM-driven routing)
+    if db and company_id:
+        try:
+            active_workflows = workflow_service.get_workflows(db, company_id)
+            for workflow in active_workflows:
+                if not workflow.is_active:
+                    continue
+
+                # Build description with trigger hints
+                description = workflow.description or f"Start the {workflow.name} process"
+                if workflow.trigger_phrases:
+                    hints = ", ".join(workflow.trigger_phrases[:5])
+                    description += f". Use when user says things like: {hints}"
+
+                workflow_func = {
+                    "type": "function",
+                    "function": {
+                        "name": f"start_workflow_{workflow.id}",
+                        "description": description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                }
+                tool_definitions.append(workflow_func)
+                print(f"[TOOLS] Added workflow function: start_workflow_{workflow.id} ({workflow.name})")
+        except Exception as e:
+            print(f"Error adding workflow functions: {e}")
+
     print(f"Final tool definitions for LLM: {json.dumps(tool_definitions, indent=2)}")
     return tool_definitions
 
@@ -288,7 +321,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     # Get RAG context
     rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
 
-    generic_tools = await _get_tools_for_agent(agent)
+    generic_tools = await _get_tools_for_agent(agent, db=db, company_id=company_id)
     db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})
@@ -384,8 +417,11 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
-        # Typing indicator OFF is handled at WebSocket endpoint level (in finally block)
-        return
+        # Return handoff type so caller can initiate human agent handoff
+        return {
+            "type": "handoff",
+            "reason": f"AI routing unavailable: {str(e)}"
+        }
     finally:
         # Typing indicator OFF is handled at WebSocket endpoint level (in finally block)
         pass
@@ -405,6 +441,16 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         tool_name = llm_response.get('tool_name')
         parameters = llm_response.get('parameters', {})
         tool_call_id = llm_response.get('tool_call_id')
+
+        # Check if LLM decided to trigger a workflow
+        if tool_name and tool_name.startswith("start_workflow_"):
+            workflow_id = int(tool_name.replace("start_workflow_", ""))
+            print(f"[AGENT EXECUTION] LLM triggered workflow {workflow_id}")
+            return {
+                "type": "workflow_trigger",
+                "workflow_id": workflow_id,
+                "message": user_message
+            }
 
         tool_call_msg = {
             "message_type": "tool_use",
@@ -534,7 +580,7 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
     # Get RAG context
     rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
 
-    generic_tools = await _get_tools_for_agent(agent)
+    generic_tools = await _get_tools_for_agent(agent, db=db, company_id=company_id)
     db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
     formatted_history.append({"role": "user", "content": user_message})

@@ -800,13 +800,46 @@ async def websocket_endpoint(
                             else:
                                 # NON-STREAMING MODE: Original behavior
                                 print(f"[websocket_conversations] Using non-streaming mode for session: {session_id}")
-                                agent_response_text = await agent_execution_service.generate_agent_response(
+                                agent_response = await agent_execution_service.generate_agent_response(
                                     db, agent_id, session_id, session_id, company_id, message_data['message']
                                 )
-                                agent_message = schemas_chat_message.ChatMessageCreate(message=str(agent_response_text), message_type="message")
-                                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
-                                await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                                print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+
+                                # Check if LLM decided to trigger a workflow
+                                if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                                    workflow_id = agent_response.get("workflow_id")
+                                    print(f"[websocket_conversations] LLM triggered workflow {workflow_id}")
+                                    workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                                    if workflow:
+                                        execution_result = await workflow_exec_service.execute_workflow(
+                                            user_message=user_message,
+                                            conversation_id=session_id,
+                                            company_id=company_id,
+                                            workflow=workflow,
+                                            attachments=attachments,
+                                            option_key=option_key
+                                        )
+                                        # Don't continue - let the workflow result handling below process it
+                                    else:
+                                        print(f"[websocket_conversations] Workflow {workflow_id} not found")
+                                        continue
+                                elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                                    # LLM routing failed - initiate human handoff
+                                    reason = agent_response.get("reason", "AI routing unavailable")
+                                    print(f"[websocket_conversations] LLM failed, initiating handoff: {reason}")
+                                    error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                                    agent_message = schemas_chat_message.ChatMessageCreate(message=error_msg, message_type="message")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                                    # TODO: Trigger actual handoff to human agent here
+                                    continue
+                                else:
+                                    # Regular text response from LLM
+                                    agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+                                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                                    print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                                    continue
 
                             continue
 
@@ -1203,58 +1236,86 @@ async def public_websocket_endpoint(
                         if not execution_result:
                             agent_response = await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
                             if agent_response:
+                                # Check if LLM decided to trigger a workflow
+                                if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                                    workflow_id = agent_response.get("workflow_id")
+                                    print(f"[websocket_conversations] PUBLIC: LLM triggered workflow {workflow_id}")
+                                    workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                                    if workflow:
+                                        execution_result = await workflow_exec_service.execute_workflow(
+                                            user_message=message_for_storage,
+                                            conversation_id=session_id,
+                                            company_id=company_id,
+                                            workflow=workflow,
+                                            attachments=attachments,
+                                            option_key=option_key
+                                        )
+                                        # execution_result will be handled below
+                                    else:
+                                        print(f"[websocket_conversations] Workflow {workflow_id} not found")
+
+                                # Handle handoff response (LLM failed)
+                                elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                                    reason = agent_response.get("reason", "AI routing unavailable")
+                                    print(f"[websocket_conversations] PUBLIC: LLM failed, initiating handoff: {reason}")
+                                    error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                                    agent_response_text = error_msg
+                                    call_initiated = False
+                                    # TODO: Trigger actual handoff to human agent here
                                 # Handle dict response (with call info) or string response
-                                if isinstance(agent_response, dict):
+                                elif isinstance(agent_response, dict):
                                     agent_response_text = agent_response.get('text', '')
                                     call_initiated = agent_response.get('call_initiated', False)
                                 else:
                                     agent_response_text = agent_response
                                     call_initiated = False
 
-                                agent_message = schemas_chat_message.ChatMessageCreate(message=str(agent_response_text), message_type="message")
-                                db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                # Only save/broadcast if we have a text response (not a workflow trigger)
+                                if not (isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger"):
+                                    agent_message = schemas_chat_message.ChatMessageCreate(message=str(agent_response_text), message_type="message")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
 
-                                # Build message dict for broadcast
-                                message_dict = schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump(mode='json')
+                                    # Build message dict for broadcast
+                                    message_dict = schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump(mode='json')
 
-                                # Add call info to broadcast if call was initiated
-                                if call_initiated and isinstance(agent_response, dict):
-                                    message_dict.update({
-                                        'call_initiated': True,
-                                        'agent_name': agent_response.get('agent_name'),
-                                        'room_name': agent_response.get('room_name'),
-                                        'livekit_url': agent_response.get('livekit_url'),
-                                        'user_token': agent_response.get('user_token')
-                                    })
+                                    # Add call info to broadcast if call was initiated
+                                    if call_initiated and isinstance(agent_response, dict):
+                                        message_dict.update({
+                                            'call_initiated': True,
+                                            'agent_name': agent_response.get('agent_name'),
+                                            'room_name': agent_response.get('room_name'),
+                                            'livekit_url': agent_response.get('livekit_url'),
+                                            'user_token': agent_response.get('user_token')
+                                        })
 
-                                await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
+                                    await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
 
-                                # Generate TTS for chat_and_voice mode
-                                if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
-                                    try:
-                                        # Get agent's voice settings
-                                        tts_provider = agent.tts_provider or 'voice_engine'
-                                        voice_id = agent.voice_id or 'default'
+                                    # Generate TTS for chat_and_voice mode
+                                    if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
+                                        try:
+                                            # Get agent's voice settings
+                                            tts_provider = agent.tts_provider or 'voice_engine'
+                                            voice_id = agent.voice_id or 'default'
 
-                                        # Get OpenAI API key if needed
-                                        openai_api_key = None
-                                        openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
-                                        if openai_credential:
-                                            try:
-                                                openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
-                                            except Exception as e:
-                                                print(f"[TTS] Failed to get OpenAI key: {e}")
+                                            # Get OpenAI API key if needed
+                                            openai_api_key = None
+                                            openai_credential = credential_service.get_credential_by_service_name(db, 'openai', company_id)
+                                            if openai_credential:
+                                                try:
+                                                    openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
+                                                except Exception as e:
+                                                    print(f"[TTS] Failed to get OpenAI key: {e}")
 
-                                        tts_service = TTSService(openai_api_key=openai_api_key)
-                                        audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
-                                        async for audio_chunk in audio_stream:
-                                            await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
-                                        await tts_service.close()
-                                        # Send audio_end marker
-                                        await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
-                                        print(f"[websocket_conversations] TTS audio sent for chat_and_voice mode in session: {session_id}")
-                                    except Exception as tts_error:
-                                        print(f"[websocket_conversations] TTS error in chat_and_voice mode: {tts_error}")
+                                            tts_service = TTSService(openai_api_key=openai_api_key)
+                                            audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
+                                            async for audio_chunk in audio_stream:
+                                                await manager.broadcast_bytes_to_session(str(session_id), audio_chunk)
+                                            await tts_service.close()
+                                            # Send audio_end marker
+                                            await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                            print(f"[websocket_conversations] TTS audio sent for chat_and_voice mode in session: {session_id}")
+                                        except Exception as tts_error:
+                                            print(f"[websocket_conversations] TTS error in chat_and_voice mode: {tts_error}")
                     finally:
                         # Turn off typing indicator after AI processing completes
                         if typing_indicator_sent:
