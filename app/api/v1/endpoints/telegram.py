@@ -110,6 +110,59 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
                 logging.info(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                 return Response(status_code=200)
 
+            # Check if a workflow is paused and waiting for input
+            if session.next_step_id and session.workflow_id:
+                # Resume the paused workflow
+                workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                if workflow:
+                    logging.info(f"[Telegram] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
+                    workflow_exec_service = WorkflowExecutionService(db)
+                    execution_result = await workflow_exec_service.execute_workflow(
+                        user_message=message_text,
+                        conversation_id=session.conversation_id,
+                        company_id=company_id,
+                        workflow=workflow
+                    )
+
+                    # Handle execution result
+                    if execution_result.get("status") == "completed":
+                        response_text = execution_result.get("response", "Workflow completed.")
+                        agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                        await messaging_service.send_telegram_message(
+                            chat_id=chat_id,
+                            message_text=response_text,
+                            integration=integration
+                        )
+
+                        await session_ws_manager.broadcast_to_session(
+                            session.conversation_id,
+                            schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                            "agent"
+                        )
+
+                    elif execution_result.get("status") == "paused_for_prompt":
+                        prompt_data = execution_result.get("prompt", {})
+                        prompt_text = prompt_data.get("text", "Please choose an option:")
+                        await messaging_service.send_telegram_message(
+                            chat_id=chat_id,
+                            message_text=prompt_text,
+                            integration=integration
+                        )
+
+                    elif execution_result.get("status") == "paused_for_input":
+                        prompt_text = execution_result.get("prompt", {}).get("text")
+                        if prompt_text:
+                            await messaging_service.send_telegram_message(
+                                chat_id=chat_id,
+                                message_text=prompt_text,
+                                integration=integration
+                            )
+                        logging.info(f"[Telegram] Workflow paused for input in session {session.conversation_id}")
+
+                    return Response(status_code=200)
+
             # Try trigger-based workflow finding first (new system)
             workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                 db=db,

@@ -129,6 +129,10 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                 company_id = integration.company_id
 
+                # Save original user input (caption/text) before attachment processing
+                # This prevents auto-generated filenames from triggering restart detection
+                original_user_input = message_text
+
                 # Download and process media if this is a media message
                 if pending_media:
                     try:
@@ -181,7 +185,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     print(f"Reopened resolved session {session.conversation_id} for incoming WhatsApp message")
 
                 # Check for restart command ("0", "restart", "start over", "cancel", "reset")
-                if conversation_session_service.is_restart_command(message_text):
+                # Only check on original user input, not auto-generated attachment filenames
+                if original_user_input and conversation_session_service.is_restart_command(original_user_input):
                     print(f"[WhatsApp] Restart command received from {sender_phone}")
 
                     # Reset workflow state
@@ -230,6 +235,64 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 if not session.is_ai_enabled:
                     print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                     return Response(status_code=200)
+
+                # Check if a workflow is paused and waiting for input
+                if session.next_step_id and session.workflow_id:
+                    # Resume the paused workflow
+                    workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                    if workflow:
+                        print(f"[WhatsApp] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
+                        workflow_exec_service = WorkflowExecutionService(db)
+                        execution_result = await workflow_exec_service.execute_workflow(
+                            user_message=message_text,
+                            conversation_id=session.conversation_id,
+                            company_id=company_id,
+                            workflow=workflow,
+                            attachments=attachments if attachments else None
+                        )
+
+                        # Handle execution result
+                        if execution_result.get("status") == "completed":
+                            response_text = execution_result.get("response", "Workflow completed.")
+                            agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                            db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                            await messaging_service.send_whatsapp_message(
+                                recipient_phone_number=sender_phone,
+                                message_text=response_text,
+                                integration=integration,
+                                db=db
+                            )
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                "agent"
+                            )
+
+                        elif execution_result.get("status") == "paused_for_prompt":
+                            prompt_data = execution_result.get("prompt", {})
+                            await messaging_service.send_whatsapp_interactive_message(
+                                recipient_phone_number=sender_phone,
+                                message_text=prompt_data.get("text", "Please choose an option:"),
+                                options=prompt_data.get("options", []),
+                                integration=integration,
+                                db=db
+                            )
+
+                        elif execution_result.get("status") == "paused_for_input":
+                            # Workflow is waiting for next user input - send the prompt if available
+                            prompt_text = execution_result.get("prompt", {}).get("text")
+                            if prompt_text:
+                                await messaging_service.send_whatsapp_message(
+                                    recipient_phone_number=sender_phone,
+                                    message_text=prompt_text,
+                                    integration=integration,
+                                    db=db
+                                )
+                            print(f"[WhatsApp] Workflow paused for input in session {session.conversation_id}")
+
+                        return Response(status_code=200)
 
                 # Try trigger-based workflow finding first (new system)
                 workflow = await workflow_trigger_service.find_workflow_for_channel_message(

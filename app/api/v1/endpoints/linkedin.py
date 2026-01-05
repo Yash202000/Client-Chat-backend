@@ -6,15 +6,17 @@ import traceback
 from app.core.dependencies import get_db
 from app.core.config import settings
 from app.services import (
-    contact_service, 
-    conversation_session_service, 
-    chat_service, 
+    contact_service,
+    conversation_session_service,
+    chat_service,
     workflow_service,
-    integration_service, 
+    workflow_trigger_service,
+    integration_service,
     messaging_service,
     agent_service,
     agent_execution_service
 )
+from app.models.workflow_trigger import TriggerChannel
 from app.services.workflow_execution_service import WorkflowExecutionService
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import chat_message as schemas_chat_message
@@ -83,7 +85,118 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                             print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                             continue
 
-                        # For now, we'll just use the default agent response
+                        # Check if a workflow is paused and waiting for input
+                        if session.next_step_id and session.workflow_id:
+                            # Resume the paused workflow
+                            workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                            if workflow:
+                                logging.info(f"[LinkedIn] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
+                                workflow_exec_service = WorkflowExecutionService(db)
+                                execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_text,
+                                    conversation_id=session.conversation_id,
+                                    company_id=company_id,
+                                    workflow=workflow
+                                )
+
+                                # Handle execution result
+                                if execution_result.get("status") == "completed":
+                                    response_text = execution_result.get("response", "Workflow completed.")
+                                    agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                                    await messaging_service.send_linkedin_message(
+                                        recipient_urn=sender_id,
+                                        message_text=response_text,
+                                        integration=integration
+                                    )
+
+                                    await session_ws_manager.broadcast_to_session(
+                                        session.conversation_id,
+                                        schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                        "agent"
+                                    )
+
+                                elif execution_result.get("status") == "paused_for_prompt":
+                                    prompt_data = execution_result.get("prompt", {})
+                                    prompt_text = prompt_data.get("text", "Please choose an option:")
+                                    await messaging_service.send_linkedin_message(
+                                        recipient_urn=sender_id,
+                                        message_text=prompt_text,
+                                        integration=integration
+                                    )
+
+                                elif execution_result.get("status") == "paused_for_input":
+                                    prompt_text = execution_result.get("prompt", {}).get("text")
+                                    if prompt_text:
+                                        await messaging_service.send_linkedin_message(
+                                            recipient_urn=sender_id,
+                                            message_text=prompt_text,
+                                            integration=integration
+                                        )
+                                    logging.info(f"[LinkedIn] Workflow paused for input in session {session.conversation_id}")
+
+                                continue
+
+                        # Try trigger-based workflow finding first (new system)
+                        workflow = await workflow_trigger_service.find_workflow_for_channel_message(
+                            db=db,
+                            channel=TriggerChannel.LINKEDIN,
+                            company_id=company_id,
+                            message=message_text,
+                            session_data={"session_id": session.conversation_id}
+                        )
+
+                        # Fallback to old similarity search if no trigger-based workflow found
+                        if not workflow:
+                            workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
+
+                        if workflow:
+                            # --- Workflow Execution ---
+                            # Update session with workflow's agent_id (needed for handoff team lookup)
+                            if workflow.agent_id and session.agent_id != workflow.agent_id:
+                                session.agent_id = workflow.agent_id
+                                db.commit()
+                                db.refresh(session)
+
+                            workflow_exec_service = WorkflowExecutionService(db)
+                            execution_result = await workflow_exec_service.execute_workflow(
+                                workflow_id=workflow.id,
+                                user_message=message_text,
+                                conversation_id=session.conversation_id
+                            )
+
+                            if execution_result.get("status") == "completed":
+                                response_text = execution_result.get("response", "Workflow completed.")
+                                agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                                await messaging_service.send_linkedin_message(
+                                    recipient_urn=sender_id,
+                                    message_text=response_text,
+                                    integration=integration
+                                )
+
+                                await session_ws_manager.broadcast_to_session(
+                                    session.conversation_id,
+                                    schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                    "agent"
+                                )
+
+                            elif execution_result.get("status") in ["paused_for_prompt", "paused_for_input"]:
+                                prompt_text = execution_result.get("prompt", {}).get("text")
+                                if prompt_text:
+                                    await messaging_service.send_linkedin_message(
+                                        recipient_urn=sender_id,
+                                        message_text=prompt_text,
+                                        integration=integration
+                                    )
+
+                            logging.info(f"Processed LinkedIn message from {sender_id} for company {company_id} with workflow '{workflow.name}'")
+                            continue
+
+                        # No workflow found - use default agent response
+                        logging.info(f"No matching workflow found for message: '{message_text}'. Using default agent response.")
                         agents = agent_service.get_agents(db, company_id=company_id, limit=1)
                         if not agents:
                             print(f"Error: No agents found for company {company_id} to handle the response.")
