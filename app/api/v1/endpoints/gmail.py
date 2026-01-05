@@ -62,6 +62,11 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 db, conversation_id=sender_email, workflow_id=None, contact_id=contact.id, channel='gmail', company_id=company_id
             )
 
+            # Reopen resolved sessions when a new message arrives
+            if session.status == 'resolved':
+                session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                logging.info(f"Reopened resolved session {session.conversation_id} for incoming Gmail message")
+
             chat_message = ChatMessageCreate(message=message_text, message_type="text")
             created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
 
@@ -74,6 +79,52 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
             if not session.is_ai_enabled:
                 logging.info(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                 return Response(status_code=200)
+
+            # Check if a workflow is paused and waiting for input
+            if session.next_step_id and session.workflow_id:
+                # Resume the paused workflow
+                workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                if workflow:
+                    logging.info(f"[Gmail] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
+                    workflow_exec_service = WorkflowExecutionService(db)
+                    execution_result = await workflow_exec_service.execute_workflow(
+                        user_message=message_text,
+                        conversation_id=session.conversation_id,
+                        company_id=company_id,
+                        workflow=workflow
+                    )
+
+                    # Handle execution result
+                    if execution_result.get("status") == "completed":
+                        response_text = execution_result.get("response", "Workflow completed.")
+                        agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                        await messaging_service.send_gmail_message(
+                            recipient_email=sender_email,
+                            subject=f"Re: {subject}",
+                            message_text=response_text,
+                            integration=integration
+                        )
+
+                        await session_ws_manager.broadcast_to_session(
+                            session.conversation_id,
+                            schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                            "agent"
+                        )
+
+                    elif execution_result.get("status") in ["paused_for_prompt", "paused_for_input"]:
+                        prompt_text = execution_result.get("prompt", {}).get("text")
+                        if prompt_text:
+                            await messaging_service.send_gmail_message(
+                                recipient_email=sender_email,
+                                subject=f"Re: {subject}",
+                                message_text=prompt_text,
+                                integration=integration
+                            )
+                        logging.info(f"[Gmail] Workflow paused for input in session {session.conversation_id}")
+
+                    return Response(status_code=200)
 
             workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
 
@@ -111,6 +162,12 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 return Response(status_code=200)
 
             # --- Workflow Execution ---
+            # Update session with workflow's agent_id (needed for handoff team lookup)
+            if workflow.agent_id and session.agent_id != workflow.agent_id:
+                session.agent_id = workflow.agent_id
+                db.commit()
+                db.refresh(session)
+
             workflow_exec_service = WorkflowExecutionService(db)
             execution_result = await workflow_exec_service.execute_workflow(
                 workflow_id=workflow.id,

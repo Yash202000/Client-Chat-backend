@@ -1,23 +1,45 @@
 import httpx
-import os
-from typing import Dict, Any, List, Union
+import logging
+from typing import Dict, Any, List, Union, Optional
+
+from sqlalchemy.orm import Session
 
 from app.models.integration import Integration
 from app.services import integration_service
+from app.services.whatsapp_token_service import whatsapp_token_service
+
+logger = logging.getLogger(__name__)
 
 WHATSAPP_API_VERSION = "v19.0"
+
 
 async def send_whatsapp_message(
     recipient_phone_number: str,
     message_text: str,
-    integration: Integration
+    integration: Integration,
+    db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
     Sends a text message to a WhatsApp user via the Meta Cloud API.
+
+    If a database session is provided and OAuth is configured,
+    the token will be automatically refreshed if needed.
+
+    Args:
+        recipient_phone_number: The recipient's WhatsApp phone number
+        message_text: The message text to send
+        integration: The WhatsApp integration
+        db: Optional database session for token refresh
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    api_token = credentials.get("api_token") or credentials.get("access_token")
     phone_number_id = credentials.get("phone_number_id")
+
+    # Get a valid token (with automatic refresh if OAuth is enabled and db provided)
+    if db:
+        api_token = await whatsapp_token_service.ensure_valid_token(db, integration)
+    else:
+        # Fallback to stored token without refresh
+        api_token = credentials.get("api_token") or credentials.get("access_token")
 
     if not api_token or not phone_number_id:
         raise ValueError("WhatsApp credentials (api_token, phone_number_id) are not configured for this integration.")
@@ -39,7 +61,7 @@ async def send_whatsapp_message(
         }
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()  # Raises an exception for 4XX/5XX responses
@@ -57,15 +79,36 @@ async def send_whatsapp_interactive_message(
     recipient_phone_number: str,
     message_text: str,
     options: List[Union[str, Dict[str, str]]],
-    integration: Integration
+    integration: Integration,
+    db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
-    Sends an interactive message with buttons to a WhatsApp user.
+    Sends an interactive message to a WhatsApp user.
+    - Uses button format for 1-3 options (max 20 chars per button title)
+    - Uses list format for 4-10 options (max 24 chars per row title)
+    - Truncates to 10 options if more are provided
+
     Supports both string options (legacy) and key-value dict options (new).
+
+    If a database session is provided and OAuth is configured,
+    the token will be automatically refreshed if needed.
+
+    Args:
+        recipient_phone_number: The recipient's WhatsApp phone number
+        message_text: The message text to send
+        options: List of button options (strings or dicts with key/value)
+        integration: The WhatsApp integration
+        db: Optional database session for token refresh
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    api_token = credentials.get("api_token") or credentials.get("access_token")
     phone_number_id = credentials.get("phone_number_id")
+
+    # Get a valid token (with automatic refresh if OAuth is enabled and db provided)
+    if db:
+        api_token = await whatsapp_token_service.ensure_valid_token(db, integration)
+    else:
+        # Fallback to stored token without refresh
+        api_token = credentials.get("api_token") or credentials.get("access_token")
 
     if not api_token or not phone_number_id:
         raise ValueError("WhatsApp credentials (api_token, phone_number_id) are not configured for this integration.")
@@ -77,46 +120,89 @@ async def send_whatsapp_interactive_message(
         "Content-Type": "application/json",
     }
 
-    # WhatsApp allows up to 3 buttons, and each title has a 20-character limit.
-    buttons = []
-    for i, option in enumerate(options[:3]):
-        if isinstance(option, dict):
-            # New key-value format
-            button_id = option.get("key", f"option_{i+1}")
-            button_title = option.get("value", "")[:20]
-        else:
-            # Legacy string format
-            button_id = f"option_{i+1}"
-            button_title = str(option)[:20]
+    # Filter out empty options
+    valid_options = [opt for opt in options if opt]
 
-        buttons.append({
-            "type": "reply",
-            "reply": {
-                "id": button_id,  # Use key as ID for proper response handling
-                "title": button_title
-            }
-        })
+    # Warn if more than 10 options (WhatsApp list max)
+    if len(valid_options) > 10:
+        print(f"Warning: WhatsApp supports max 10 list options. Truncating from {len(valid_options)} to 10.")
+        valid_options = valid_options[:10]
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": recipient_phone_number,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {
-                "text": message_text
-            },
-            "action": {
-                "buttons": buttons
+    # Determine message type based on option count
+    if len(valid_options) <= 3:
+        # Use button format for 1-3 options
+        buttons = []
+        for i, option in enumerate(valid_options):
+            if isinstance(option, dict):
+                button_id = str(option.get("key", f"option_{i+1}"))[:200]
+                button_title = str(option.get("value", ""))[:20]
+            else:
+                button_id = str(option)[:200]
+                button_title = str(option)[:20]
+
+            buttons.append({
+                "type": "reply",
+                "reply": {
+                    "id": button_id,
+                    "title": button_title
+                }
+            })
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone_number,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {
+                    "text": message_text
+                },
+                "action": {
+                    "buttons": buttons
+                }
             }
         }
-    }
+    else:
+        # Use list format for 4-10 options
+        rows = []
+        for i, option in enumerate(valid_options):
+            if isinstance(option, dict):
+                row_id = str(option.get("key", f"option_{i+1}"))[:200]
+                row_title = str(option.get("value", ""))[:24]
+            else:
+                row_id = str(option)[:200]
+                row_title = str(option)[:24]
 
-    async with httpx.AsyncClient() as client:
+            rows.append({
+                "id": row_id,
+                "title": row_title
+            })
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone_number,
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "body": {
+                    "text": message_text
+                },
+                "action": {
+                    "button": "View Options",
+                    "sections": [{
+                        "title": "Options",
+                        "rows": rows
+                    }]
+                }
+            }
+        }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            print(f"Successfully sent interactive message to {recipient_phone_number}. Response: {response.json()}")
+            msg_type = "list" if len(valid_options) > 3 else "button"
+            print(f"Successfully sent {msg_type} interactive message to {recipient_phone_number}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
             print(f"Error sending WhatsApp interactive message: {e.response.text}")
@@ -124,6 +210,103 @@ async def send_whatsapp_interactive_message(
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
             raise e
+
+
+async def download_whatsapp_media(
+    media_id: str,
+    integration: Integration,
+    db: Optional[Session] = None
+) -> Dict[str, Any]:
+    """
+    Downloads media from WhatsApp using the Media API.
+
+    WhatsApp media download is a two-step process:
+    1. GET the media URL from: https://graph.facebook.com/{api-version}/{media-id}
+    2. Download the file from the returned URL
+
+    Args:
+        media_id: The WhatsApp media ID
+        integration: The WhatsApp integration
+        db: Optional database session for token refresh
+
+    Returns:
+        Dict with 'data' (bytes), 'mime_type', and 'file_name'
+    """
+    credentials = integration_service.get_decrypted_credentials(integration)
+
+    # Get a valid token
+    if db:
+        api_token = await whatsapp_token_service.ensure_valid_token(db, integration)
+    else:
+        api_token = credentials.get("api_token") or credentials.get("access_token")
+
+    if not api_token:
+        raise ValueError("WhatsApp credentials (api_token) are not configured for this integration.")
+
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            # Step 1: Get media URL
+            media_url_endpoint = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{media_id}"
+            response = await client.get(media_url_endpoint, headers=headers)
+            response.raise_for_status()
+            media_info = response.json()
+
+            download_url = media_info.get("url")
+            mime_type = media_info.get("mime_type", "application/octet-stream")
+
+            if not download_url:
+                raise ValueError(f"No download URL returned for media ID: {media_id}")
+
+            print(f"[WhatsApp Media] Got download URL for media {media_id}, mime_type: {mime_type}")
+
+            # Step 2: Download the actual file
+            download_response = await client.get(download_url, headers=headers)
+            download_response.raise_for_status()
+
+            file_data = download_response.content
+
+            # Generate filename based on mime type
+            extension_map = {
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp",
+                "image/gif": ".gif",
+                "video/mp4": ".mp4",
+                "video/3gpp": ".3gp",
+                "audio/aac": ".aac",
+                "audio/mp4": ".m4a",
+                "audio/mpeg": ".mp3",
+                "audio/amr": ".amr",
+                "audio/ogg": ".ogg",
+                "application/pdf": ".pdf",
+                "application/vnd.ms-powerpoint": ".ppt",
+                "application/msword": ".doc",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+            }
+            extension = extension_map.get(mime_type, "")
+            file_name = f"whatsapp_media_{media_id}{extension}"
+
+            print(f"[WhatsApp Media] Downloaded {len(file_data)} bytes for {file_name}")
+
+            return {
+                "data": file_data,
+                "mime_type": mime_type,
+                "file_name": file_name
+            }
+
+        except httpx.HTTPStatusError as e:
+            print(f"Error downloading WhatsApp media: {e.response.text}")
+            raise e
+        except Exception as e:
+            print(f"An unexpected error occurred downloading media: {e}")
+            raise e
+
 
 async def send_instagram_or_messenger_message(
     recipient_id: str,
@@ -153,7 +336,7 @@ async def send_instagram_or_messenger_message(
         "messaging_type": "RESPONSE"
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -202,6 +385,46 @@ async def send_gmail_message(
     print(f"Message: {message_text}")
     return {"status": "simulated_success"}
 
+async def send_meeting_link(
+    channel: str,
+    recipient_id: str,
+    meeting_link: str,
+    agent_name: str,
+    integration: Integration,
+    db: Optional[Session] = None
+) -> Dict[str, Any]:
+    """
+    Send a meeting link to a customer via their messaging channel.
+
+    Args:
+        channel: The messaging channel (whatsapp, telegram, instagram, messenger)
+        recipient_id: The recipient's ID (phone number, chat_id, etc.)
+        meeting_link: The full meeting URL to share
+        agent_name: Name of the agent for the message
+        integration: The messaging integration
+        db: Optional database session for token refresh
+
+    Returns:
+        Response from the messaging API
+    """
+    message = (
+        f"🎥 {agent_name} is ready to assist you!\n\n"
+        f"Join the meeting here:\n{meeting_link}\n\n"
+        f"Tap the link above to start your video call."
+    )
+
+    if channel == 'whatsapp':
+        return await send_whatsapp_message(recipient_id, message, integration, db)
+    elif channel == 'telegram':
+        return await send_telegram_message(int(recipient_id), message, integration)
+    elif channel == 'instagram':
+        return await send_instagram_message(recipient_id, message, integration)
+    elif channel == 'messenger':
+        return await send_messenger_message(recipient_id, message, integration)
+    else:
+        raise ValueError(f"Unsupported channel for meeting link: {channel}")
+
+
 async def send_telegram_message(
     chat_id: int,
     message_text: str,
@@ -223,7 +446,7 @@ async def send_telegram_message(
         "text": message_text
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(url, json=payload)
             response.raise_for_status()

@@ -76,6 +76,12 @@ async def run_campaign_scheduler():
         db.close()
 
 
+async def run_whatsapp_token_refresh():
+    """Wrapper to run the WhatsApp token refresh with a fresh DB session"""
+    from app.services.whatsapp_token_refresh_service import run_whatsapp_token_refresh_scheduler
+    await run_whatsapp_token_refresh_scheduler()
+
+
 @app.on_event("startup")
 async def on_startup():
     create_initial_data()
@@ -112,6 +118,16 @@ async def on_startup():
         replace_existing=True
     )
     print("[Startup] Campaign scheduler started (interval: 30s)")
+
+    # Add WhatsApp token refresh job - runs every hour to refresh expiring tokens
+    scheduler.add_job(
+        run_whatsapp_token_refresh,
+        'interval',
+        hours=1,
+        id='whatsapp_token_refresh',
+        replace_existing=True
+    )
+    print("[Startup] WhatsApp token refresh scheduler started (interval: 1 hour)")
 
     # Start the scheduler if not already started
     if not scheduler.running:

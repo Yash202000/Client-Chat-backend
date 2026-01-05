@@ -4,6 +4,43 @@ from app.models.conversation_session import ConversationSession
 from app.models.chat_message import ChatMessage
 from app.schemas.conversation_session import ConversationSessionCreate, ConversationSessionUpdate
 
+# Keywords that trigger a conversation restart
+RESTART_KEYWORDS = ["0", "restart", "start over", "startover", "cancel", "reset", "start again"]
+
+
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the Levenshtein distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
+def _fuzzy_match_keyword(word: str, max_distance: int = 2) -> bool:
+    """Check if a word fuzzy-matches any restart keyword."""
+    word_lower = word.lower()
+    for keyword in RESTART_KEYWORDS:
+        # Skip "0" for fuzzy matching - it must be exact
+        if keyword == "0":
+            continue
+        # Allow fuzzy match if distance is within threshold
+        if _levenshtein_distance(word_lower, keyword) <= max_distance:
+            return True
+    return False
+
 def get_session(db: Session, conversation_id: str) -> ConversationSession:
     """
     Retrieves a conversation session by its conversation_id.
@@ -206,4 +243,84 @@ async def reopen_resolved_session(db: Session, session: ConversationSession, com
     print(f"[conversation_session_service] 🔄 Session {session.conversation_id} reopened from {old_status} → {session.status}")
 
     return session
+
+
+def is_restart_command(message: str) -> bool:
+    """
+    Check if a message is a restart command.
+
+    Supports:
+    - Exact keyword match: "0", "restart", "cancel", "reset", "start over", "start again"
+    - Keywords within sentences: "I want to cancel", "please restart"
+    - Fuzzy matching for typos: "cancle" → "cancel", "restrat" → "restart"
+    """
+    if not message:
+        return False
+
+    message_lower = message.strip().lower()
+
+    # 1. Exact match (single keyword)
+    if message_lower in RESTART_KEYWORDS:
+        return True
+
+    # 2. Check if any keyword is contained within the message
+    for keyword in RESTART_KEYWORDS:
+        if keyword in message_lower:
+            return True
+
+    # 3. Fuzzy matching for single words or short messages
+    words = message_lower.split()
+    for word in words:
+        # Clean punctuation from word
+        clean_word = ''.join(c for c in word if c.isalnum())
+        if clean_word and _fuzzy_match_keyword(clean_word):
+            return True
+
+    return False
+
+
+async def reset_session_workflow(db: Session, session: ConversationSession, company_id: int) -> bool:
+    """
+    Reset workflow state for a session. Clears:
+    - workflow_id
+    - next_step_id
+    - context
+    - subworkflow_stack
+    - Associated memories
+
+    Args:
+        db: Database session
+        session: The conversation session to reset
+        company_id: Company ID for looking up workflow
+
+    Returns:
+        True if reset was performed, False if no workflow was active.
+    """
+    from app.services import workflow_service, memory_service
+
+    if not session.workflow_id and not session.next_step_id:
+        return False  # Nothing to reset
+
+    # Get agent_id before clearing workflow (needed to clear memories)
+    agent_id = None
+    if session.workflow_id:
+        workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+        if workflow:
+            agent_id = workflow.agent_id
+
+    # Clear session workflow state
+    session.workflow_id = None
+    session.next_step_id = None
+    session.context = {}
+    session.subworkflow_stack = None
+    db.commit()
+    db.refresh(session)
+
+    # Clear memories if we had an agent
+    if agent_id:
+        memory_service.delete_all_memories(db, agent_id=agent_id, session_id=session.conversation_id)
+
+    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} workflow reset (agent_id={agent_id})")
+
+    return True
 

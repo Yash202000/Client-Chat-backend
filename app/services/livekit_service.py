@@ -5,6 +5,7 @@ from livekit import api
 from app.core.config import settings
 from typing import Dict
 import time
+import urllib.parse
 
 
 def generate_livekit_token(room_name: str, identity: str, participant_name: str = None) -> str:
@@ -74,3 +75,35 @@ def create_call_room(session_id: str, user_identity: str, agent_identity: str,
         "user_token": user_token,
         "agent_token": agent_token
     }
+
+
+def generate_meeting_link(room_name: str, user_token: str, frontend_base_url: str = None) -> str:
+    """
+    Generate a shareable meeting link for the customer.
+
+    This link can be sent via WhatsApp, Telegram, SMS, etc. for customers
+    to join a LiveKit video/audio call.
+
+    Args:
+        room_name: LiveKit room name
+        user_token: JWT token for the user/customer
+        frontend_base_url: Base URL of the frontend (defaults to settings.FRONTEND_URL)
+
+    Returns:
+        Full meeting URL like: https://app.example.com/meeting?room=xxx&token=yyy
+    """
+    base_url = frontend_base_url or settings.FRONTEND_URL
+
+    if not base_url:
+        raise ValueError("FRONTEND_URL not configured in settings")
+
+    # Remove trailing slash if present
+    base_url = base_url.rstrip('/')
+
+    # URL encode the parameters
+    params = urllib.parse.urlencode({
+        'room': room_name,
+        'token': user_token
+    })
+
+    return f"{base_url}/meeting?{params}"

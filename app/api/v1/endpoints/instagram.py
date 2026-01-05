@@ -71,6 +71,48 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                             db, conversation_id=sender_id, workflow_id=None, contact_id=contact.id, channel='instagram', company_id=company_id
                         )
 
+                        # Reopen resolved sessions when a new message arrives
+                        if session.status == 'resolved':
+                            session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
+                            logging.info(f"Reopened resolved session {session.conversation_id} for incoming Instagram message")
+
+                        # Check for restart command ("0", "restart", "start over", "cancel", "reset")
+                        if conversation_session_service.is_restart_command(message_text):
+                            logging.info(f"[Instagram] Restart command received from {sender_id}")
+
+                            # Reset workflow state
+                            was_reset = await conversation_session_service.reset_session_workflow(db, session, company_id)
+
+                            # Save user's restart message to chat history
+                            user_chat_message = ChatMessageCreate(message=message_text, message_type="text")
+                            user_db_message = chat_service.create_chat_message(db, user_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(user_db_message).json(),
+                                "user"
+                            )
+
+                            # Send confirmation message
+                            confirmation = "Conversation restarted. How can I help you?"
+                            await messaging_service.send_instagram_message(
+                                recipient_psid=sender_id,
+                                message_text=confirmation,
+                                integration=integration
+                            )
+
+                            # Save confirmation to chat history
+                            agent_chat_message = ChatMessageCreate(message=confirmation, message_type="text")
+                            agent_db_message = chat_service.create_chat_message(db, agent_chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="agent")
+
+                            await session_ws_manager.broadcast_to_session(
+                                session.conversation_id,
+                                schemas_chat_message.ChatMessage.from_orm(agent_db_message).json(),
+                                "agent"
+                            )
+
+                            return Response(status_code=200)
+
                         chat_message = ChatMessageCreate(message=message_text, message_type="text")
                         created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
 
@@ -83,6 +125,59 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         if not session.is_ai_enabled:
                             logging.info(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                             return Response(status_code=200)
+
+                        # Check if a workflow is paused and waiting for input
+                        if session.next_step_id and session.workflow_id:
+                            # Resume the paused workflow
+                            workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
+                            if workflow:
+                                logging.info(f"[Instagram] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
+                                workflow_exec_service = WorkflowExecutionService(db)
+                                execution_result = await workflow_exec_service.execute_workflow(
+                                    user_message=message_text,
+                                    conversation_id=session.conversation_id,
+                                    company_id=company_id,
+                                    workflow=workflow
+                                )
+
+                                # Handle execution result
+                                if execution_result.get("status") == "completed":
+                                    response_text = execution_result.get("response", "Workflow completed.")
+                                    agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+
+                                    await messaging_service.send_instagram_message(
+                                        recipient_psid=sender_id,
+                                        message_text=response_text,
+                                        integration=integration
+                                    )
+
+                                    await session_ws_manager.broadcast_to_session(
+                                        session.conversation_id,
+                                        schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                        "agent"
+                                    )
+
+                                elif execution_result.get("status") == "paused_for_prompt":
+                                    prompt_data = execution_result.get("prompt", {})
+                                    prompt_text = prompt_data.get("text", "Please choose an option:")
+                                    await messaging_service.send_instagram_message(
+                                        recipient_psid=sender_id,
+                                        message_text=prompt_text,
+                                        integration=integration
+                                    )
+
+                                elif execution_result.get("status") == "paused_for_input":
+                                    prompt_text = execution_result.get("prompt", {}).get("text")
+                                    if prompt_text:
+                                        await messaging_service.send_instagram_message(
+                                            recipient_psid=sender_id,
+                                            message_text=prompt_text,
+                                            integration=integration
+                                        )
+                                    logging.info(f"[Instagram] Workflow paused for input in session {session.conversation_id}")
+
+                                return Response(status_code=200)
 
                         # Try trigger-based workflow finding first (new system)
                         workflow = await workflow_trigger_service.find_workflow_for_channel_message(
@@ -105,31 +200,62 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                                 return Response(status_code=200)
                             agent = agents[0]
 
-                            agent_response_text = await agent_execution_service.generate_agent_response(
-                                db, agent.id, session.conversation_id, company_id, message_text
+                            agent_response = await agent_execution_service.generate_agent_response(
+                                db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
                             )
 
-                            if not agent_response_text:
-                                logging.info(f"Agent did not generate a response for session {session.conversation_id}.")
+                            # Check if LLM decided to trigger a workflow
+                            if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                                workflow_id = agent_response.get("workflow_id")
+                                logging.info(f"[Instagram] LLM triggered workflow {workflow_id}")
+                                workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                                if not workflow:
+                                    logging.warning(f"[Instagram] Workflow {workflow_id} not found")
+                                    return Response(status_code=200)
+                                # Continue to workflow execution below
+                            elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                                # LLM routing failed - notify user and initiate handoff
+                                reason = agent_response.get("reason", "AI routing unavailable")
+                                logging.warning(f"[Instagram] LLM failed, initiating handoff: {reason}")
+                                error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                                await messaging_service.send_instagram_message(
+                                    recipient_psid=sender_id,
+                                    message_text=error_msg,
+                                    integration=integration
+                                )
+                                # TODO: Trigger actual handoff to human agent here
+                                return Response(status_code=200)
+                            else:
+                                # Regular text response from LLM
+                                agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+
+                                if not agent_response_text:
+                                    logging.info(f"Agent did not generate a response for session {session.conversation_id}.")
+                                    return Response(status_code=200)
+
+                                agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
+
+                                await messaging_service.send_instagram_message(
+                                    recipient_psid=sender_id,
+                                    message_text=agent_response_text,
+                                    integration=integration
+                                )
+
+                                await session_ws_manager.broadcast_to_session(
+                                    session.conversation_id,
+                                    schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                    "agent"
+                                )
                                 return Response(status_code=200)
 
-                            agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
-                            db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
-
-                            await messaging_service.send_instagram_message(
-                                recipient_psid=sender_id,
-                                message_text=agent_response_text,
-                                integration=integration
-                            )
-
-                            await session_ws_manager.broadcast_to_session(
-                                session.conversation_id,
-                                schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
-                                "agent"
-                            )
-                            return Response(status_code=200)
-
                         # --- Workflow Execution ---
+                        # Update session with workflow's agent_id (needed for handoff team lookup)
+                        if workflow.agent_id and session.agent_id != workflow.agent_id:
+                            session.agent_id = workflow.agent_id
+                            db.commit()
+                            db.refresh(session)
+
                         workflow_exec_service = WorkflowExecutionService(db)
                         execution_result = await workflow_exec_service.execute_workflow(
                             workflow_id=workflow.id,

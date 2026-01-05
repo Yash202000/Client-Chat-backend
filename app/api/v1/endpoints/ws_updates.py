@@ -60,6 +60,9 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Company mismatch")
         return
 
+    # Cancel any pending offline task (user reconnected)
+    user_service.cancel_pending_offline(current_user.id)
+
     # Update user presence status to online
     db = SessionLocal()
     try:
@@ -100,23 +103,19 @@ async def websocket_endpoint(
         print(f"[ws_updates] 🔌 Client disconnected from channel '{channel_id}'")
         manager.disconnect(websocket, channel_id)
 
-        # Update user presence status to offline
-        db = SessionLocal()
-        try:
-            user_service.update_user_presence(db, user_id=current_user.id, status="offline")
-            print(f"[ws_updates] ✅ Updated presence status to 'offline' for user: {current_user.email}")
+        # Schedule delayed offline update (allows reconnection within grace period)
+        await user_service.schedule_offline_update(SessionLocal, current_user.id)
+        print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (5s grace period)")
 
-            # Broadcast presence update to all company users
-            presence_update = json.dumps({
-                "type": "presence_update",
-                "payload": {
-                    "user_id": current_user.id,
-                    "status": "offline"
-                }
-            })
-            await manager.broadcast(presence_update, channel_id)
-        finally:
-            db.close()
+        # Broadcast presence update (will be corrected if user reconnects)
+        presence_update = json.dumps({
+            "type": "presence_update",
+            "payload": {
+                "user_id": current_user.id,
+                "status": "offline"
+            }
+        })
+        await manager.broadcast(presence_update, channel_id)
 
         print(f"[ws_updates] ❌ WebSocket connection closed for company_id: {company_id}")
         print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")
@@ -124,11 +123,10 @@ async def websocket_endpoint(
         print(f"[ws_updates] ⚠️ Error in WebSocket: {e}")
         manager.disconnect(websocket, channel_id)
 
-        # Update user presence status to offline on error
-        db = SessionLocal()
+        # Schedule delayed offline update on error (allows reconnection within grace period)
         try:
-            user_service.update_user_presence(db, user_id=current_user.id, status="offline")
-            print(f"[ws_updates] ✅ Updated presence status to 'offline' for user: {current_user.email} (due to error)")
+            await user_service.schedule_offline_update(SessionLocal, current_user.id)
+            print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (due to error, 5s grace period)")
 
             # Broadcast presence update to all company users
             presence_update = json.dumps({
@@ -140,8 +138,6 @@ async def websocket_endpoint(
             })
             await manager.broadcast(presence_update, channel_id)
         except Exception as broadcast_error:
-            print(f"[ws_updates] ⚠️ Failed to update presence on error: {broadcast_error}")
-        finally:
-            db.close()
+            print(f"[ws_updates] ⚠️ Failed to schedule offline on error: {broadcast_error}")
 
         print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")
