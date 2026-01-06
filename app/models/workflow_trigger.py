@@ -10,6 +10,7 @@ class TriggerChannel(str, enum.Enum):
     WHATSAPP = "whatsapp"
     TELEGRAM = "telegram"
     INSTAGRAM = "instagram"
+    MESSENGER = "messenger"
     TWILIO_VOICE = "twilio_voice"
     FREESWITCH = "freeswitch"
 
