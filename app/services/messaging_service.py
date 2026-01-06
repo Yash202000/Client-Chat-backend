@@ -318,12 +318,22 @@ async def send_instagram_or_messenger_message(
     Sends a text message to an Instagram or Messenger user via the Meta Graph API.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
+    print(f"[DEBUG] {platform} credentials keys: {credentials.keys() if credentials else 'None'}")
     page_access_token = credentials.get("page_access_token") or credentials.get("access_token")
+    page_id = credentials.get("page_id")
+    print(f"[DEBUG] {platform} token length: {len(page_access_token) if page_access_token else 0}, first 20 chars: {page_access_token[:20] if page_access_token else 'None'}...")
+    print(f"[DEBUG] {platform} page_id: {page_id}")
 
     if not page_access_token:
         raise ValueError(f"{platform.capitalize()} credentials (page_access_token) are not configured for this integration.")
 
-    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/me/messages"
+    # Instagram uses graph.instagram.com, Messenger uses graph.facebook.com
+    if platform == "instagram":
+        url = f"https://graph.instagram.com/{WHATSAPP_API_VERSION}/me/messages"
+    else:
+        url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/me/messages"
+
+    print(f"[DEBUG] {platform} API URL: {url}")
     
     headers = {
         "Authorization": f"Bearer {page_access_token}",

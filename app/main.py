@@ -10,7 +10,7 @@ from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
-from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, object_detection
+from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, object_detection, public_pages
 from app.core.dependencies import get_db
 from app.services.connection_manager import manager
 from app.services.websocket_cleanup_service import cleanup_inactive_sessions
@@ -49,6 +49,7 @@ app.include_router(published.router, prefix="/api/v1/published")
 app.include_router(ai_images.router, prefix="/api/v1/ai-images", tags=["ai-images"])
 app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["ai-chat"])
 app.include_router(object_detection.router, prefix="/api/v1/object-detection", tags=["object-detection"])
+app.include_router(public_pages.router, tags=["public-pages"])  # Public pages (privacy policy, terms) at root
 
 # Mount static files for serving the widget
 widget_static_path = os.path.join(os.path.dirname(__file__), "static", "widget")
