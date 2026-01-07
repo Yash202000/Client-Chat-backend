@@ -62,3 +62,6 @@ from app.models.voice_call import VoiceCall, CallStatus
 from app.models.twilio_phone_number import TwilioPhoneNumber
 from app.models.freeswitch_phone_number import FreeSwitchPhoneNumber
 
+# Security Models
+from app.models.security_log import SecurityLog
+

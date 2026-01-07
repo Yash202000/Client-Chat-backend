@@ -15,6 +15,8 @@ from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provi
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
 from app.core.object_storage import s3_client, chroma_client
+from app.services.prompt_guard_service import scan_user_message, get_safe_system_prompt, prompt_guard
+from app.services import security_log_service
 
 
 def _get_embeddings(agent: Agent, texts: list[str]):
@@ -306,6 +308,40 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     - If no tool is called, it saves and broadcasts the text response directly.
     - This function no longer returns the response text to the caller.
     """
+    # === SECURITY: Prompt Injection Protection ===
+    # Check rate limits and scan for injection attempts
+    is_allowed, sanitized_message, block_reason = scan_user_message(
+        message=user_message,
+        session_id=boradcast_session_id,
+        company_id=company_id
+    )
+
+    if not is_allowed:
+        print(f"[SECURITY] Message blocked for session {boradcast_session_id}: {block_reason}")
+
+        # Log the security event to database
+        scan_result = prompt_guard.scan_message(user_message)
+        event_type = "rate_limit" if "Rate limit" in (block_reason or "") else "prompt_injection"
+        security_log_service.log_security_event(
+            db=db,
+            event_type=event_type,
+            threat_level=scan_result.threat_level.name.lower(),
+            blocked=True,
+            company_id=company_id,
+            session_id=boradcast_session_id,
+            original_message=user_message,
+            detected_patterns=scan_result.detected_patterns,
+            sanitized_message=scan_result.sanitized_message,
+            channel="agent_chat"
+        )
+
+        # Return a safe response instead of processing the malicious input
+        return f"I'm sorry, but I couldn't process that request. {block_reason if 'Rate limit' in (block_reason or '') else 'Please rephrase your question and I will be happy to help.'}"
+
+    # Use sanitized message for further processing
+    user_message = sanitized_message
+    # === END SECURITY ===
+
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
         print(f"Error: Agent not found for agent_id {agent_id}")
@@ -348,18 +384,24 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         else:
             print(f"{agent.llm_provider} credential not found in vault for company. LLM will use provider's default or fail.")
 
-        # Build base system prompt
-        system_prompt = (
+        # Build base system prompt with security hardening
+        base_instructions = (
             "You are a helpful and precise assistant. Your primary goal is to assist users by using the tools provided. "
             "Follow these rules strictly:\n"
             "1. Examine the user's request to determine the appropriate tool.\n"
             "2. Look at the tool's schema to understand its required parameters.\n"
             "3. If the user has provided all the necessary parameters, call the tool.\n"
             "4. **Crucially, if the user has NOT provided all required parameters, you **MUST** ask for the missing information using **natural language**. Do NOT guess, do NOT use placeholders, and do NOT call the tool without the required information.**\n"
-            "5. You ONLY have access to the following tools, and should NEVER make up tools that are not listed here: "
-            "6. For example, if a tool requires a 'user\_id', and the user asks to 'get user details', you must respond with: 'I can certainly help you find those details. Could you please provide the user's ID?'\n"
+            "5. You ONLY have access to the following tools, and should NEVER make up tools that are not listed here.\n"
+            "6. For example, if a tool requires a 'user_id', and the user asks to 'get user details', you must respond with: 'I can certainly help you find those details. Could you please provide the user's ID?'\n"
             "7. If a tool the user requests is conceptually unavailable (like 'list all orders' when only 'get order by ID' is available), explain the limitation in **simple, non-technical terms** and offer the alternative tool without mentioning the function names.\n"
             "8. **HUMAN HANDOFF**: If the user explicitly asks to speak with a human agent, or if the issue becomes too complex for you to handle, use the 'request_human_handoff' tool. Provide a clear summary of the conversation so the human agent can quickly understand the context.\n"
+        )
+
+        # Apply security hardening to prevent prompt injection
+        system_prompt = get_safe_system_prompt(
+            base_prompt=base_instructions,
+            agent_name=agent.name if agent else None
         )
 
         # Add contact collection instruction - emphasize more strongly for first message
@@ -567,6 +609,39 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
     Note: Streaming is ONLY supported for text responses (no tool calls).
     If tools are needed, falls back to non-streaming mode.
     """
+    # === SECURITY: Prompt Injection Protection ===
+    is_allowed, sanitized_message, block_reason = scan_user_message(
+        message=user_message,
+        session_id=boradcast_session_id,
+        company_id=company_id
+    )
+
+    if not is_allowed:
+        print(f"[SECURITY] Streaming message blocked for session {boradcast_session_id}: {block_reason}")
+
+        # Log the security event to database
+        scan_result = prompt_guard.scan_message(user_message)
+        event_type = "rate_limit" if "Rate limit" in (block_reason or "") else "prompt_injection"
+        security_log_service.log_security_event(
+            db=db,
+            event_type=event_type,
+            threat_level=scan_result.threat_level.name.lower(),
+            blocked=True,
+            company_id=company_id,
+            session_id=boradcast_session_id,
+            original_message=user_message,
+            detected_patterns=scan_result.detected_patterns,
+            sanitized_message=scan_result.sanitized_message,
+            channel="agent_chat_stream"
+        )
+
+        error_response = f"I'm sorry, but I couldn't process that request. {block_reason if 'Rate limit' in (block_reason or '') else 'Please rephrase your question.'}"
+        yield json.dumps({"type": "complete", "content": error_response})
+        return
+
+    user_message = sanitized_message
+    # === END SECURITY ===
+
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
         print(f"Error: Agent not found for agent_id {agent_id}")
@@ -606,10 +681,13 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
         else:
             print(f"{agent.llm_provider} credential not found in vault for company (streaming). LLM will use provider's default or fail.")
 
-        system_prompt = (
+        # Build system prompt with security hardening
+        base_instructions = (
             "You are a helpful and precise assistant. "
             f"Current system instructions: {agent.prompt}"
         )
+        system_prompt = get_safe_system_prompt(base_instructions, agent_name=agent.name)
+
         if rag_context:
             system_prompt += f"\n\nHere is some context from the knowledge base that might be relevant:\n{rag_context}"
 
