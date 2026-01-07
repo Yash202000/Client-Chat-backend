@@ -80,6 +80,15 @@ async def generate_response(
             )
             response_message = chat_completion.choices[0].message
 
+            # Extract usage data
+            usage_data = None
+            if hasattr(chat_completion, 'usage') and chat_completion.usage:
+                usage_data = {
+                    "prompt_tokens": chat_completion.usage.prompt_tokens,
+                    "completion_tokens": chat_completion.usage.completion_tokens,
+                    "total_tokens": chat_completion.usage.total_tokens
+                }
+
             # Handle tool calls
             if response_message.tool_calls:
                 available_tool_names = [t["function"]["name"] for t in (tools or [])]
@@ -107,10 +116,13 @@ async def generate_response(
                             "tool_call_id": call.id,
                             "tool_name": tool_name,
                             "parameters": json.loads(call.function.arguments),
+                            "usage": usage_data
                         })
 
                 if tool_calls:
-                    return tool_calls if len(tool_calls) > 1 else tool_calls[0]
+                    if len(tool_calls) == 1:
+                        return tool_calls[0]
+                    return tool_calls
 
                 continue  # retry if invalid tool was detected
 
@@ -121,9 +133,9 @@ async def generate_response(
                 print(f"⚠️ Groq model generated malformed function syntax in text. Model: {model_name}")
                 print(f"⚠️ Consider switching to llama-3.3-70b-versatile for proper function calling support.")
                 # Return a generic message instead of the malformed syntax
-                return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?"}
+                return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?", "usage": usage_data}
 
-            return {"type": "text", "content": content}
+            return {"type": "text", "content": content, "usage": usage_data}
 
         except Exception as e:
             error_str = str(e)

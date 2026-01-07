@@ -65,3 +65,7 @@ from app.models.freeswitch_phone_number import FreeSwitchPhoneNumber
 # Security Models
 from app.models.security_log import SecurityLog
 
+# Token Usage Models
+from app.models.token_usage import TokenUsage
+from app.models.usage_alert import UsageAlert
+

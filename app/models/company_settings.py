@@ -1,6 +1,7 @@
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Text, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from app.core.database import Base
 
 class CompanySettings(Base):
@@ -26,5 +27,13 @@ class CompanySettings(Base):
     smtp_use_tls = Column(Boolean, default=True)
     smtp_from_email = Column(String, nullable=True)
     smtp_from_name = Column(String, nullable=True)
+
+    # Token Usage Tracking Settings
+    token_tracking_mode = Column(String(20), default="detailed")  # none, aggregated, detailed
+    monthly_budget_cents = Column(Integer, nullable=True)  # Monthly spending limit in cents
+    alert_threshold_percent = Column(Integer, default=80)  # Alert at this % of budget
+    alert_email = Column(String(255), nullable=True)  # Email for cost alerts
+    alerts_enabled = Column(Boolean, default=True)
+    per_agent_daily_limit_cents = Column(Integer, nullable=True)  # Optional per-agent limit
 
     company = relationship("Company")

@@ -17,6 +17,7 @@ from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
 from app.core.object_storage import s3_client, chroma_client
 from app.services.prompt_guard_service import scan_user_message, get_safe_system_prompt, prompt_guard
 from app.services import security_log_service
+from app.services import token_usage_service
 
 
 def _get_embeddings(agent: Agent, texts: list[str]):
@@ -457,6 +458,23 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             tool_choice=tool_choice_param,
             stream=False  # Disable streaming when tools are enabled
         )
+
+        # Log token usage from first LLM call
+        usage_data = llm_response.get('usage') if isinstance(llm_response, dict) else None
+        if not usage_data and isinstance(llm_response, list) and len(llm_response) > 0:
+            usage_data = llm_response[0].get('usage')
+        if usage_data:
+            token_usage_service.log_token_usage(
+                db=db,
+                company_id=company_id,
+                provider=agent.llm_provider,
+                model_name=agent.model_name,
+                prompt_tokens=usage_data.get('prompt_tokens', 0),
+                completion_tokens=usage_data.get('completion_tokens', 0),
+                agent_id=agent_id,
+                session_id=boradcast_session_id,
+                request_type="chat"
+            )
     except Exception as e:
         print(f"LLM Provider Error: {e}")
         # Return handoff type so caller can initiate human agent handoff
@@ -576,6 +594,21 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                 stream=False  # Disable streaming for tool result processing
             )
             final_agent_response_text = final_response.get('content', 'No response content.')
+
+            # Log token usage from tool result LLM call
+            usage_data = final_response.get('usage')
+            if usage_data:
+                token_usage_service.log_token_usage(
+                    db=db,
+                    company_id=company_id,
+                    provider=agent.llm_provider,
+                    model_name=agent.model_name,
+                    prompt_tokens=usage_data.get('prompt_tokens', 0),
+                    completion_tokens=usage_data.get('completion_tokens', 0),
+                    agent_id=agent_id,
+                    session_id=boradcast_session_id,
+                    request_type="tool"
+                )
 
     elif llm_response.get('type') == 'text':
         final_agent_response_text = llm_response.get('content', 'No response content.')

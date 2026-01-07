@@ -88,6 +88,15 @@ async def generate_response(
             )
             response_message = chat_completion.choices[0].message
 
+            # Extract usage data
+            usage_data = None
+            if hasattr(chat_completion, 'usage') and chat_completion.usage:
+                usage_data = {
+                    "prompt_tokens": chat_completion.usage.prompt_tokens,
+                    "completion_tokens": chat_completion.usage.completion_tokens,
+                    "total_tokens": chat_completion.usage.total_tokens
+                }
+
             # Handle tool calls
             if response_message.tool_calls:
                 available_tool_names = [t["function"]["name"] for t in (tools or [])]
@@ -126,16 +135,21 @@ async def generate_response(
                             "tool_call_id": call.id,
                             "tool_name": tool_name,
                             "parameters": json.loads(call.function.arguments),
+                            "usage": usage_data
                         })
 
                 if tool_calls:
-                    return tool_calls if len(tool_calls) > 1 else tool_calls[0]
+                    # Return first tool call with usage, or list if multiple
+                    if len(tool_calls) == 1:
+                        return tool_calls[0]
+                    # For multiple tool calls, attach usage to first one
+                    return tool_calls
 
                 continue  # retry if invalid tool was detected
 
             # If no tool call, return plain text
             content = response_message.content or ""
-            return {"type": "text", "content": content}
+            return {"type": "text", "content": content, "usage": usage_data}
 
         except Exception as e:
             error_str = str(e)

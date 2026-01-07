@@ -4,6 +4,7 @@ from app.llm_providers.groq_provider import generate_response as grg
 from app.llm_providers.openai_provider import generate_response as oai
 from app.services import knowledge_base_service
 from app.services.prompt_guard_service import prompt_guard, get_safe_system_prompt
+from app.services import token_usage_service
 from sqlalchemy.orm import Session
 from fastmcp.client import Client
 import asyncio
@@ -127,6 +128,20 @@ class LLMToolService:
                 tools=formatted_tools,
                 stream=False  # Disable streaming for workflow execution
             )
+
+            # Log token usage
+            usage_data = response.get('usage') if isinstance(response, dict) else None
+            if usage_data and company_id:
+                token_usage_service.log_token_usage(
+                    db=self.db,
+                    company_id=company_id,
+                    provider=provider_name,
+                    model_name=model_name,
+                    prompt_tokens=usage_data.get('prompt_tokens', 0),
+                    completion_tokens=usage_data.get('completion_tokens', 0),
+                    session_id=session_id,
+                    request_type="workflow"
+                )
 
             if response.get('type') == 'tool_call':
                 tool_name = response.get('tool_name')
