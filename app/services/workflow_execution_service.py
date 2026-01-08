@@ -13,6 +13,7 @@ from app.schemas.memory import MemoryCreate
 from app.services.graph_execution_engine import GraphExecutionEngine
 from app.services.llm_tool_service import LLMToolService
 from app.services.workflow_intent_service import WorkflowIntentService
+from app.services.input_validation_service import InputValidationService, ValidationMode, ValidationResult
 from app.core.config import settings
 
 import httpx
@@ -24,6 +25,7 @@ class WorkflowExecutionService:
         self.db = db
         self.llm_tool_service = LLMToolService(db)
         self.workflow_intent_service = WorkflowIntentService(db)
+        self.input_validation_service = InputValidationService()
 
     async def _execute_tool(self, tool_name: str, params: dict, company_id: int = None, session_id: str = None):
         """
@@ -129,6 +131,34 @@ class WorkflowExecutionService:
         resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
         print(f"DEBUG: Final resolved string: '{resolved_string}'")
         return resolved_string
+
+    def _clear_validation_state(self, context: dict):
+        """Clear all prompt validation-related state from context."""
+        keys_to_clear = [
+            "pending_prompt_options",
+            "pending_allow_text_input",
+            "pending_validation_mode",
+            "pending_validation_llm_provider",
+            "pending_validation_llm_model",
+            "pending_prompt_text",
+            "_validation_retry_count",
+            "_validation_max_retries",
+        ]
+        for key in keys_to_clear:
+            context.pop(key, None)
+
+    def _clear_listen_validation_state(self, context: dict):
+        """Clear all listen validation-related state from context."""
+        keys_to_clear = [
+            "pending_listen_validation_mode",
+            "pending_listen_validation_llm_provider",
+            "pending_listen_validation_llm_model",
+            "pending_question_text",
+            "_listen_validation_retry_count",
+            "_listen_validation_max_retries",
+        ]
+        for key in keys_to_clear:
+            context.pop(key, None)
 
     async def _execute_data_manipulation_node(self, node_data: dict, context: dict, results: dict):
         from types import SimpleNamespace
@@ -1585,6 +1615,12 @@ Return only valid JSON, nothing else:"""
         # Load all memories for this session into the context
         context = {memory.key: memory.value for memory in memory_service.get_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)}
 
+        # Also merge session.context which contains validation state and other transient data
+        # Session context takes precedence for keys like pending_listen_validation_mode, pending_question_text, etc.
+        if session.context:
+            session_context = session.context if isinstance(session.context, dict) else {}
+            context.update(session_context)
+
         # ============================================================
         # WORKFLOW INTENT DETECTION
         # ============================================================
@@ -1688,42 +1724,182 @@ Return only valid JSON, nothing else:"""
                 # Add attachments to context when resuming
                 context["user_attachments"] = attachments or []
 
-                # Validate prompt input if text input was not allowed
-                pending_allow_text = context.get("pending_allow_text_input", True)  # Default True for backward compatibility
+                # Validate prompt input using multi-stage validation
+                pending_allow_text = context.get("pending_allow_text_input", True)
                 pending_options = context.get("pending_prompt_options", [])
+                pending_validation_mode = context.get("pending_validation_mode", "exact")
+                pending_validation_llm_provider = context.get("pending_validation_llm_provider", "groq")
+                pending_validation_llm_model = context.get("pending_validation_llm_model")  # None uses provider default
+                pending_prompt_text = context.get("pending_prompt_text", "")
+                retry_count = context.get("_validation_retry_count", 0)
+                max_retries = context.get("_validation_max_retries", 3)
 
-                if not pending_allow_text and pending_options:
-                    # User must select from options, validate input
+                if pending_options:
                     input_value = option_key if option_key else user_message
-                    if input_value not in pending_options:
-                        print(f"DEBUG: Invalid prompt input '{input_value}' - not in valid options: {pending_options}")
-                        # Re-send the prompt with validation message
-                        return {
-                            "status": "paused_for_prompt",
-                            "prompt": {
-                                "text": "Please select one of the options below:",
-                                "options": [{"key": opt, "value": opt} for opt in pending_options],
-                                "allow_text_input": False
-                            }
-                        }
+                    validation_mode = ValidationMode(pending_validation_mode) if pending_validation_mode != "none" else ValidationMode.EXACT
+
+                    # Perform validation based on mode
+                    # pending_options now contains full option dicts with key and value
+                    validation_result = await self.input_validation_service.validate_prompt_response(
+                        db=self.db,
+                        company_id=company_id,
+                        user_input=input_value,
+                        options=pending_options,
+                        allow_text_input=pending_allow_text,
+                        prompt_context=pending_prompt_text,
+                        validation_mode=validation_mode,
+                        llm_provider=pending_validation_llm_provider,
+                        llm_model=pending_validation_llm_model
+                    )
+
+                    if validation_result.is_valid:
+                        # Valid input - use matched option key if available
+                        if validation_result.matched_option_key:
+                            # Update the value to save with the matched key
+                            if option_key:
+                                option_key = validation_result.matched_option_key
+                            else:
+                                user_message = validation_result.matched_option_key
+                        print(f"DEBUG: Validation passed - matched: {validation_result.matched_option_key}, confidence: {validation_result.confidence}")
+                        self._clear_validation_state(context)
                     else:
-                        # Valid input - clear pending validation data
-                        context.pop("pending_prompt_options", None)
-                        context.pop("pending_allow_text_input", None)
+                        # Validation failed - check retry count
+                        retry_count += 1
+                        print(f"DEBUG: Validation failed ({retry_count}/{max_retries}): {validation_result.reason}")
+
+                        if retry_count >= max_retries:
+                            # Max retries exceeded - clear state and continue with original input
+                            print(f"DEBUG: Max retries exceeded, continuing with original input")
+                            self._clear_validation_state(context)
+                        else:
+                            # Re-ask with hint
+                            context["_validation_retry_count"] = retry_count
+                            hint_text = validation_result.hint_message or "Please select one of the options below:"
+                            reask_prompt = f"{hint_text}"
+                            if pending_prompt_text and hint_text != pending_prompt_text:
+                                reask_prompt = f"{hint_text}\n\n{pending_prompt_text}"
+
+                            # Update session context with retry count
+                            session_update = ConversationSessionUpdate(
+                                context=context,
+                                status='active'
+                            )
+                            conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+                            return {
+                                "status": "paused_for_prompt",
+                                "prompt": {
+                                    "text": reask_prompt,
+                                    "options": pending_options,  # Already list of {key, value} dicts
+                                    "allow_text_input": pending_allow_text
+                                },
+                                "validation_retry": retry_count
+                            }
                 else:
-                    # Clear pending validation data (text input was allowed or no options)
-                    context.pop("pending_prompt_options", None)
-                    context.pop("pending_allow_text_input", None)
+                    # No pending options - clear validation state
+                    self._clear_validation_state(context)
+
+                # Validate listen node response if validation was enabled
+                # Store extracted value from LLM validation (if any) for use when saving
+                listen_extracted_value = None
+                pending_listen_mode = context.get("pending_listen_validation_mode")
+                if pending_listen_mode and pending_listen_mode != "none":
+                    question_text = context.get("pending_question_text", "")
+                    expected_input_type = context.get("expected_input_type", "any")
+                    listen_retry_count = context.get("_listen_validation_retry_count", 0)
+                    listen_max_retries = context.get("_listen_validation_max_retries", 3)
+                    listen_llm_provider = context.get("pending_listen_validation_llm_provider", "groq")
+                    listen_llm_model = context.get("pending_listen_validation_llm_model")  # None uses provider default
+
+                    # If no explicit question, try to use previous message as context
+                    if not question_text:
+                        question_text = context.get("_last_agent_message", "")
+
+                    validation_mode = ValidationMode(pending_listen_mode)
+                    validation_result = await self.input_validation_service.validate_listen_response(
+                        db=self.db,
+                        company_id=company_id,
+                        user_input=user_message,
+                        question_text=question_text,
+                        expected_input_type=expected_input_type,
+                        validation_mode=validation_mode,
+                        llm_provider=listen_llm_provider,
+                        llm_model=listen_llm_model
+                    )
+
+                    # Store extracted value for later use (LLM mode extracts entities from responses)
+                    if validation_result.extracted_value:
+                        listen_extracted_value = validation_result.extracted_value
+                        print(f"DEBUG: LLM extracted value: '{listen_extracted_value}' from '{user_message}'")
+
+                    if not validation_result.is_valid:
+                        listen_retry_count += 1
+                        print(f"DEBUG: Listen validation failed ({listen_retry_count}/{listen_max_retries}): {validation_result.reason}")
+
+                        if listen_retry_count >= listen_max_retries:
+                            # Max retries - continue anyway
+                            print(f"DEBUG: Listen max retries exceeded, continuing")
+                            self._clear_listen_validation_state(context)
+                        else:
+                            # Re-ask with hint message
+                            context["_listen_validation_retry_count"] = listen_retry_count
+                            hint_text = validation_result.hint_message or f"Please answer: {question_text}"
+
+                            # Broadcast the hint message to the user
+                            from app.api.v1.endpoints.websocket_conversations import manager as ws_manager
+                            from app.services import chat_service
+                            from app.schemas import chat_message as schemas_chat_message
+
+                            hint_message = schemas_chat_message.ChatMessageCreate(message=hint_text, message_type="message")
+                            db_hint_message = chat_service.create_chat_message(
+                                self.db, hint_message,
+                                workflow_obj.agent.id, conversation_id,
+                                workflow_obj.agent.company_id, "agent",
+                                assignee_id=None
+                            )
+                            asyncio.create_task(ws_manager.broadcast_to_session(
+                                str(conversation_id),
+                                json.dumps({
+                                    "message": hint_text,
+                                    "message_type": "message",
+                                    "sender": "agent",
+                                    "message_id": db_hint_message.id,
+                                    "timestamp": db_hint_message.timestamp.isoformat()
+                                }),
+                                "agent"
+                            ))
+
+                            # Update session to stay paused
+                            session_update = ConversationSessionUpdate(
+                                context=context,
+                                status='active'
+                            )
+                            conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+                            return {
+                                "status": "paused_for_input",
+                                "expected_input_type": expected_input_type,
+                                "question_text": question_text,
+                                "validation_hint": hint_text,
+                                "retry_count": listen_retry_count
+                            }
+                    else:
+                        self._clear_listen_validation_state(context)
 
                 # The variable to save was stored in the context before pausing.
                 variable_to_save = context.get("variable_to_save")
                 print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
                 if variable_to_save:
                     # Determine what value to save to the workflow variable
-                    # If option_key is provided (user selected a prompt option), use the key
-                    # Otherwise, use the display message (user_message)
-                    value_to_save = option_key if option_key else user_message
-                    print(f"DEBUG: Will save to variable '{variable_to_save}': option_key={option_key}, user_message={user_message}, value_to_save={value_to_save}")
+                    # Priority: option_key > LLM extracted value > raw user_message
+                    if option_key:
+                        value_to_save = option_key
+                    elif listen_extracted_value:
+                        value_to_save = listen_extracted_value
+                        print(f"DEBUG: Using LLM extracted value: '{value_to_save}'")
+                    else:
+                        value_to_save = user_message
+                    print(f"DEBUG: Will save to variable '{variable_to_save}': option_key={option_key}, extracted={listen_extracted_value}, user_message={user_message}, value_to_save={value_to_save}")
 
                     # Check if the incoming message is a JSON string (from a form submission)
                     try:
@@ -1830,9 +2006,32 @@ Return only valid JSON, nothing else:"""
             elif node_type == "listen":
                 params = node_data.get("params", {})
                 expected_input_type = params.get("expected_input_type", "any")
+                question_text = params.get("question_text", "")
+                validation_mode = params.get("validation_mode", "none")
+                validation_llm_provider = params.get("validation_llm_provider", "groq")
+                validation_llm_model = params.get("validation_llm_model")  # None uses provider default
+                max_retries = params.get("max_retries", 3)
+
+                # Resolve placeholders in question text
+                if question_text:
+                    question_text = self._resolve_placeholders(question_text, context, results)
+
+                # Store validation config in context for when user responds
+                if validation_mode and validation_mode != "none":
+                    context["pending_listen_validation_mode"] = validation_mode
+                    context["pending_listen_validation_llm_provider"] = validation_llm_provider
+                    context["pending_listen_validation_llm_model"] = validation_llm_model
+                    context["pending_question_text"] = question_text
+                    context["_listen_validation_max_retries"] = max_retries
+                    context["_listen_validation_retry_count"] = 0
+
+                # Store expected input type for resume handling
+                context["expected_input_type"] = expected_input_type
+
                 result = {
                     "status": "paused_for_input",
-                    "expected_input_type": expected_input_type
+                    "expected_input_type": expected_input_type,
+                    "question_text": question_text if question_text else None
                 }
 
             elif node_type == "prompt":
@@ -1881,13 +2080,27 @@ Return only valid JSON, nothing else:"""
                         ]
 
                 allow_text_input = params.get("allow_text_input", False)
+                validation_mode = params.get("validation_mode", "exact")
+                validation_llm_provider = params.get("validation_llm_provider", "groq")
+                validation_llm_model = params.get("validation_llm_model")  # None uses provider default
+                max_retries = params.get("max_retries", 3)
 
-                # Store validation data in context for when user responds
-                context["pending_prompt_options"] = [opt.get("key", str(opt)) for opt in options_list]
-                context["pending_allow_text_input"] = allow_text_input
-                
                 prompt_text = params.get("prompt_text", "Please provide input.")
                 resolved_prompt_text = self._resolve_placeholders(prompt_text, context, results)
+
+                # Track as last agent message for potential fallback validation context
+                context["_last_agent_message"] = resolved_prompt_text
+
+                # Store validation data in context for when user responds
+                # Store full options with both key and value so LLM can see the labels
+                context["pending_prompt_options"] = options_list
+                context["pending_allow_text_input"] = allow_text_input
+                context["pending_validation_mode"] = validation_mode
+                context["pending_validation_llm_provider"] = validation_llm_provider
+                context["pending_validation_llm_model"] = validation_llm_model
+                context["pending_prompt_text"] = resolved_prompt_text
+                context["_validation_max_retries"] = max_retries
+                context["_validation_retry_count"] = 0
 
                 result = {
                     "status": "paused_for_prompt",
@@ -1916,6 +2129,10 @@ Return only valid JSON, nothing else:"""
                 output_value = node_data.get("output_value", "")
                 resolved_output = self._resolve_placeholders(output_value, context, results)
                 result = {"output": resolved_output}
+                # Track last agent message for validation context (used when listen node has no explicit question)
+                if resolved_output:
+                    message_text = resolved_output.get("text", str(resolved_output)) if isinstance(resolved_output, dict) else str(resolved_output)
+                    context["_last_agent_message"] = message_text
                 # Broadcast intermediate response messages immediately
                 if resolved_output:
                     response_messages.append(resolved_output)
