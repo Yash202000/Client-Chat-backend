@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.models import workflow
 from app.models.workflow import Workflow
 from app.models.tool import Tool
-from app.services import tool_service, conversation_session_service, knowledge_base_service, workflow_service, memory_service
+from app.services import tool_service, conversation_session_service, knowledge_base_service, workflow_service, memory_service, geocoding_service
 from app.schemas.conversation_session import ConversationSessionUpdate
 from app.schemas.memory import MemoryCreate
 from app.services.graph_execution_engine import GraphExecutionEngine
@@ -1739,7 +1739,44 @@ Return only valid JSON, nothing else:"""
                             }
                             print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
                         else:
-                            context[variable_to_save] = value_to_save
+                            # Check if this is a location input that needs geocoding
+                            expected_input_type = context.get("expected_input_type")
+                            if expected_input_type == "location" and isinstance(value_to_save, str) and value_to_save.strip():
+                                # User typed a text location (Instagram, etc.) - geocode it
+                                print(f"DEBUG: Geocoding text location: '{value_to_save}'")
+                                geocoded = await geocoding_service.forward_geocode(value_to_save)
+                                if geocoded and geocoded.get("latitude") and geocoded.get("longitude"):
+                                    # Format to match WhatsApp/WebSocket location format
+                                    lat = geocoded["latitude"]
+                                    lng = geocoded["longitude"]
+                                    context[variable_to_save] = {
+                                        "text": f"📍 Location ({lat:.4f}, {lng:.4f})",
+                                        "attachments": [{
+                                            "file_name": "location",
+                                            "file_type": "application/geo+json",
+                                            "file_size": 46,
+                                            "location": {
+                                                "latitude": lat,
+                                                "longitude": lng
+                                            }
+                                        }],
+                                        "display_name": geocoded.get("display_name", value_to_save),
+                                        "original_input": value_to_save
+                                    }
+                                    print(f"DEBUG: Geocoded location: lat={lat}, lng={lng}")
+                                else:
+                                    # If geocoding fails, save as text with empty location
+                                    context[variable_to_save] = {
+                                        "text": value_to_save,
+                                        "attachments": [],
+                                        "display_name": value_to_save,
+                                        "original_input": value_to_save,
+                                        "error": "Could not geocode location"
+                                    }
+                            else:
+                                context[variable_to_save] = value_to_save
+                        # Clear expected_input_type after processing
+                        context.pop("expected_input_type", None)
                     print(f"DEBUG: Context after updating with user message: {context}")
                     # Save the updated context back to memory
                     memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
@@ -2084,6 +2121,11 @@ Return only valid JSON, nothing else:"""
                 if variable_to_save:
                     context["variable_to_save"] = variable_to_save
                     memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+
+                # Store expected_input_type for use when resuming (e.g., for geocoding text locations)
+                if "expected_input_type" in result:
+                    context["expected_input_type"] = result["expected_input_type"]
+                    memory_service.set_memory(self.db, MemoryCreate(key="expected_input_type", value=result["expected_input_type"]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
 
                 # Keep session status as 'active' so it remains visible in the UI
                 # The presence of next_step_id indicates the workflow is paused waiting for input

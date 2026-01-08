@@ -3,16 +3,22 @@ from app.llm_providers.gemini_provider import generate_response as ggr
 from app.llm_providers.groq_provider import generate_response as grg
 from app.llm_providers.openai_provider import generate_response as oai
 from app.services import knowledge_base_service
+from app.services.prompt_guard_service import prompt_guard, get_safe_system_prompt
+from app.services import token_usage_service
 from sqlalchemy.orm import Session
 from fastmcp.client import Client
 import asyncio
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class LLMToolService:
     def __init__(self, db: Session):
         self.db = db
 
-    async def execute(self, model: str, system_prompt: str, chat_history: list, user_prompt: str, tools: list, knowledge_base_id: int = None, company_id: int = None, attachments: list = None):
+    async def execute(self, model: str, system_prompt: str, chat_history: list, user_prompt: str, tools: list, knowledge_base_id: int = None, company_id: int = None, attachments: list = None, session_id: str = None):
         """
         This is the core logic for handling LLM interactions. It builds the prompt,
         formats tools, and manages a validation/retry loop to ensure the LLM
@@ -20,9 +26,22 @@ class LLMToolService:
 
         Args:
             attachments: List of attachment dicts with file_name, file_type, file_size, file_data (base64)
+            session_id: Optional session ID for rate limiting
         """
-        # 1. --- Construct the master System Prompt ---
-        final_system_prompt = (
+        # === SECURITY: Scan user input for prompt injection ===
+        scan_result = prompt_guard.scan_message(user_prompt, check_off_topic=True)
+        if not scan_result.is_safe:
+            logger.warning(f"[LLMToolService] Blocked injection attempt: {scan_result.detected_patterns}")
+            return {
+                "type": "text",
+                "content": "I'm sorry, but I couldn't process that request. Please rephrase your question."
+            }
+        # Use sanitized message
+        user_prompt = scan_result.sanitized_message
+        # === END SECURITY ===
+
+        # 1. --- Construct the master System Prompt with security hardening ---
+        base_instructions = (
             "You are a helpful and precise assistant. Your primary goal is to assist users by using the tools provided. "
             "Follow these rules strictly:\n"
             "1. Examine the user's request to determine the appropriate tool from the provided list.\n"
@@ -30,8 +49,11 @@ class LLMToolService:
             "3. If the user has provided all the necessary parameters, call the tool.\n"
             "4. **Crucially, if the user has NOT provided all required parameters, you MUST ask the user for the missing information. Do NOT guess, do NOT use placeholders, and do NOT call the tool without the required information.**\n"
             "For example, if the user asks to 'get user details' and the 'get_user_details' tool requires a 'user_id', you must respond by asking 'I can do that. What is the user's ID?'\n"
-            f"The user's request will be provided next. Base instructions for this conversation: {system_prompt}"
+            f"Base instructions for this conversation: {system_prompt}"
         )
+
+        # Apply security hardening to system prompt
+        final_system_prompt = get_safe_system_prompt(base_instructions)
 
         # 2. --- Augment Prompt with Knowledge Base Context (if applicable) ---
         augmented_prompt = user_prompt
@@ -106,6 +128,20 @@ class LLMToolService:
                 tools=formatted_tools,
                 stream=False  # Disable streaming for workflow execution
             )
+
+            # Log token usage
+            usage_data = response.get('usage') if isinstance(response, dict) else None
+            if usage_data and company_id:
+                token_usage_service.log_token_usage(
+                    db=self.db,
+                    company_id=company_id,
+                    provider=provider_name,
+                    model_name=model_name,
+                    prompt_tokens=usage_data.get('prompt_tokens', 0),
+                    completion_tokens=usage_data.get('completion_tokens', 0),
+                    session_id=session_id,
+                    request_type="workflow"
+                )
 
             if response.get('type') == 'tool_call':
                 tool_name = response.get('tool_name')

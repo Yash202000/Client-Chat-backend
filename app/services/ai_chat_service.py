@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.models import conversation_session as models_conversation_session, chat_message as models_chat_message
 from app.schemas import ai_chat as schemas_ai_chat
 from app.services import agent_execution_service
+from app.services import token_usage_service
 from app.llm_providers import groq_provider, gemini_provider
 
 async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatRequest, company_id: int, user_id: int):
@@ -63,13 +64,27 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         formatted_history = agent_execution_service.format_chat_history(history)
 
         system_prompt = "You are a helpful assistant."
-        
+
         # Default to Groq, but can be changed to Gemini or other providers
-        llm_response = groq_provider.generate_response(
+        llm_response = await groq_provider.generate_response(
             db=db, company_id=company_id, model_name='llama-3.1-8b-instant',
             system_prompt=system_prompt, chat_history=formatted_history,
             tools=[], api_key=settings.GROQ_API_KEY
         )
+
+        # Log token usage
+        usage_data = llm_response.get('usage') if isinstance(llm_response, dict) else None
+        if usage_data:
+            token_usage_service.log_token_usage(
+                db=db,
+                company_id=company_id,
+                provider="groq",
+                model_name="llama-3.1-8b-instant",
+                prompt_tokens=usage_data.get('prompt_tokens', 0),
+                completion_tokens=usage_data.get('completion_tokens', 0),
+                session_id=session.conversation_id,
+                request_type="chat"
+            )
 
         response_text = llm_response.get('content', 'No response content.')
 
