@@ -11,6 +11,7 @@ from app.models.conversation_session import ConversationSession
 from app.models.agent import Agent
 from app.models.chat_message import ChatMessage
 from app.services import credential_service
+from app.services import token_usage_service
 from app.llm_providers import groq_provider, gemini_provider, openai_provider
 
 
@@ -133,6 +134,21 @@ async def generate_conversation_summary(
             api_key=api_key,
             stream=False
         )
+
+        # Log token usage
+        usage_data = response.get('usage')
+        if usage_data:
+            token_usage_service.log_token_usage(
+                db=db,
+                company_id=company_id,
+                provider=agent.llm_provider,
+                model_name=agent.model_name,
+                prompt_tokens=usage_data.get('prompt_tokens', 0),
+                completion_tokens=usage_data.get('completion_tokens', 0),
+                agent_id=agent.id,
+                session_id=session_id,
+                request_type="summary"
+            )
 
         summary = response.get('content', '')
 

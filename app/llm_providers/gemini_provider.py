@@ -78,18 +78,31 @@ async def generate_response(
     # NON-STREAMING MODE: Original logic with tool support
     response = await model_chat_session.send_message_async(user_prompt)
 
+    # Extract usage data if available
+    usage_data = None
+    try:
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage_data = {
+                "prompt_tokens": response.usage_metadata.prompt_token_count or 0,
+                "completion_tokens": response.usage_metadata.candidates_token_count or 0,
+                "total_tokens": response.usage_metadata.total_token_count or 0
+            }
+    except (AttributeError, TypeError):
+        pass
+
     try:
         function_call = response.candidates[0].content.parts[0].function_call
         if function_call:
             return {
                 "type": "tool_call",
                 "tool_name": function_call.name,
-                "parameters": {key: value for key, value in function_call.args.items()}
+                "parameters": {key: value for key, value in function_call.args.items()},
+                "usage": usage_data
             }
     except (ValueError, AttributeError, IndexError):
         pass
 
-    return {"type": "text", "content": response.text}
+    return {"type": "text", "content": response.text, "usage": usage_data}
 
 def generate_image(prompt: str):
     

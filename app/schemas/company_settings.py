@@ -20,6 +20,13 @@ class CompanySettingsBase(BaseModel):
     smtp_use_tls: Optional[bool] = True
     smtp_from_email: Optional[str] = None
     smtp_from_name: Optional[str] = None
+    # Token Usage Settings
+    token_tracking_mode: Optional[str] = "detailed"  # none, aggregated, detailed
+    monthly_budget_cents: Optional[int] = None
+    alert_threshold_percent: Optional[int] = 80
+    alert_email: Optional[str] = None
+    alerts_enabled: Optional[bool] = True
+    per_agent_daily_limit_cents: Optional[int] = None
 
 class CompanySettingsCreate(CompanySettingsBase):
     pass
@@ -42,6 +49,13 @@ class CompanySettingsUpdate(BaseModel):
     smtp_use_tls: Optional[bool] = None
     smtp_from_email: Optional[str] = None
     smtp_from_name: Optional[str] = None
+    # Token Usage Settings
+    token_tracking_mode: Optional[str] = None
+    monthly_budget_cents: Optional[int] = None
+    alert_threshold_percent: Optional[int] = None
+    alert_email: Optional[str] = None
+    alerts_enabled: Optional[bool] = None
+    per_agent_daily_limit_cents: Optional[int] = None
 
 class CompanySettings(CompanySettingsBase):
     id: int
