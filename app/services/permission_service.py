@@ -8,7 +8,7 @@ def get_permission(db: Session, permission_id: int):
 def get_permission_by_name(db: Session, name: str):
     return db.query(models_permission.Permission).filter(models_permission.Permission.name == name).first()
 
-def get_permissions(db: Session, skip: int = 0, limit: int = 100):
+def get_permissions(db: Session, skip: int = 0, limit: int = 500):
     return db.query(models_permission.Permission).offset(skip).limit(limit).all()
 
 def create_permission(db: Session, permission: schemas_permission.PermissionCreate):
