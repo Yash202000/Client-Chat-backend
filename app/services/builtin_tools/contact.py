@@ -67,20 +67,64 @@ async def execute_create_or_update_contact_tool(db: Session, session_id: str, co
                 print(f"[CREATE/UPDATE CONTACT TOOL] Updated contact data - Name: {contact.name}, Email: {contact.email}, Phone: {contact.phone_number}")
 
         if not contact:
-            # Create new contact
-            contact_data = ContactCreate(
-                name=name,
-                email=email,
-                phone_number=phone_number,
-                custom_attributes={},
-                company_id=company_id
-            )
-            contact = contact_service.create_contact(db, contact_data, company_id)
+            # Check if contact already exists with same phone_number or email (deduplication)
+            from app.models.contact import Contact
+            existing_contact = None
+
+            if phone_number:
+                existing_contact = db.query(Contact).filter(
+                    Contact.company_id == company_id,
+                    Contact.phone_number == phone_number
+                ).first()
+                if existing_contact:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Found existing contact by phone_number: {existing_contact.id}")
+
+            if not existing_contact and email:
+                existing_contact = db.query(Contact).filter(
+                    Contact.company_id == company_id,
+                    Contact.email == email
+                ).first()
+                if existing_contact:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Found existing contact by email: {existing_contact.id}")
+
+            if existing_contact:
+                # Use existing contact and update missing fields
+                contact = existing_contact
+                needs_update = False
+
+                if name and not contact.name:
+                    contact.name = name
+                    needs_update = True
+                if email and not contact.email:
+                    contact.email = email
+                    needs_update = True
+                if phone_number and not contact.phone_number:
+                    contact.phone_number = phone_number
+                    needs_update = True
+
+                if needs_update:
+                    db.commit()
+                    db.refresh(contact)
+                    updated = True
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Updated existing contact ID: {contact.id} with missing fields")
+                else:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Linked session to existing contact ID: {contact.id}")
+            else:
+                # Create new contact
+                contact_data = ContactCreate(
+                    name=name,
+                    email=email,
+                    phone_number=phone_number,
+                    custom_attributes={},
+                    company_id=company_id
+                )
+                contact = contact_service.create_contact(db, contact_data, company_id)
+                print(f"[CREATE/UPDATE CONTACT TOOL] Created new contact ID: {contact.id}")
 
             # Link contact to session
             session_update = ConversationSessionUpdate(contact_id=contact.id)
             conversation_session_service.update_session(db, session_id, session_update)
-            print(f"[CREATE/UPDATE CONTACT TOOL] Created new contact ID: {contact.id} and linked to session")
+            print(f"[CREATE/UPDATE CONTACT TOOL] Linked contact {contact.id} to session")
 
         # Broadcast contact update to frontend via WebSocket
         try:
