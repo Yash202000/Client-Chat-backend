@@ -209,23 +209,31 @@ async def execute_get_contact_info_tool(db: Session, session_id: str, company_id
     Returns:
         Dictionary with contact information or null if no contact exists
     """
-    print(f"[GET CONTACT INFO TOOL] Session: {session_id}")
+    print(f"\n{'='*60}")
+    print(f"[GET CONTACT INFO TOOL] === STARTING ===")
+    print(f"[GET CONTACT INFO TOOL] Session ID: {session_id}")
+    print(f"[GET CONTACT INFO TOOL] Company ID: {company_id}")
 
     try:
         # Get the session
         session = conversation_session_service.get_session_by_conversation_id(db, session_id, company_id)
         if not session:
+            print(f"[GET CONTACT INFO TOOL] ERROR: Session not found!")
             return {"error": "Session not found"}
+
+        print(f"[GET CONTACT INFO TOOL] Session found - contact_id: {session.contact_id}")
 
         # Get the builtin tool for follow_up_config
         builtin_tool = db.query(Tool).filter(
             Tool.name == "get_contact_info",
             Tool.tool_type == "builtin"
         ).first()
+        print(f"[GET CONTACT INFO TOOL] Builtin tool found: {builtin_tool is not None}")
+        print(f"[GET CONTACT INFO TOOL] Follow-up config enabled: {builtin_tool.follow_up_config.get('enabled') if builtin_tool and builtin_tool.follow_up_config else False}")
 
         # Check if session has a contact
         if not session.contact_id:
-            print(f"[GET CONTACT INFO TOOL] No contact linked to session")
+            print(f"[GET CONTACT INFO TOOL] ⚠️  NO CONTACT LINKED TO SESSION!")
             # Get follow-up response for no contact case
             formatted_msg = None
             if builtin_tool and builtin_tool.follow_up_config:
@@ -250,10 +258,14 @@ async def execute_get_contact_info_tool(db: Session, session_id: str, company_id
         # Get the contact
         contact = contact_service.get_contact(db, session.contact_id, company_id)
         if not contact:
+            print(f"[GET CONTACT INFO TOOL] ERROR: Contact ID {session.contact_id} not found in database!")
             return {"error": "Contact not found"}
 
-        print(f"[GET CONTACT INFO TOOL] Found contact ID: {contact.id}")
-        print(f"[GET CONTACT INFO TOOL] Contact data - Name: {contact.name}, Email: {contact.email}, Phone: {contact.phone_number}")
+        print(f"[GET CONTACT INFO TOOL] ✓ Contact found!")
+        print(f"[GET CONTACT INFO TOOL]   - ID: {contact.id}")
+        print(f"[GET CONTACT INFO TOOL]   - Name: '{contact.name}' (empty: {not contact.name})")
+        print(f"[GET CONTACT INFO TOOL]   - Email: '{contact.email}' (empty: {not contact.email})")
+        print(f"[GET CONTACT INFO TOOL]   - Phone: '{contact.phone_number}' (empty: {not contact.phone_number})")
 
         # Get follow-up response from builtin tool's follow_up_config
         formatted_msg = None

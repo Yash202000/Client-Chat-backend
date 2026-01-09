@@ -425,9 +425,10 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         else:
             system_prompt += (
                 "9. **CONTACT INFORMATION COLLECTION (ONGOING)**: \n"
-                "   Continue collecting any missing contact information (name, email, phone) if not yet complete.\n"
-                "   After EACH piece of information is provided, IMMEDIATELY call 'create_or_update_contact' to save it.\n"
-                "   Only proceed with the user's request once all three fields are collected.\n"
+                "   IMPORTANT: If you have already collected the user's name, email, and phone in this conversation, "
+                "DO NOT ask for it again. Just proceed with helping them.\n"
+                "   If you're unsure whether contact info was collected, call 'get_contact_info' to check.\n"
+                "   Only ask for contact information if you haven't collected it yet in this conversation.\n"
             )
 
         system_prompt += (
