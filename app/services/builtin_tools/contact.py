@@ -67,20 +67,64 @@ async def execute_create_or_update_contact_tool(db: Session, session_id: str, co
                 print(f"[CREATE/UPDATE CONTACT TOOL] Updated contact data - Name: {contact.name}, Email: {contact.email}, Phone: {contact.phone_number}")
 
         if not contact:
-            # Create new contact
-            contact_data = ContactCreate(
-                name=name,
-                email=email,
-                phone_number=phone_number,
-                custom_attributes={},
-                company_id=company_id
-            )
-            contact = contact_service.create_contact(db, contact_data, company_id)
+            # Check if contact already exists with same phone_number or email (deduplication)
+            from app.models.contact import Contact
+            existing_contact = None
+
+            if phone_number:
+                existing_contact = db.query(Contact).filter(
+                    Contact.company_id == company_id,
+                    Contact.phone_number == phone_number
+                ).first()
+                if existing_contact:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Found existing contact by phone_number: {existing_contact.id}")
+
+            if not existing_contact and email:
+                existing_contact = db.query(Contact).filter(
+                    Contact.company_id == company_id,
+                    Contact.email == email
+                ).first()
+                if existing_contact:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Found existing contact by email: {existing_contact.id}")
+
+            if existing_contact:
+                # Use existing contact and update missing fields
+                contact = existing_contact
+                needs_update = False
+
+                if name and not contact.name:
+                    contact.name = name
+                    needs_update = True
+                if email and not contact.email:
+                    contact.email = email
+                    needs_update = True
+                if phone_number and not contact.phone_number:
+                    contact.phone_number = phone_number
+                    needs_update = True
+
+                if needs_update:
+                    db.commit()
+                    db.refresh(contact)
+                    updated = True
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Updated existing contact ID: {contact.id} with missing fields")
+                else:
+                    print(f"[CREATE/UPDATE CONTACT TOOL] Linked session to existing contact ID: {contact.id}")
+            else:
+                # Create new contact
+                contact_data = ContactCreate(
+                    name=name,
+                    email=email,
+                    phone_number=phone_number,
+                    custom_attributes={},
+                    company_id=company_id
+                )
+                contact = contact_service.create_contact(db, contact_data, company_id)
+                print(f"[CREATE/UPDATE CONTACT TOOL] Created new contact ID: {contact.id}")
 
             # Link contact to session
             session_update = ConversationSessionUpdate(contact_id=contact.id)
             conversation_session_service.update_session(db, session_id, session_update)
-            print(f"[CREATE/UPDATE CONTACT TOOL] Created new contact ID: {contact.id} and linked to session")
+            print(f"[CREATE/UPDATE CONTACT TOOL] Linked contact {contact.id} to session")
 
         # Broadcast contact update to frontend via WebSocket
         try:
@@ -165,23 +209,31 @@ async def execute_get_contact_info_tool(db: Session, session_id: str, company_id
     Returns:
         Dictionary with contact information or null if no contact exists
     """
-    print(f"[GET CONTACT INFO TOOL] Session: {session_id}")
+    print(f"\n{'='*60}")
+    print(f"[GET CONTACT INFO TOOL] === STARTING ===")
+    print(f"[GET CONTACT INFO TOOL] Session ID: {session_id}")
+    print(f"[GET CONTACT INFO TOOL] Company ID: {company_id}")
 
     try:
         # Get the session
         session = conversation_session_service.get_session_by_conversation_id(db, session_id, company_id)
         if not session:
+            print(f"[GET CONTACT INFO TOOL] ERROR: Session not found!")
             return {"error": "Session not found"}
+
+        print(f"[GET CONTACT INFO TOOL] Session found - contact_id: {session.contact_id}")
 
         # Get the builtin tool for follow_up_config
         builtin_tool = db.query(Tool).filter(
             Tool.name == "get_contact_info",
             Tool.tool_type == "builtin"
         ).first()
+        print(f"[GET CONTACT INFO TOOL] Builtin tool found: {builtin_tool is not None}")
+        print(f"[GET CONTACT INFO TOOL] Follow-up config enabled: {builtin_tool.follow_up_config.get('enabled') if builtin_tool and builtin_tool.follow_up_config else False}")
 
         # Check if session has a contact
         if not session.contact_id:
-            print(f"[GET CONTACT INFO TOOL] No contact linked to session")
+            print(f"[GET CONTACT INFO TOOL] ⚠️  NO CONTACT LINKED TO SESSION!")
             # Get follow-up response for no contact case
             formatted_msg = None
             if builtin_tool and builtin_tool.follow_up_config:
@@ -206,10 +258,14 @@ async def execute_get_contact_info_tool(db: Session, session_id: str, company_id
         # Get the contact
         contact = contact_service.get_contact(db, session.contact_id, company_id)
         if not contact:
+            print(f"[GET CONTACT INFO TOOL] ERROR: Contact ID {session.contact_id} not found in database!")
             return {"error": "Contact not found"}
 
-        print(f"[GET CONTACT INFO TOOL] Found contact ID: {contact.id}")
-        print(f"[GET CONTACT INFO TOOL] Contact data - Name: {contact.name}, Email: {contact.email}, Phone: {contact.phone_number}")
+        print(f"[GET CONTACT INFO TOOL] ✓ Contact found!")
+        print(f"[GET CONTACT INFO TOOL]   - ID: {contact.id}")
+        print(f"[GET CONTACT INFO TOOL]   - Name: '{contact.name}' (empty: {not contact.name})")
+        print(f"[GET CONTACT INFO TOOL]   - Email: '{contact.email}' (empty: {not contact.email})")
+        print(f"[GET CONTACT INFO TOOL]   - Phone: '{contact.phone_number}' (empty: {not contact.phone_number})")
 
         # Get follow-up response from builtin tool's follow_up_config
         formatted_msg = None

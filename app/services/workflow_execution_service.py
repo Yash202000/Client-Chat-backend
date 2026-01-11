@@ -990,6 +990,435 @@ class WorkflowExecutionService:
             print(f"✗ Error setting status: {e}")
             return {"error": f"Failed to set status: {e}"}
 
+    async def _execute_channel_redirect_node(
+        self,
+        node_data: dict,
+        context: dict,
+        results: dict,
+        conversation_id: str,
+        company_id: int,
+        contact_id: int,
+        workflow_id: int = None,
+        next_node_id: str = None
+    ) -> dict:
+        """
+        Redirects/continues conversation on another messaging channel.
+
+        Supports two redirect types:
+        - invite_link: Send message/link to target channel inviting user to continue
+        - full_transfer: Migrate conversation context to target channel
+
+        Supports workflow continuation options:
+        - original: Continue workflow on original channel (default)
+        - transfer: Transfer workflow execution to target channel
+
+        Args:
+            node_data: Node configuration parameters
+            context: Current workflow context
+            results: Results from previous nodes
+            conversation_id: Current session's conversation_id
+            company_id: Company ID for multi-tenancy
+            contact_id: Contact ID for the current user
+            workflow_id: Current workflow ID (for transfer)
+            next_node_id: Next node ID after this one (for transfer)
+
+        Returns:
+            dict with output/error and redirect details
+        """
+        from app.services import messaging_service, integration_service
+
+        # Extract node parameters
+        target_channel = node_data.get("target_channel", "whatsapp")
+        redirect_type = node_data.get("redirect_type", "invite_link")
+        contact_info_source = node_data.get("contact_info_source", "auto")
+        variable_name = node_data.get("variable_name", "")
+        original_session_behavior = node_data.get("original_session_behavior", "keep_active")
+
+        # Workflow continuation option
+        workflow_continuation = node_data.get("workflow_continuation", "original")
+
+        # Invite link options
+        invite_message = node_data.get("invite_message", "Continue our conversation on {{channel}}!")
+
+        # Full transfer options
+        copy_context_variables = node_data.get("copy_context_variables", False)
+        context_variables_to_copy = node_data.get("context_variables_to_copy", [])
+        transfer_message = node_data.get("transfer_message", "Continuing conversation from another channel.")
+
+        # Error handling
+        fallback_on_failure = node_data.get("fallback_on_failure", "continue")
+        max_retries = node_data.get("max_retries", 3)
+
+        print(f"✓ Channel Redirect: {redirect_type} to {target_channel} (workflow: {workflow_continuation})")
+
+        try:
+            # Step 1: Resolve target contact information
+            recipient_id, info_source = self._resolve_redirect_contact_info(
+                target_channel, contact_info_source, variable_name, contact_id, company_id, context
+            )
+
+            if not recipient_id:
+                error_msg = f"No contact information found for {target_channel}. Checked: "
+                if contact_info_source in ["auto", "contact"]:
+                    error_msg += f"contact record, "
+                if contact_info_source in ["auto", "variable"] and variable_name:
+                    error_msg += f"context.{variable_name}"
+                print(f"✗ Channel Redirect: {error_msg}")
+
+                if fallback_on_failure == "error_edge":
+                    return {
+                        "output": None,
+                        "error": "missing_contact_info",
+                        "error_message": error_msg,
+                        "redirect_attempted": False
+                    }
+                return {"output": "redirect_skipped", "error_message": error_msg}
+
+            print(f"  → Target recipient: {recipient_id} (source: {info_source})")
+
+            # Step 2: Get integration for target channel
+            integration_type = self._get_integration_type_for_channel(target_channel)
+            integration = integration_service.get_integration_by_type_and_company(
+                self.db, integration_type, company_id
+            )
+
+            if not integration:
+                error_msg = f"No {target_channel} integration configured for this company"
+                print(f"✗ Channel Redirect: {error_msg}")
+
+                if fallback_on_failure == "error_edge":
+                    return {
+                        "output": None,
+                        "error": "missing_integration",
+                        "error_message": error_msg,
+                        "redirect_attempted": False
+                    }
+                return {"output": "redirect_skipped", "error_message": error_msg}
+
+            # Step 3: Find existing session or create new one
+            # First, try to find an existing session for this contact on the target channel
+            target_session = conversation_session_service.get_session_by_contact_and_channel(
+                self.db,
+                contact_id=contact_id,
+                channel=target_channel,
+                company_id=company_id
+            )
+
+            if target_session:
+                print(f"  → Found existing session: {target_session.conversation_id}")
+            else:
+                # No existing session found, create a new one using recipient_id
+                target_workflow_id = workflow_id if workflow_continuation == "transfer" else None
+                target_session = conversation_session_service.get_or_create_session(
+                    self.db,
+                    conversation_id=recipient_id,
+                    workflow_id=target_workflow_id,
+                    contact_id=contact_id,
+                    channel=target_channel,
+                    company_id=company_id
+                )
+                print(f"  → Created new session: {target_session.conversation_id}")
+
+            # Step 4: Execute redirect based on type
+            if redirect_type == "invite_link":
+                result = await self._execute_invite_link_redirect(
+                    target_channel, recipient_id, invite_message,
+                    integration, context, results
+                )
+            else:  # full_transfer
+                result = await self._execute_full_transfer_redirect(
+                    target_channel, recipient_id, transfer_message,
+                    copy_context_variables, context_variables_to_copy,
+                    target_session, integration, context, results
+                )
+
+            if result.get("error"):
+                if fallback_on_failure == "error_edge":
+                    return result
+                return {"output": "redirect_failed", "error_message": result.get("error_message")}
+
+            # Step 5: Handle workflow transfer if enabled
+            stop_execution = False
+            if workflow_continuation == "transfer" and workflow_id and next_node_id:
+                # Transfer workflow to target session
+                target_session.workflow_id = workflow_id
+                target_session.next_step_id = next_node_id
+                target_session.status = "waiting_for_input"
+
+                # Copy full context to target session
+                target_context = target_session.context or {}
+                target_context.update(context)
+                target_context["_transferred_from_channel"] = {
+                    "original_conversation_id": conversation_id,
+                    "transferred_at": datetime.now().isoformat()
+                }
+                conversation_session_service.update_session_context(
+                    self.db, target_session.conversation_id, target_context
+                )
+
+                self.db.commit()
+                print(f"  → Workflow transferred to target session (next_step: {next_node_id})")
+                stop_execution = True
+
+            # Step 6: Handle original session behavior
+            await self._handle_original_session_behavior(
+                original_session_behavior, conversation_id, target_session.conversation_id
+            )
+
+            print(f"✓ Channel Redirect: Successfully initiated to {target_channel}")
+
+            return {
+                "output": "workflow_transferred" if stop_execution else "redirect_initiated",
+                "redirect_type": redirect_type,
+                "target_channel": target_channel,
+                "target_session_id": target_session.conversation_id,
+                "original_session_behavior": original_session_behavior,
+                "workflow_continuation": workflow_continuation,
+                "stop_execution": stop_execution  # Signal to stop workflow on original channel
+            }
+
+        except Exception as e:
+            print(f"✗ Channel Redirect Error: {e}")
+            if fallback_on_failure == "error_edge":
+                return {
+                    "output": None,
+                    "error": "redirect_failed",
+                    "error_message": str(e),
+                    "redirect_attempted": True
+                }
+            return {"output": "redirect_failed", "error_message": str(e)}
+
+    def _resolve_redirect_contact_info(
+        self,
+        target_channel: str,
+        source: str,
+        variable_name: str,
+        contact_id: int,
+        company_id: int,
+        context: dict
+    ) -> tuple:
+        """
+        Resolves contact information for the target channel.
+
+        Returns:
+            (recipient_id, source_type) or (None, None) if not found
+        """
+        from app.services import contact_service
+
+        recipient_id = None
+        info_source = None
+
+        # Channel to contact field mapping
+        channel_field_map = {
+            "whatsapp": "phone_number",
+            "telegram": "telegram_id",
+            "instagram": "instagram_psid",
+            "messenger": "messenger_psid"
+        }
+
+        # Try contact record first (if source is auto or contact)
+        if source in ["auto", "contact"]:
+            contact = contact_service.get_contact(self.db, contact_id, company_id)
+            if contact:
+                field = channel_field_map.get(target_channel)
+                if field == "phone_number":
+                    recipient_id = contact.phone_number
+                elif contact.custom_attributes and field:
+                    recipient_id = contact.custom_attributes.get(field)
+
+                if recipient_id:
+                    info_source = "contact"
+
+        # Try workflow variable (if source is auto or variable, and not found yet)
+        if not recipient_id and source in ["auto", "variable"] and variable_name:
+            # Resolve variable from context
+            resolved_var = self._resolve_placeholders(f"{{{{{variable_name}}}}}", context, {})
+            if resolved_var and resolved_var != f"{{{{{variable_name}}}}}":
+                recipient_id = resolved_var
+                info_source = "variable"
+
+        return (recipient_id, info_source)
+
+    def _get_integration_type_for_channel(self, channel: str) -> str:
+        """Maps channel name to integration type."""
+        channel_integration_map = {
+            "whatsapp": "whatsapp",
+            "telegram": "telegram",
+            "instagram": "instagram",
+            "messenger": "messenger"
+        }
+        return channel_integration_map.get(channel, channel)
+
+    async def _execute_invite_link_redirect(
+        self,
+        target_channel: str,
+        recipient_id: str,
+        invite_message: str,
+        integration,
+        context: dict,
+        results: dict
+    ) -> dict:
+        """
+        Sends an invite message to the target channel.
+        """
+        from app.services import messaging_service
+
+        # Resolve placeholders in message
+        resolved_message = self._resolve_placeholders(invite_message, context, results)
+        resolved_message = resolved_message.replace("{{channel}}", target_channel.title())
+
+        try:
+            if target_channel == "whatsapp":
+                result = await messaging_service.send_whatsapp_message(
+                    recipient_id, resolved_message, integration, self.db
+                )
+            elif target_channel == "telegram":
+                result = await messaging_service.send_telegram_message(
+                    int(recipient_id), resolved_message, integration
+                )
+            elif target_channel == "instagram":
+                result = await messaging_service.send_instagram_message(
+                    recipient_id, resolved_message, integration
+                )
+            elif target_channel == "messenger":
+                result = await messaging_service.send_messenger_message(
+                    recipient_id, resolved_message, integration
+                )
+            else:
+                return {"error": "unsupported_channel", "error_message": f"Channel {target_channel} not supported"}
+
+            print(f"  → Invite message sent to {target_channel}")
+            return {"output": "message_sent", "result": result}
+
+        except Exception as e:
+            return {"error": "send_failed", "error_message": str(e)}
+
+    async def _execute_full_transfer_redirect(
+        self,
+        target_channel: str,
+        recipient_id: str,
+        transfer_message: str,
+        copy_context_variables: bool,
+        context_variables_to_copy: list,
+        target_session,
+        integration,
+        context: dict,
+        results: dict
+    ) -> dict:
+        """
+        Performs full transfer: copies context and sends welcome message to target channel.
+        """
+        from app.services import messaging_service
+
+        try:
+            # Copy context variables if enabled
+            if copy_context_variables:
+                target_context = target_session.context or {}
+
+                if context_variables_to_copy:
+                    # Copy specific variables
+                    for var in context_variables_to_copy:
+                        if var in context:
+                            target_context[var] = context[var]
+                else:
+                    # Copy all context variables
+                    target_context.update(context)
+
+                # Mark as transferred
+                target_context["_transferred_from"] = {
+                    "channel": "original",
+                    "timestamp": datetime.now().isoformat()
+                }
+
+                conversation_session_service.update_session_context(
+                    self.db, target_session.conversation_id, target_context
+                )
+                print(f"  → Context copied to target session")
+
+            # Send transfer welcome message
+            resolved_message = self._resolve_placeholders(transfer_message, context, results)
+
+            if target_channel == "whatsapp":
+                result = await messaging_service.send_whatsapp_message(
+                    recipient_id, resolved_message, integration, self.db
+                )
+            elif target_channel == "telegram":
+                result = await messaging_service.send_telegram_message(
+                    int(recipient_id), resolved_message, integration
+                )
+            elif target_channel == "instagram":
+                result = await messaging_service.send_instagram_message(
+                    recipient_id, resolved_message, integration
+                )
+            elif target_channel == "messenger":
+                result = await messaging_service.send_messenger_message(
+                    recipient_id, resolved_message, integration
+                )
+            else:
+                return {"error": "unsupported_channel", "error_message": f"Channel {target_channel} not supported"}
+
+            print(f"  → Transfer message sent to {target_channel}")
+            return {"output": "transfer_complete", "result": result}
+
+        except Exception as e:
+            return {"error": "transfer_failed", "error_message": str(e)}
+
+    async def _handle_original_session_behavior(
+        self,
+        behavior: str,
+        original_conversation_id: str,
+        target_conversation_id: str
+    ):
+        """
+        Handles the original session based on the configured behavior.
+        """
+        session = conversation_session_service.get_session(self.db, original_conversation_id)
+        if not session:
+            return
+
+        if behavior == "pause":
+            # Pause session - store resume info
+            session_context = session.context or {}
+            session_context["_paused_for_redirect"] = {
+                "target_session": target_conversation_id,
+                "paused_at": datetime.now().isoformat()
+            }
+            conversation_session_service.update_session_context(
+                self.db, original_conversation_id, session_context
+            )
+
+            session_update = ConversationSessionUpdate(status="paused")
+            conversation_session_service.update_session(self.db, original_conversation_id, session_update)
+            print(f"  → Original session paused")
+
+        elif behavior == "close":
+            # Close/resolve session
+            session_context = session.context or {}
+            session_context["_closed_for_redirect"] = {
+                "target_session": target_conversation_id,
+                "closed_at": datetime.now().isoformat()
+            }
+            conversation_session_service.update_session_context(
+                self.db, original_conversation_id, session_context
+            )
+
+            session_update = ConversationSessionUpdate(status="resolved")
+            conversation_session_service.update_session(self.db, original_conversation_id, session_update)
+            print(f"  → Original session closed/resolved")
+
+        else:  # keep_active
+            # Just link sessions in context for reference
+            session_context = session.context or {}
+            session_context["_linked_redirect_sessions"] = session_context.get("_linked_redirect_sessions", [])
+            session_context["_linked_redirect_sessions"].append({
+                "target_session": target_conversation_id,
+                "redirected_at": datetime.now().isoformat()
+            })
+            conversation_session_service.update_session_context(
+                self.db, original_conversation_id, session_context
+            )
+            print(f"  → Original session kept active, linked to target")
+
     async def _execute_question_classifier_node(self, node_data: dict, context: dict, results: dict, company_id: int):
         """
         Classifies user question into predefined classes using LLM.
@@ -2283,6 +2712,17 @@ Return only valid JSON, nothing else:"""
                     node_data, context, results, conversation_id
                 )
 
+            elif node_type == "channel_redirect":
+                # Redirects conversation to another channel (WhatsApp, Telegram, etc.)
+                # Pre-compute next node ID for workflow transfer capability
+                redirect_next_node_id = graph_engine.get_next_node(current_node_id, {"output": "success"})
+                result = await self._execute_channel_redirect_node(
+                    node_data, context, results, conversation_id,
+                    workflow_obj.agent.company_id, session.contact_id,
+                    workflow_id=workflow_obj.id,
+                    next_node_id=redirect_next_node_id
+                )
+
             elif node_type == "question_classifier":
                 # Classifies question using LLM and routes accordingly
                 result = await self._execute_question_classifier_node(
@@ -2413,6 +2853,25 @@ Return only valid JSON, nothing else:"""
             if result and "error" in result:
                 # The get_next_node method will handle routing to the error path if it exists
                 pass
+
+            # Handle workflow transfer - stop execution on original channel
+            if result and result.get("stop_execution"):
+                print(f"✓ Workflow transferred to another channel, stopping execution on original")
+                # Clear workflow state on original session since workflow transferred
+                session_update = ConversationSessionUpdate(
+                    workflow_id=None,
+                    next_step_id=None,
+                    context=context,
+                    status='active'
+                )
+                conversation_session_service.update_session(self.db, conversation_id, session_update)
+
+                return {
+                    "status": "workflow_transferred",
+                    "conversation_id": conversation_id,
+                    "output": result.get("output", "Workflow transferred to another channel"),
+                    "response": response_messages[-1] if response_messages else result.get("output")
+                }
 
             print(f"DEBUG: About to call get_next_node for node '{current_node_id}' with result: {result}")
             current_node_id = graph_engine.get_next_node(current_node_id, result)

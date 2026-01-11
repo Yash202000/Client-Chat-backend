@@ -150,6 +150,33 @@ def get_session_by_conversation_id(db: Session, conversation_id: str, company_id
         ConversationSession.company_id == company_id
     ).first()
 
+def get_session_by_contact_and_channel(db: Session, contact_id: int, channel: str, company_id: int):
+    """
+    Find an existing session by contact_id and channel.
+    Returns the most recent active session for this contact on the specified channel.
+    """
+    return db.query(ConversationSession).filter(
+        ConversationSession.contact_id == contact_id,
+        ConversationSession.channel == channel,
+        ConversationSession.company_id == company_id,
+        ConversationSession.status.in_(['active', 'waiting_for_input', 'assigned'])
+    ).order_by(ConversationSession.updated_at.desc()).first()
+
+def update_session_context(db: Session, conversation_id: str, context: dict) -> ConversationSession:
+    """
+    Updates only the context field of a session.
+    """
+    db_session = db.query(ConversationSession).filter(
+        ConversationSession.conversation_id == conversation_id
+    ).first()
+
+    if db_session:
+        db_session.context = context
+        db.commit()
+        db.refresh(db_session)
+
+    return db_session
+
 async def update_session_connection_status(db: Session, conversation_id: str, is_connected: bool) -> ConversationSession:
     """
     Updates the session connection state and status based on client connection.

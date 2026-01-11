@@ -1,5 +1,6 @@
 from app.models.agent import Agent
 from app.models.api_key import ApiKey
+from app.models.api_integration import ApiIntegration
 from app.models.chat_message import ChatMessage
 from app.models.comment import Comment
 from app.models.company import Company

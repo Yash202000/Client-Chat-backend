@@ -22,8 +22,8 @@ def create_permission(
 
 @router.get("/", response_model=List[schemas_permission.Permission])
 def read_permissions(
-    skip: int = 0, 
-    limit: int = 100, 
+    skip: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):

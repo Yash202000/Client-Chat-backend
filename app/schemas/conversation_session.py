@@ -41,6 +41,13 @@ class ConversationSessionUpdate(BaseModel):
     # Subworkflow execution state
     subworkflow_stack: Optional[List[Dict[str, Any]]] = None
 
+    # Agent-to-agent transfer tracking
+    agent_id: Optional[int] = None  # Allow changing the agent
+    original_agent_id: Optional[int] = None
+    previous_agent_id: Optional[int] = None
+    agent_transition_history: Optional[List[Dict[str, Any]]] = None
+    handoff_summary: Optional[str] = None  # Summary passed during agent-to-agent handoff
+
 class ConversationSession(ConversationSessionBase):
     id: int
     summary: Optional[str] = None

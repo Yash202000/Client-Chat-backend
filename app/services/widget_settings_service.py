@@ -5,8 +5,20 @@ from app.models.agent import Agent
 from app.schemas.widget_settings import WidgetSettingsCreate, WidgetSettingsUpdate
 from app.core.config import settings
 
-def get_widget_settings(db: Session, agent_id: int):
+def get_widget_settings(db: Session, agent_id: int, create_if_missing: bool = False):
     settings_from_db = db.query(WidgetSettings).filter(WidgetSettings.agent_id == agent_id).first()
+
+    if not settings_from_db and create_if_missing:
+        # Create default widget settings
+        settings_from_db = WidgetSettings(
+            agent_id=agent_id,
+            livekit_url=settings.LIVEKIT_URL,
+            frontend_url=settings.FRONTEND_URL
+        )
+        db.add(settings_from_db)
+        db.commit()
+        db.refresh(settings_from_db)
+
     if settings_from_db:
         if not settings_from_db.livekit_url:
             settings_from_db.livekit_url = settings.LIVEKIT_URL
@@ -43,4 +55,22 @@ def update_widget_settings(db: Session, agent_id: int, widget_settings: WidgetSe
             setattr(db_widget_settings, key, value)
         db.commit()
         db.refresh(db_widget_settings)
+    else:
+        # Create widget settings if they don't exist
+        widget_settings_data = widget_settings.model_dump(exclude_unset=True, exclude={"voice_id", "stt_provider", "tts_provider"})
+        widget_settings_data["agent_id"] = agent_id
+        widget_settings_data["livekit_url"] = settings.LIVEKIT_URL
+        widget_settings_data["frontend_url"] = settings.FRONTEND_URL
+        db_widget_settings = WidgetSettings(**widget_settings_data)
+        db.add(db_widget_settings)
+        db.commit()
+        db.refresh(db_widget_settings)
+
+    # Return with voice settings from agent
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if agent:
+        db_widget_settings.voice_id = agent.voice_id
+        db_widget_settings.stt_provider = agent.stt_provider
+        db_widget_settings.tts_provider = agent.tts_provider
+
     return db_widget_settings
