@@ -1,5 +1,6 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func, Table
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func, Table, Text
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.tool import agent_tools
@@ -50,3 +51,14 @@ class Agent(Base):
     tts_provider = Column(String, nullable=False, default='voice_engine')
     stt_provider = Column(String, nullable=False, default='deepgram')
     vision_enabled = Column(Boolean, default=False)
+
+    # Agent-to-agent handoff configuration
+    specialization_topics = Column(JSON, nullable=True, default=[])
+    # Format: [{"topic": "billing", "description": "Handles billing, invoices, payments"}, ...]
+
+    handoff_config = Column(JSON, nullable=True, default={})
+    # Format: {
+    #   "accept_handoffs": true,
+    #   "history_mode": "full" | "summary" | "none",
+    #   "welcome_message_on_handoff": "I'm the billing specialist..."
+    # }

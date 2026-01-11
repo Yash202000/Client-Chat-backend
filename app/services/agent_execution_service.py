@@ -1,6 +1,6 @@
 import os
 from sqlalchemy.orm import Session
-from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service, credential_service
+from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service, credential_service, conversation_session_service, agent_selection_service
 from app.core.config import settings
 from app.models.chat_message import ChatMessage
 from app.schemas.chat_message import ChatMessage as ChatMessageSchema, ChatMessageCreate
@@ -198,10 +198,27 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
     # Determine if we need OpenAI-compatible schemas
     is_openai = agent.llm_provider == "openai"
 
+    # Get available agents for handoff tools (if db and company_id provided)
+    available_agents_info = ""
+    if db and company_id:
+        available_agents = agent_selection_service.list_available_agents_for_handoff(
+            db, company_id, exclude_agent_id=agent.id
+        )
+        print(f"[TOOLS DEBUG] Available agents for handoff (excluding {agent.id}): {available_agents}")
+        if available_agents:
+            agent_list = []
+            for ag in available_agents:
+                topics = [t.get('topic', '') for t in ag.get('specialization_topics', [])]
+                agent_list.append(f"- {ag['name']} (id: {ag['id']}): specializes in {', '.join(topics)}")
+            available_agents_info = "\n\nAvailable agents for transfer/consultation:\n" + "\n".join(agent_list)
+            available_agents_info += "\n\nIMPORTANT: Always use the target_agent_id parameter with the agent's ID for accurate routing."
+            print(f"[TOOLS DEBUG] Injecting available agents info into handoff tools: {available_agents_info}")
+
     for tool in agent.tools:
         if tool.tool_type == "builtin":
             # Built-in tools - use stored parameters with provider-specific adjustments
             params = tool.parameters or {"type": "object", "properties": {}}
+            description = tool.description
 
             # Special handling for create_or_update_contact with OpenAI
             if tool.name == "create_or_update_contact" and not is_openai:
@@ -213,6 +230,10 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
                     {"required": ["phone_number"]}
                 ]
 
+            # Inject available agents into handoff tool descriptions
+            if tool.name in ("transfer_to_agent", "consult_agent") and available_agents_info:
+                description = tool.description + available_agents_info
+
             if is_openai:
                 params = _sanitize_schema_for_openai(params)
 
@@ -220,7 +241,7 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
                 "type": "function",
                 "function": {
                     "name": tool.name,
-                    "description": tool.description,
+                    "description": description,
                     "parameters": params,
                 },
             })
@@ -366,6 +387,31 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     # Check if this is the first message in the conversation (no assistant messages yet)
     is_first_message = not any(msg.get("role") == "assistant" for msg in formatted_history)
 
+    # Check if this agent received a handoff from another agent
+    handoff_context = ""
+    try:
+        session = conversation_session_service.get_session(db, boradcast_session_id)
+        if session and session.previous_agent_id and session.previous_agent_id != agent_id:
+            # This agent received a handoff - inject context
+            handoff_context = f"\n\n[HANDOFF CONTEXT]\nThis conversation was transferred to you from another AI agent.\n"
+            if session.handoff_summary:
+                handoff_context += f"Transfer summary: {session.handoff_summary}\n"
+            # Get the topic from transition history
+            transition_history = session.agent_transition_history or []
+            if transition_history:
+                last_transition = transition_history[-1]
+                if last_transition.get("type") == "transfer" and last_transition.get("to_agent_id") == agent_id:
+                    topic = last_transition.get("topic", "")
+                    reason = last_transition.get("reason", "")
+                    if topic:
+                        handoff_context += f"Topic of transfer: {topic}\n"
+                    if reason:
+                        handoff_context += f"Reason for transfer: {reason}\n"
+            handoff_context += "Please acknowledge the transfer naturally and help the user with their request.\n[END HANDOFF CONTEXT]\n"
+            print(f"[AGENT EXECUTION] Agent received handoff - injecting context")
+    except Exception as e:
+        print(f"[AGENT EXECUTION] Warning: Could not check for handoff context: {e}")
+
     print(f"[AGENT EXECUTION DEBUG] Session: {boradcast_session_id}")
     print(f"[AGENT EXECUTION DEBUG] Formatted history length: {len(formatted_history)}")
     print(f"[AGENT EXECUTION DEBUG] Is first message: {is_first_message}")
@@ -438,18 +484,29 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         if rag_context:
             system_prompt += f"\n\nHere is some context from the knowledge base that might be relevant:\n{rag_context}"
 
+        # Add handoff context if this agent received a transfer
+        if handoff_context:
+            system_prompt += handoff_context
+
         MAX_HISTORY = 10
         formatted_history = formatted_history[-MAX_HISTORY:]
 
-        # For first message, force the AI to call get_contact_info
+        # For first message, force the AI to call get_contact_info (if available)
         tool_choice_param = "auto"  # Default
-        if is_first_message and agent.llm_provider == "openai":
+        # Check if get_contact_info tool is in the available tools
+        has_get_contact_info = any(
+            tool.get("function", {}).get("name") == "get_contact_info"
+            for tool in generic_tools
+        )
+        if is_first_message and agent.llm_provider == "openai" and has_get_contact_info:
             # Force OpenAI to call get_contact_info on first message
             tool_choice_param = {
                 "type": "function",
                 "function": {"name": "get_contact_info"}
             }
             print(f"[AGENT EXECUTION] First message detected - forcing get_contact_info tool call")
+        elif is_first_message and not has_get_contact_info:
+            print(f"[AGENT EXECUTION] First message but get_contact_info tool not available for agent - skipping forced tool call")
 
         # Call LLM provider asynchronously (disable streaming when using tools)
         llm_response = await provider_module.generate_response(
@@ -631,6 +688,20 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             "room_name": result_data.get('room_name'),
             "livekit_url": result_data.get('livekit_url'),
             "user_token": result_data.get('user_token')
+        }
+
+    # Return response with agent transfer info if transfer_to_agent tool was used
+    if tool_name == "transfer_to_agent" and tool_result.get('result', {}).get('status') == 'transferred':
+        result_data = tool_result.get('result', {})
+        return {
+            "text": final_agent_response_text,
+            "agent_transferred": True,
+            "from_agent_id": result_data.get('from_agent_id'),
+            "from_agent_name": result_data.get('from_agent_name'),
+            "to_agent_id": result_data.get('to_agent_id'),
+            "to_agent_name": result_data.get('to_agent_name'),
+            "topic": result_data.get('topic'),
+            "welcome_message": result_data.get('welcome_message')
         }
 
     return final_agent_response_text

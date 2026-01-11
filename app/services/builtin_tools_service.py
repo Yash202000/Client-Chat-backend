@@ -153,6 +153,73 @@ BUILTIN_TOOLS = [
             "required": ["text", "target_language"]
         },
         "follow_up_config": None
+    },
+    {
+        "name": "transfer_to_agent",
+        "description": "Transfer the conversation to another specialized AI agent. Use this when the user's request requires expertise in a different area that you don't specialize in, or when explicitly asked to connect with a specialist. The conversation will be fully handed off to the new agent.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The topic or area of expertise needed (e.g., 'billing', 'technical_support', 'sales', 'returns')"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of why the transfer is needed"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of the conversation so far to provide context to the receiving agent"
+                },
+                "target_agent_id": {
+                    "type": "integer",
+                    "description": "Optional: Specific agent ID to transfer to. If not provided, the system will find the best match based on topic."
+                }
+            },
+            "required": ["topic", "reason", "summary"]
+        },
+        "follow_up_config": {
+            "enabled": True,
+            "fields": {
+                "topic": {
+                    "question": "What area do you need help with?",
+                    "lookup_source": None
+                }
+            },
+            "completion_message": "I'm transferring you to a specialist who can better assist you with this."
+        }
+    },
+    {
+        "name": "consult_agent",
+        "description": "Consult another specialized AI agent for expert input without transferring the conversation. Use this when you need expert advice on a specific topic but will continue handling the conversation yourself. The specialist's response will help you provide a better answer.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The topic or area of expertise needed for consultation"
+                },
+                "question": {
+                    "type": "string",
+                    "description": "The specific question to ask the specialist agent"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Relevant context from the conversation to help the specialist understand the situation"
+                },
+                "target_agent_id": {
+                    "type": "integer",
+                    "description": "Optional: Specific agent ID to consult. If not provided, the system will find the best match based on topic."
+                }
+            },
+            "required": ["topic", "question"]
+        },
+        "follow_up_config": None
     }
 ]
 

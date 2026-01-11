@@ -14,7 +14,9 @@ from app.services.builtin_tools import (
     execute_handoff_tool,
     execute_create_or_update_contact_tool,
     execute_get_contact_info_tool,
-    execute_translate_tool
+    execute_translate_tool,
+    execute_transfer_to_agent_tool,
+    execute_consult_agent_tool
 )
 
 # Registry of builtin tools - maps tool name to executor function
@@ -24,6 +26,8 @@ BUILTIN_TOOL_REGISTRY = {
     "create_or_update_contact": execute_create_or_update_contact_tool,
     "get_contact_info": execute_get_contact_info_tool,
     "translate": execute_translate_tool,
+    "transfer_to_agent": execute_transfer_to_agent_tool,
+    "consult_agent": execute_consult_agent_tool,
 }
 
 
@@ -147,6 +151,8 @@ async def execute_tool(
                 return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
         elif tool_name == "translate":
             return await executor(db=db, session_id=session_id, parameters=parameters, company_id=company_id)
+        elif tool_name in ("transfer_to_agent", "consult_agent"):
+            return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
 
     # Check if it's an MCP tool (contains '__' separator)
     if '__' in tool_name:

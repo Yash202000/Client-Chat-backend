@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel, validator
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.schemas.chat_message import ChatMessage
 from app.schemas.webhook import Webhook
 from app.schemas.credential import Credential
@@ -28,6 +28,11 @@ class AgentBase(BaseModel):
     tts_provider: Optional[str] = 'voice_engine'
     stt_provider: Optional[str] = 'deepgram'
     vision_enabled: Optional[bool] = False
+    # Agent-to-agent handoff configuration
+    specialization_topics: Optional[List[Dict[str, str]]] = []
+    # Format: [{"topic": "billing", "description": "Handles billing, invoices, payments"}, ...]
+    handoff_config: Optional[Dict[str, Any]] = {}
+    # Format: {"accept_handoffs": true, "history_mode": "summary", "welcome_message_on_handoff": "..."}
 
 class AgentCreate(AgentBase):
     pass
@@ -54,6 +59,9 @@ class AgentUpdate(BaseModel):
     tts_provider: Optional[str] = None
     stt_provider: Optional[str] = None
     vision_enabled: Optional[bool] = None
+    # Agent-to-agent handoff configuration
+    specialization_topics: Optional[List[Dict[str, str]]] = None
+    handoff_config: Optional[Dict[str, Any]] = None
 
 class Agent(AgentBase):
     id: int
