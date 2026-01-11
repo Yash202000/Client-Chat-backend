@@ -13,6 +13,7 @@ class TriggerChannel(str, enum.Enum):
     MESSENGER = "messenger"
     TWILIO_VOICE = "twilio_voice"
     FREESWITCH = "freeswitch"
+    API = "api"
 
 class WorkflowTrigger(Base):
     """
