@@ -336,7 +336,7 @@ class WorkflowExecutionService:
             # Find relevant chunks from knowledge base (pass agent for correct embedding model)
             retrieved_chunks = knowledge_base_service.find_relevant_chunks(
                 self.db, knowledge_base_id, company_id, resolved_query, top_k=5,
-                agent=workflow.agent if workflow else None
+                agent=self._executing_agent
             )
 
             if not retrieved_chunks:
@@ -630,7 +630,7 @@ class WorkflowExecutionService:
             system_prompt = self._resolve_placeholders(custom_system_prompt, context, results)
         else:
             # Fall back to agent's system prompt
-            system_prompt = workflow.agent.prompt if workflow.agent else "You are a helpful assistant."
+            system_prompt = self._executing_agent.prompt if self._executing_agent else "You are a helpful assistant."
 
         # 2. Get the chat history
         chat_history = []
@@ -643,12 +643,12 @@ class WorkflowExecutionService:
                 chat_history.append({"role": role, "content": msg.message})
 
         # 3. Get the tools associated with the agent
-        agent_tools = workflow.agent.tools if workflow.agent else []
+        agent_tools = self._executing_agent.tools if self._executing_agent else []
 
         # 4. Get attachments from context (for vision model support)
         # Only include attachments if agent has vision_enabled
         attachments = []
-        if workflow.agent and getattr(workflow.agent, 'vision_enabled', False):
+        if self._executing_agent and getattr(self._executing_agent, 'vision_enabled', False):
             # First check user_attachments (set during workflow execution)
             attachments = context.get("user_attachments", [])
 
@@ -1625,7 +1625,7 @@ Extracted value:"""
                             memory_service.set_memory(
                                 self.db,
                                 MemoryCreate(key=extracting_entity_name, value=extracted_value),
-                                agent_id=workflow.agent.id,
+                                agent_id=self._executing_agent_id,
                                 session_id=conversation_id
                             )
                             print(f"✓ Extracted and validated '{extracted_value}' for {extracting_entity_name} (type: {entity_type})")
@@ -1678,19 +1678,19 @@ Extracted value:"""
                     memory_service.set_memory(
                         self.db,
                         MemoryCreate(key="variable_to_save", value=next_entity_name),
-                        agent_id=workflow.agent.id,
+                        agent_id=self._executing_agent_id,
                         session_id=conversation_id
                     )
                     memory_service.set_memory(
                         self.db,
                         MemoryCreate(key="_extracting_entity_name", value=next_entity_name),
-                        agent_id=workflow.agent.id,
+                        agent_id=self._executing_agent_id,
                         session_id=conversation_id
                     )
                     memory_service.set_memory(
                         self.db,
                         MemoryCreate(key="_missing_entities", value=json.dumps(missing_entities)),
-                        agent_id=workflow.agent.id,
+                        agent_id=self._executing_agent_id,
                         session_id=conversation_id
                     )
 
@@ -1834,7 +1834,7 @@ Return only valid JSON, nothing else:"""
                     memory_service.set_memory(
                         self.db,
                         MemoryCreate(key=entity_name, value=entity_value),
-                        agent_id=workflow.agent.id,
+                        agent_id=self._executing_agent_id,
                         session_id=conversation_id
                     )
                     print(f"✓ Entity '{entity_name}' extracted and validated: {entity_value} (type: {entity_type})")
@@ -1880,19 +1880,19 @@ Return only valid JSON, nothing else:"""
         memory_service.set_memory(
             self.db,
             MemoryCreate(key="variable_to_save", value=first_missing),
-            agent_id=workflow.agent.id,
+            agent_id=self._executing_agent_id,
             session_id=conversation_id
         )
         memory_service.set_memory(
             self.db,
             MemoryCreate(key="_extracting_entity_name", value=first_missing),
-            agent_id=workflow.agent.id,
+            agent_id=self._executing_agent_id,
             session_id=conversation_id
         )
         memory_service.set_memory(
             self.db,
             MemoryCreate(key="_missing_entities", value=json.dumps(missing_entities)),
-            agent_id=workflow.agent.id,
+            agent_id=self._executing_agent_id,
             session_id=conversation_id
         )
 
@@ -2017,7 +2017,7 @@ Return only valid JSON, nothing else:"""
             "depth": current_depth + 1
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None):
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None, agent_id: int = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -2028,21 +2028,34 @@ Return only valid JSON, nothing else:"""
         if not workflow_obj:
             return {"error": f"Workflow not found."}
 
+        # Get the executing agent - either from parameter, workflow's agents, or None
+        executing_agent = None
+        executing_agent_id = agent_id
+        if agent_id:
+            from app.services import agent_service
+            executing_agent = agent_service.get_agent(self.db, agent_id)
+        elif hasattr(workflow_obj, 'agents') and workflow_obj.agents:
+            executing_agent = workflow_obj.agents[0]
+            executing_agent_id = executing_agent.id
+
+        # Store executing agent for use in node execution
+        self._executing_agent = executing_agent
+        self._executing_agent_id = executing_agent_id
+
         print(f"DEBUG: Fetched workflow: {workflow_obj.name} (ID: {workflow_obj.id})")
-        if hasattr(workflow_obj, 'agent') and workflow_obj.agent:
-            print(f"DEBUG: Workflow agent: {workflow_obj.agent.name} (ID: {workflow_obj.agent.id})")
-            print(f"DEBUG: Workflow agent company_id: {workflow_obj.agent.company_id}")
+        if executing_agent:
+            print(f"DEBUG: Executing agent: {executing_agent.name} (ID: {executing_agent.id})")
         else:
-            print("DEBUG: Workflow agent is None or not loaded.")
+            print("DEBUG: No executing agent set for workflow.")
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
 
         session = conversation_session_service.get_or_create_session(
-            self.db, conversation_id, workflow_obj.id, contact_id=1, channel="test", company_id=workflow_obj.agent.company_id
+            self.db, conversation_id, workflow_obj.id, contact_id=1, channel="test", company_id=workflow_obj.company_id
         )
 
         # Load all memories for this session into the context
-        context = {memory.key: memory.value for memory in memory_service.get_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)}
+        context = {memory.key: memory.value for memory in memory_service.get_all_memories(self.db, agent_id=executing_agent_id, session_id=conversation_id)} if executing_agent_id else {}
 
         # Also merge session.context which contains validation state and other transient data
         # Session context takes precedence for keys like pending_listen_validation_mode, pending_question_text, etc.
@@ -2079,13 +2092,14 @@ Return only valid JSON, nothing else:"""
                     context.update(entities)
 
                     # Save entities to memory for persistence
-                    for entity_name, entity_value in entities.items():
-                        memory_service.set_memory(
-                            self.db,
-                            MemoryCreate(key=entity_name, value=entity_value),
-                            agent_id=workflow_obj.agent.id,
-                            session_id=conversation_id
-                        )
+                    if self._executing_agent_id:
+                        for entity_name, entity_value in entities.items():
+                            memory_service.set_memory(
+                                self.db,
+                                MemoryCreate(key=entity_name, value=entity_value),
+                                agent_id=self._executing_agent_id,
+                                session_id=conversation_id
+                            )
 
                 # Check if confidence meets auto-trigger threshold
                 if not self.workflow_intent_service.should_auto_trigger(workflow_obj, confidence):
@@ -2142,11 +2156,11 @@ Return only valid JSON, nothing else:"""
                 )
                 conversation_session_service.update_session(self.db, conversation_id, session_update)
                 # Clear memories for clean restart
-                memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                memory_service.delete_all_memories(self.db, agent_id=self._executing_agent_id, session_id=conversation_id)
                 # Start from beginning
                 current_node_id = graph_engine.find_start_node()
                 context = {"initial_user_message": user_message, "user_attachments": attachments or []}
-                memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=self._executing_agent_id, session_id=conversation_id)
             else:
                 should_resume = True
                 print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
@@ -2282,8 +2296,8 @@ Return only valid JSON, nothing else:"""
                             hint_message = schemas_chat_message.ChatMessageCreate(message=hint_text, message_type="message")
                             db_hint_message = chat_service.create_chat_message(
                                 self.db, hint_message,
-                                workflow_obj.agent.id, conversation_id,
-                                workflow_obj.agent.company_id, "agent",
+                                self._executing_agent_id, conversation_id,
+                                workflow_obj.company_id, "agent",
                                 assignee_id=None
                             )
                             asyncio.create_task(ws_manager.broadcast_to_session(
@@ -2384,13 +2398,13 @@ Return only valid JSON, nothing else:"""
                         context.pop("expected_input_type", None)
                     print(f"DEBUG: Context after updating with user message: {context}")
                     # Save the updated context back to memory
-                    memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                    memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=self._executing_agent_id, session_id=conversation_id)
         else:
             current_node_id = graph_engine.find_start_node()
             # For the very first message in a workflow
             context["initial_user_message"] = user_message
             context["user_attachments"] = attachments or []
-            memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+            memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=self._executing_agent_id, session_id=conversation_id)
 
         last_executed_node_id = None
         response_messages = []  # Collect all response node outputs
@@ -2412,13 +2426,13 @@ Return only valid JSON, nothing else:"""
                 else:
                     raw_params = node_data.get("parameters", {}) or node_data.get("params", {})
                     resolved_params = {k: self._resolve_placeholders(v, context, results) for k, v in raw_params.items()}
-                    result = await self._execute_tool(tool_name, resolved_params, company_id=workflow_obj.agent.company_id, session_id=conversation_id)
+                    result = await self._execute_tool(tool_name, resolved_params, company_id=workflow_obj.company_id, session_id=conversation_id)
 
             elif node_type == "http_request":
                 result = await self._execute_http_request_node(node_data, context, results)
 
             elif node_type == "llm":
-                result = await self._execute_llm_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj, conversation_id=conversation_id)
+                result = await self._execute_llm_node(node_data, context, results, company_id=workflow_obj.company_id, workflow=workflow_obj, conversation_id=conversation_id)
 
             elif node_type == "data_manipulation":
                 result = await self._execute_data_manipulation_node(node_data, context, results)
@@ -2427,7 +2441,7 @@ Return only valid JSON, nothing else:"""
                 result = await self._execute_code_node(node_data, context, results)
 
             elif node_type == "knowledge":
-                result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.agent.company_id, workflow=workflow_obj)
+                result = await self._execute_knowledge_retrieval_node(node_data, context, results, company_id=workflow_obj.company_id, workflow=workflow_obj)
 
             elif node_type == "condition":
                 result = self._execute_conditional_node(node_data, context, results)
@@ -2585,8 +2599,8 @@ Return only valid JSON, nothing else:"""
                         agent_message = schemas_chat_message.ChatMessageCreate(message=message_text, message_type="message")
                         db_agent_message = chat_service.create_chat_message(
                             self.db, agent_message,
-                            workflow_obj.agent.id, conversation_id,
-                            workflow_obj.agent.company_id, "agent",
+                            self._executing_agent_id, conversation_id,
+                            workflow_obj.company_id, "agent",
                             assignee_id=None
                         )
                         await ws_manager.broadcast_to_session(
@@ -2597,7 +2611,7 @@ Return only valid JSON, nothing else:"""
 
                         # Get the session to check channel type
                         current_session = conversation_session_service.get_session_by_conversation_id(
-                            self.db, conversation_id, workflow_obj.agent.company_id
+                            self.db, conversation_id, workflow_obj.company_id
                         )
                         session_channel = current_session.channel if current_session else None
 
@@ -2610,7 +2624,7 @@ Return only valid JSON, nothing else:"""
                                 if session_channel == 'whatsapp':
                                     # Get WhatsApp integration for this company
                                     whatsapp_integration = integration_service.get_integration_by_type_and_company(
-                                        self.db, 'whatsapp', workflow_obj.agent.company_id
+                                        self.db, 'whatsapp', workflow_obj.company_id
                                     )
                                     if whatsapp_integration:
                                         # Use contact phone number if available, otherwise use conversation_id (which is the phone number for WhatsApp)
@@ -2627,7 +2641,7 @@ Return only valid JSON, nothing else:"""
                                 elif session_channel == 'telegram':
                                     # Get Telegram integration
                                     telegram_integration = integration_service.get_integration_by_type_and_company(
-                                        self.db, 'telegram', workflow_obj.agent.company_id
+                                        self.db, 'telegram', workflow_obj.company_id
                                     )
                                     if telegram_integration:
                                         await messaging_service.send_telegram_message(
@@ -2645,15 +2659,15 @@ Return only valid JSON, nothing else:"""
                             try:
                                 from app.services import widget_settings_service, credential_service
                                 from app.services.tts_service import TTSService
-                                widget_settings = widget_settings_service.get_widget_settings(self.db, workflow_obj.agent.id)
+                                widget_settings = widget_settings_service.get_widget_settings(self.db, self._executing_agent_id)
                                 if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
-                                    tts_provider = workflow_obj.agent.tts_provider or 'voice_engine'
-                                    voice_id = workflow_obj.agent.voice_id or 'default'
+                                    tts_provider = (self._executing_agent.tts_provider if self._executing_agent else None) or 'voice_engine'
+                                    voice_id = (self._executing_agent.voice_id if self._executing_agent else None) or 'default'
                                     openai_api_key = None
-                                    openai_credential = credential_service.get_credential_by_service_name(self.db, 'openai', workflow_obj.agent.company_id)
+                                    openai_credential = credential_service.get_credential_by_service_name(self.db, 'openai', workflow_obj.company_id)
                                     if openai_credential:
                                         try:
-                                            openai_api_key = credential_service.get_decrypted_credential(self.db, openai_credential.id, workflow_obj.agent.company_id)
+                                            openai_api_key = credential_service.get_decrypted_credential(self.db, openai_credential.id, workflow_obj.company_id)
                                         except Exception:
                                             pass
                                     tts_service = TTSService(openai_api_key=openai_api_key)
@@ -2703,7 +2717,7 @@ Return only valid JSON, nothing else:"""
             elif node_type == "assign_to_agent":
                 # Transfers conversation to human agent
                 result = self._execute_assign_to_agent_node(
-                    node_data, context, results, conversation_id, workflow_obj.agent.company_id
+                    node_data, context, results, conversation_id, workflow_obj.company_id
                 )
 
             elif node_type == "set_status":
@@ -2718,7 +2732,7 @@ Return only valid JSON, nothing else:"""
                 redirect_next_node_id = graph_engine.get_next_node(current_node_id, {"output": "success"})
                 result = await self._execute_channel_redirect_node(
                     node_data, context, results, conversation_id,
-                    workflow_obj.agent.company_id, session.contact_id,
+                    workflow_obj.company_id, session.contact_id,
                     workflow_id=workflow_obj.id,
                     next_node_id=redirect_next_node_id
                 )
@@ -2726,13 +2740,13 @@ Return only valid JSON, nothing else:"""
             elif node_type == "question_classifier":
                 # Classifies question using LLM and routes accordingly
                 result = await self._execute_question_classifier_node(
-                    node_data, context, results, workflow_obj.agent.company_id
+                    node_data, context, results, workflow_obj.company_id
                 )
 
             elif node_type == "extract_entities":
                 # Extracts entities from message using LLM
                 result = await self._execute_extract_entities_node(
-                    node_data, context, results, workflow_obj.agent.company_id, workflow_obj, conversation_id
+                    node_data, context, results, workflow_obj.company_id, workflow_obj, conversation_id
                 )
 
             elif node_type == "subworkflow":
@@ -2777,12 +2791,12 @@ Return only valid JSON, nothing else:"""
                 print(f"DEBUG: 'output_variable' from node data is: '{variable_to_save}'")
                 if variable_to_save:
                     context["variable_to_save"] = variable_to_save
-                    memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                    memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=self._executing_agent_id, session_id=conversation_id)
 
                 # Store expected_input_type for use when resuming (e.g., for geocoding text locations)
                 if "expected_input_type" in result:
                     context["expected_input_type"] = result["expected_input_type"]
-                    memory_service.set_memory(self.db, MemoryCreate(key="expected_input_type", value=result["expected_input_type"]), agent_id=workflow_obj.agent.id, session_id=conversation_id)
+                    memory_service.set_memory(self.db, MemoryCreate(key="expected_input_type", value=result["expected_input_type"]), agent_id=self._executing_agent_id, session_id=conversation_id)
 
                 # Keep session status as 'active' so it remains visible in the UI
                 # The presence of next_step_id indicates the workflow is paused waiting for input
@@ -2934,8 +2948,8 @@ Return only valid JSON, nothing else:"""
             context.pop(marker, None)
             # Also delete from memory service
             try:
-                if workflow_obj.agent:
-                    memory_service.delete_memory(self.db, marker, workflow_obj.agent.id, conversation_id)
+                if self._executing_agent_id:
+                    memory_service.delete_memory(self.db, marker, self._executing_agent_id, conversation_id)
             except:
                 pass  # Marker might not exist in memory
         print(f"DEBUG: Cleaned up extraction markers from context and memory on workflow completion")
@@ -2952,8 +2966,8 @@ Return only valid JSON, nothing else:"""
         print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
         # Clear all memory for this session so next workflow starts fresh
-        if workflow_obj.agent:
-            memory_service.delete_all_memories(self.db, agent_id=workflow_obj.agent.id, session_id=conversation_id)
+        if self._executing_agent_id:
+            memory_service.delete_all_memories(self.db, agent_id=self._executing_agent_id, session_id=conversation_id)
             print(f"DEBUG: Cleared all memory for session {conversation_id}")
 
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}
