@@ -117,6 +117,45 @@ PERMISSIONS = {
     "company:delete": "Delete companies",
 }
 
+# Page-based permissions for controlling access to dashboard sections
+# Each sidebar item has its own permission for granular control
+PAGE_PERMISSIONS = {
+    # Core Operations
+    "page:conversations": "Access to active clients and conversations",
+    "page:agents": "Access to agents list",
+    "page:agent_builder": "Access to agent builder",
+    "page:widget_designer": "Access to widget designer",
+    # Analytics
+    "page:reports": "Access to analytics and reports",
+    # CRM - Individual permissions for each section
+    "page:crm_dashboard": "Access to CRM dashboard",
+    "page:contacts": "Access to contacts management",
+    "page:leads": "Access to leads management",
+    "page:campaigns": "Access to campaigns",
+    "page:tags": "Access to tags management",
+    "page:segments": "Access to segments",
+    "page:crm_templates": "Access to CRM email templates",
+    # Configuration & Resources
+    "page:knowledge_base": "Access to knowledge base",
+    "page:tools": "Access to custom tools",
+    "page:workflows": "Access to workflow builder",
+    "page:voice_lab": "Access to voice lab",
+    # Team & Communication
+    "page:team_management": "Access to team management",
+    "page:team_chat": "Access to team chat",
+    "page:message_templates": "Access to message templates",
+    # AI Features - Individual permissions
+    "page:ai_chat": "Access to AI chat",
+    "page:ai_tools": "Access to AI tools",
+    "page:ai_image_generator": "Access to AI image generator",
+    "page:ai_image_gallery": "Access to AI image gallery",
+    "page:vision_ai": "Access to Vision AI / object detection",
+    # System & Administration
+    "page:settings": "Access to company settings",
+    "page:api_vault": "Access to API vault",
+    "page:billing": "Access to billing management",
+}
+
 def get_role(db: Session, role_id: int, company_id: int = None):
     query = db.query(models_role.Role).filter(models_role.Role.id == role_id)
     if company_id:
@@ -188,14 +227,32 @@ def create_global_permissions_and_super_admin(db: Session):
     This should be run once on application startup.
     Also updates Super Admin with any new permissions.
     """
-    # Create permissions if they don't exist
+    # Old page permissions to remove (replaced by granular permissions)
+    old_page_permissions = [
+        "page:crm", "page:analytics", "page:ai_features", "page:team",
+        "page:knowledge", "page:integrations",
+    ]
+
+    # Remove old page permissions that are no longer used
+    for old_perm_name in old_page_permissions:
+        old_perm = db.query(models_permission.Permission).filter_by(name=old_perm_name).first()
+        if old_perm:
+            # Remove from all roles first
+            old_perm.roles.clear()
+            db.delete(old_perm)
+            print(f"[Startup] Removed old permission: {old_perm_name}")
+    db.commit()
+
+    # Create permissions if they don't exist (both API and page permissions)
+    all_permissions = {**PERMISSIONS, **PAGE_PERMISSIONS}
     new_permissions_added = False
-    for name, desc in PERMISSIONS.items():
+    for name, desc in all_permissions.items():
         db_perm = db.query(models_permission.Permission).filter_by(name=name).first()
         if not db_perm:
             db_perm = models_permission.Permission(name=name, description=desc)
             db.add(db_perm)
             new_permissions_added = True
+            print(f"[Startup] Added new permission: {name}")
     db.commit()
 
     # Create or update Super Admin role
@@ -215,9 +272,15 @@ def create_initial_roles_for_company(db: Session, company_id: int):
     """
     Creates the initial roles for a new company.
     """
+    # Admin gets all API permissions (except company management and client dashboard)
+    # plus all page permissions
+    admin_api_perms = [p for p in PERMISSIONS.keys() if p not in ["client:read_dashboard", "company:create", "company:read", "company:update", "company:delete"]]
+    admin_page_perms = list(PAGE_PERMISSIONS.keys())
+
     roles_to_permissions = {
-        "Admin": [p for p in PERMISSIONS.keys() if p not in ["client:read_dashboard", "company:create", "company:read", "company:update", "company:delete"]],
+        "Admin": admin_api_perms + admin_page_perms,
         "Agent Builder": [
+            # API permissions
             "agent:create", "agent:read", "agent:update", "agent:delete",
             "workflow:create", "workflow:read", "workflow:update", "workflow:delete",
             "tool:read", "knowledgebase:read", "analytics:read",
@@ -236,8 +299,16 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             "email_template:read",
             # Message Templates
             "message_template:read", "message_template:create",
+            # Page permissions
+            "page:conversations", "page:agents", "page:agent_builder",
+            "page:workflows", "page:tools", "page:knowledge_base",
+            "page:voice_lab", "page:team_management", "page:team_chat",
+            "page:message_templates", "page:ai_chat", "page:ai_tools",
+            "page:ai_image_generator", "page:ai_image_gallery",
+            "page:contacts", "page:leads",
         ],
         "Analyst": [
+            # API permissions
             "agent:read", "workflow:read", "analytics:read",
             "conversation:read",
             # CRM read-only permissions
@@ -248,9 +319,14 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             "segment:read",
             "email_template:read",
             "message_template:read",
+            # Page permissions
+            "page:conversations", "page:reports",
+            "page:crm_dashboard", "page:contacts", "page:leads",
+            "page:campaigns", "page:tags", "page:segments", "page:crm_templates",
         ],
         "Client": [
             "client:read_dashboard", "agent:read"
+            # No page permissions - uses client:read_dashboard for access
         ]
     }
 

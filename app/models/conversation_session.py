@@ -39,11 +39,20 @@ class ConversationSession(Base):
     summary = Column(Text, nullable=True)  # AI-generated summary of the conversation
     summary_generated_at = Column(DateTime, nullable=True)  # When summary was last generated
 
+    # Agent-to-agent transfer tracking
+    original_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # First AI agent in conversation
+    previous_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # Agent before current transfer
+    agent_transition_history = Column(JSON, nullable=True, default=[])  # History of agent transfers/consultations
+    # Format: [{"from_agent_id": 1, "to_agent_id": 2, "type": "transfer"|"consult", "topic": "...", "timestamp": "..."}]
+    handoff_summary = Column(Text, nullable=True)  # Summary passed during agent-to-agent handoff
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     company = relationship("Company")
-    agent = relationship("Agent")
+    agent = relationship("Agent", foreign_keys=[agent_id])  # Current agent handling the conversation
+    original_agent = relationship("Agent", foreign_keys=[original_agent_id])  # First agent in conversation
+    previous_agent = relationship("Agent", foreign_keys=[previous_agent_id])  # Agent before current transfer
     workflow = relationship("Workflow")
     contact = relationship("Contact", back_populates="sessions")
     messages = relationship("ChatMessage", back_populates="session")

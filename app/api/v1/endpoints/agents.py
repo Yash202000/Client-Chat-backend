@@ -15,7 +15,7 @@ router = APIRouter()
 
 @router.get("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
 def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):
-    return widget_settings_service.get_widget_settings(db, agent_id=agent_id)
+    return widget_settings_service.get_widget_settings(db, agent_id=agent_id, create_if_missing=True)
 
 @router.put("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
 def update_widget_settings(agent_id: int, widget_settings: schemas_widget_settings.WidgetSettingsUpdate, db: Session = Depends(get_db)):

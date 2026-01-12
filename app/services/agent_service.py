@@ -35,13 +35,29 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
         company_id=company_id,
         version_number=1, # Initial version
         status="active", # New agents are active by default
-        is_active=True
+        is_active=True,
+        # Agent-to-agent handoff configuration
+        specialization_topics=agent.specialization_topics or [],
+        handoff_config=agent.handoff_config or {}
     )
     db.add(db_agent)
     db.commit()
     db.refresh(db_agent)
 
-    # Handle tool_ids for initial creation
+    # Auto-add default contact tools for new agents
+    default_builtin_tools = ["get_contact_info", "create_or_update_contact"]
+    for tool_name in default_builtin_tools:
+        tool = db.query(models_tool.Tool).filter(
+            models_tool.Tool.name == tool_name,
+            models_tool.Tool.tool_type == "builtin",
+            models_tool.Tool.company_id.is_(None)
+        ).first()
+        if tool and tool not in db_agent.tools:
+            db_agent.tools.append(tool)
+    db.commit()
+    db.refresh(db_agent)
+
+    # Handle additional tool_ids for initial creation
     if agent.tool_ids:
         for tool_id in agent.tool_ids:
             tool = db.query(models_tool.Tool).filter(
@@ -51,7 +67,7 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
                     models_tool.Tool.company_id.is_(None)  # Include global builtin tools
                 )
             ).first()
-            if tool:
+            if tool and tool not in db_agent.tools:
                 db_agent.tools.append(tool)
         db.commit()
         db.refresh(db_agent)
