@@ -9,11 +9,15 @@ from app.schemas import integration as schemas_integration
 from app.services import integration_service
 from app.services.whatsapp_token_service import whatsapp_token_service, WhatsAppTokenError
 from app.services.whatsapp_token_refresh_service import get_token_status_for_integration
+from app.services.telegram_webhook_service import TelegramWebhookService
 
 router = APIRouter()
 
+# Telegram webhook service instance
+telegram_webhook_service = TelegramWebhookService()
+
 @router.post("/", response_model=schemas_integration.Integration)
-def create_integration(
+async def create_integration(
     integration: schemas_integration.IntegrationCreate,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
@@ -22,7 +26,21 @@ def create_integration(
     Create a new integration for the current user's company.
     """
     # TODO: Add permission check to ensure user is a company admin
-    return integration_service.create_integration(db=db, integration=integration, company_id=current_user.company_id)
+    db_integration = integration_service.create_integration(db=db, integration=integration, company_id=current_user.company_id)
+    
+    # For Telegram integrations, register the webhook
+    if integration.type == "telegram":
+        bot_token = integration.credentials.get("bot_token")
+        if bot_token:
+            try:
+                await telegram_webhook_service.register_webhook(
+                    bot_token=bot_token,
+                    integration_id=db_integration.id
+                )
+            except Exception as e:
+                pass
+    
+    return db_integration
 
 @router.get("/", response_model=List[schemas_integration.Integration])
 def read_integrations(
@@ -246,3 +264,53 @@ async def refresh_whatsapp_token(
 
     except WhatsAppTokenError as e:
         raise HTTPException(status_code=400, detail=f"Token refresh failed: {str(e)}")
+
+
+# Telegram Webhook Endpoints
+
+@router.delete("/{integration_id}/telegram/webhook")
+async def delete_telegram_webhook(
+    integration_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    db_integration = integration_service.get_integration(
+        db, integration_id=integration_id, company_id=current_user.company_id
+    )
+    if not db_integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    if db_integration.type != "telegram":
+        raise HTTPException(status_code=400, detail="This endpoint is only for Telegram integrations")
+
+    credentials = integration_service.get_decrypted_credentials(db_integration)
+    bot_token = credentials.get("bot_token")
+    if not bot_token:
+        raise HTTPException(status_code=400, detail="bot_token not found in integration credentials")
+
+    result = await telegram_webhook_service.delete_webhook(bot_token=bot_token)
+    return {"status": "success", "telegram_response": result}
+
+
+@router.get("/{integration_id}/telegram/webhook/info")
+async def get_telegram_webhook_info(
+    integration_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    db_integration = integration_service.get_integration(
+        db, integration_id=integration_id, company_id=current_user.company_id
+    )
+    if not db_integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    if db_integration.type != "telegram":
+        raise HTTPException(status_code=400, detail="This endpoint is only for Telegram integrations")
+
+    credentials = integration_service.get_decrypted_credentials(db_integration)
+    bot_token = credentials.get("bot_token")
+    if not bot_token:
+        raise HTTPException(status_code=400, detail="bot_token not found in integration credentials")
+
+    result = await telegram_webhook_service.get_webhook_info(bot_token=bot_token)
+    return result

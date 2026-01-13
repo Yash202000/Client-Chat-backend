@@ -15,6 +15,11 @@ def get_integration(db: Session, integration_id: int, company_id: int) -> models
         models_integration.Integration.company_id == company_id
     ).first()
 
+def get_integration_by_id(db: Session, integration_id: int) -> models_integration.Integration:
+    return db.query(models_integration.Integration).filter(
+        models_integration.Integration.id == integration_id
+    ).first()
+
 def get_integrations_by_company(db: Session, company_id: int) -> List[models_integration.Integration]:
     """
     Retrieves all integrations for a given company.
