@@ -128,7 +128,8 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
                     if execution_result.get("status") == "completed":
                         response_text = execution_result.get("response", "Workflow completed.")
                         agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+                        workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
 
                         await messaging_service.send_telegram_message(
                             chat_id=chat_id,
@@ -163,7 +164,9 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
 
                     return Response(status_code=200)
 
-            # Try trigger-based workflow finding first (new system)
+            # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
+
+            # 1. Try trigger-based workflow finding first
             workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                 db=db,
                 channel=TriggerChannel.TELEGRAM,
@@ -172,12 +175,9 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
                 session_data={"session_id": session.conversation_id}
             )
 
-            # Fallback to old similarity search if no trigger-based workflow found
             if not workflow:
-                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
-
-            if not workflow:
-                logging.info(f"No matching workflow found for message: '{message_text}'. Using default agent response.")
+                # 2. No trigger match - try LLM-based routing (2nd priority)
+                logging.info(f"[Telegram] No trigger match, trying LLM-based routing")
                 agents = agent_service.get_agents(db, company_id=company_id, limit=1)
                 if not agents:
                     logging.error(f"Error: No agents found for company {company_id} to handle the response.")
@@ -188,7 +188,7 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
                     db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
                 )
 
-                # Check if LLM decided to trigger a workflow
+                # Check if LLM decided to trigger a workflow (context-aware routing)
                 if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                     workflow_id = agent_response.get("workflow_id")
                     logging.info(f"[Telegram] LLM triggered workflow {workflow_id}")
@@ -207,36 +207,42 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
                         message_text=error_msg,
                         integration=integration
                     )
-                    # TODO: Trigger actual handoff to human agent here
                     return Response(status_code=200)
                 else:
-                    # Regular text response from LLM
-                    agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+                    # 3. LLM returned text - try similarity search as last fallback
+                    logging.info(f"[Telegram] LLM returned text, trying similarity search as fallback")
+                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text, agent_id=session.agent_id)
 
-                    if not agent_response_text:
-                        logging.info(f"Agent did not generate a response for session {session.conversation_id}.")
+                    if not workflow:
+                        # No workflow found anywhere - use LLM's text response
+                        agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+
+                        if not agent_response_text:
+                            logging.info(f"Agent did not generate a response for session {session.conversation_id}.")
+                            return Response(status_code=200)
+
+                        agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
+
+                        await messaging_service.send_telegram_message(
+                            chat_id=chat_id,
+                            message_text=agent_response_text,
+                            integration=integration
+                        )
+
+                        await session_ws_manager.broadcast_to_session(
+                            session.conversation_id,
+                            schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                            "agent"
+                        )
                         return Response(status_code=200)
 
-                    agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
-                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
-
-                    await messaging_service.send_telegram_message(
-                        chat_id=chat_id,
-                        message_text=agent_response_text,
-                        integration=integration
-                    )
-
-                    await session_ws_manager.broadcast_to_session(
-                        session.conversation_id,
-                        schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
-                        "agent"
-                    )
-                    return Response(status_code=200)
-
             # --- Workflow Execution ---
+            # Get agent_id from workflow's agents (many-to-many) or use session's agent_id
+            workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
             # Update session with workflow's agent_id (needed for handoff team lookup)
-            if workflow.agent_id and session.agent_id != workflow.agent_id:
-                session.agent_id = workflow.agent_id
+            if workflow_agent_id and session.agent_id != workflow_agent_id:
+                session.agent_id = workflow_agent_id
                 db.commit()
                 db.refresh(session)
 
@@ -244,13 +250,14 @@ async def receive_message(token: str, request: Request, db: Session = Depends(ge
             execution_result = await workflow_exec_service.execute_workflow(
                 workflow_id=workflow.id,
                 user_message=message_text,
-                conversation_id=session.conversation_id
+                conversation_id=session.conversation_id,
+                agent_id=workflow_agent_id
             )
 
             if execution_result.get("status") == "completed":
                 response_text = execution_result.get("response", "Workflow completed.")
                 agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
-                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
                 
                 await messaging_service.send_telegram_message(
                     chat_id=chat_id,

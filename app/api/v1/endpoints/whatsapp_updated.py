@@ -185,9 +185,10 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                                     # Save agent message
                                     agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                                    workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
                                     db_agent_message = chat_service.create_chat_message(
                                         db, agent_message_schema,
-                                        workflow.agent_id,
+                                        workflow_agent_id,
                                         session.conversation_id,
                                         company_id,
                                         "agent"
@@ -247,24 +248,63 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         print(f"ℹ Intent '{intent.name}' has no workflow or auto-trigger disabled")
 
                 # STEP 3: Fallback - No intent matched or workflow failed/not configured
-                print(f"Falling back to find_similar_workflow or default agent response...")
+                # Priority: 2) LLM decision, 3) Similarity search
+                print(f"No intent matched. Trying LLM-based routing...")
 
-                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
+                agents = agent_service.get_agents(db, company_id=company_id, limit=1)
+                if not agents:
+                    print(f"✗ No agents found for company {company_id}")
+                    return Response(status_code=200)
+
+                agent = agents[0]
+                workflow = None
+
+                # 2. Try LLM-based routing
+                agent_response = await agent_execution_service.generate_agent_response(
+                    db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
+                )
+
+                # Check if LLM decided to trigger a workflow (context-aware routing)
+                if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                    workflow_id = agent_response.get("workflow_id")
+                    print(f"✓ LLM triggered workflow {workflow_id}")
+                    workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                    if not workflow:
+                        print(f"✗ Workflow {workflow_id} not found")
+                        return Response(status_code=200)
+                elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                    # LLM routing failed - notify user and initiate handoff
+                    reason = agent_response.get("reason", "AI routing unavailable")
+                    print(f"✗ LLM failed, initiating handoff: {reason}")
+                    error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                    await messaging_service.send_whatsapp_message(
+                        recipient_phone_number=sender_phone,
+                        message_text=error_msg,
+                        integration=integration
+                    )
+                    return Response(status_code=200)
+                else:
+                    # 3. LLM returned text - try similarity search as last fallback
+                    print(f"LLM returned text, trying similarity search as fallback...")
+                    workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text, agent_id=session.agent_id)
 
                 if workflow:
-                    print(f"✓ Found similar workflow: {workflow.name}")
-                    # Execute workflow (existing logic)
+                    print(f"✓ Found workflow: {workflow.name}")
+                    # Get agent_id from workflow's agents (many-to-many) or use session's agent_id
+                    workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
+                    # Execute workflow
                     workflow_exec_service = WorkflowExecutionService(db)
                     execution_result = await workflow_exec_service.execute_workflow(
                         workflow_id=workflow.id,
                         user_message=message_text,
-                        conversation_id=session.conversation_id
+                        conversation_id=session.conversation_id,
+                        agent_id=workflow_agent_id
                     )
 
                     if execution_result.get("status") == "completed":
                         response_text = execution_result.get("response", "Workflow completed.")
                         agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
 
                         await messaging_service.send_whatsapp_message(
                             recipient_phone_number=sender_phone,
@@ -293,18 +333,9 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     print(f"Processed message from {sender_phone} for company {company_id} with workflow '{workflow.name}'")
                     return Response(status_code=200)
 
-                # FINAL FALLBACK: Use default agent LLM response
-                print(f"✓ Using default agent response")
-                agents = agent_service.get_agents(db, company_id=company_id, limit=1)
-                if not agents:
-                    print(f"✗ No agents found for company {company_id}")
-                    return Response(status_code=200)
-
-                agent = agents[0]
-
-                agent_response_text = await agent_execution_service.generate_agent_response(
-                    db, agent.id, session.conversation_id, company_id, message_text
-                )
+                # FINAL FALLBACK: Use LLM's text response (no workflow found)
+                print(f"✓ Using LLM text response (no workflow matched)")
+                agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
 
                 agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
                 db_agent_message = chat_service.create_chat_message(

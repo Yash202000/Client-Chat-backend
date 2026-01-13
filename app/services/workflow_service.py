@@ -7,7 +7,7 @@ from app.services import vectorization_service, workflow_trigger_service
 
 def get_workflow(db: Session, workflow_id: int, company_id: int):
     return db.query(models_workflow.Workflow).options(
-        joinedload(models_workflow.Workflow.agent),
+        joinedload(models_workflow.Workflow.agents),
         joinedload(models_workflow.Workflow.versions)
     ).filter(
         models_workflow.Workflow.id == workflow_id,
@@ -16,12 +16,26 @@ def get_workflow(db: Session, workflow_id: int, company_id: int):
 
 def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_workflow.Workflow).options(
-        joinedload(models_workflow.Workflow.agent),
+        joinedload(models_workflow.Workflow.agents),
         joinedload(models_workflow.Workflow.versions)
     ).filter(
         models_workflow.Workflow.company_id == company_id,
         models_workflow.Workflow.parent_workflow_id == None
     ).offset(skip).limit(limit).all()
+
+
+def get_workflows_for_agent(db: Session, agent_id: int, company_id: int):
+    """Get workflows assigned to a specific agent via many-to-many relationship."""
+    from app.models.workflow import agent_workflows
+    return db.query(models_workflow.Workflow).join(
+        agent_workflows
+    ).filter(
+        agent_workflows.c.agent_id == agent_id,
+        models_workflow.Workflow.company_id == company_id,
+        models_workflow.Workflow.is_active == True,
+        models_workflow.Workflow.parent_workflow_id == None
+    ).all()
+
 
 def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, company_id: int):
     workflow_data = workflow.model_dump(exclude_unset=True)
@@ -40,12 +54,25 @@ def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, comp
     if not workflow_data.get('description') and visual_steps_data:
         workflow_data['description'] = generate_workflow_description(visual_steps_data)
 
+    # Extract agent_ids for many-to-many relationship
+    agent_ids = workflow_data.pop('agent_ids', [])
+
     workflow_data['version'] = 1
     workflow_data['is_active'] = True
     workflow_data['company_id'] = company_id
 
     db_workflow = models_workflow.Workflow(**workflow_data)
     db.add(db_workflow)
+    db.flush()  # Get the ID before adding agents
+
+    # Add agents via many-to-many relationship
+    if agent_ids:
+        agents = db.query(models_agent.Agent).filter(
+            models_agent.Agent.id.in_(agent_ids),
+            models_agent.Agent.company_id == company_id
+        ).all()
+        db_workflow.agents = agents
+
     db.commit()
     db.refresh(db_workflow)
 
@@ -75,7 +102,6 @@ def create_new_version(db: Session, parent_workflow_id: int, company_id: int):
     new_version = models_workflow.Workflow(
         name=parent_workflow.name,
         description=parent_workflow.description,
-        agent_id=parent_workflow.agent_id,
         steps=parent_workflow.steps,
         visual_steps=parent_workflow.visual_steps,
         version=new_version_number,
@@ -85,6 +111,12 @@ def create_new_version(db: Session, parent_workflow_id: int, company_id: int):
     )
 
     db.add(new_version)
+    db.flush()
+
+    # Copy agents from parent workflow
+    if parent_workflow.agents:
+        new_version.agents = parent_workflow.agents.copy()
+
     db.commit()
     db.refresh(new_version)
     return new_version
@@ -130,6 +162,9 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
         visual_steps_updated = False
         visual_steps_data = None
 
+        # Handle agent_ids separately for many-to-many
+        agent_ids = update_data.pop('agent_ids', None)
+
         for key, value in update_data.items():
             if key in ['steps', 'visual_steps'] and isinstance(value, dict):
                 setattr(db_workflow, key, json.dumps(value))
@@ -141,6 +176,14 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
                 # Flag JSONB columns as modified so SQLAlchemy detects the change
                 if key == 'intent_config':
                     flag_modified(db_workflow, 'intent_config')
+
+        # Update agents via many-to-many relationship
+        if agent_ids is not None:
+            agents = db.query(models_agent.Agent).filter(
+                models_agent.Agent.id.in_(agent_ids),
+                models_agent.Agent.company_id == company_id
+            ).all() if agent_ids else []
+            db_workflow.agents = agents
 
         # Auto-generate description if empty and visual_steps were updated
         if visual_steps_updated and visual_steps_data and not db_workflow.description:
@@ -398,7 +441,7 @@ def import_workflow(db: Session, import_data: dict, agent_id: int, company_id: i
     new_workflow = schemas_workflow.WorkflowCreate(
         name=f"{workflow_data.get('name', 'Imported Workflow')} (Imported)",
         description=workflow_data.get("description"),
-        agent_id=agent_id,
+        agent_ids=[agent_id],  # Many-to-many: assign to the specified agent
         trigger_phrases=workflow_data.get("trigger_phrases", []),
         visual_steps=workflow_data.get("visual_steps"),
         intent_config=workflow_data.get("intent_config")
@@ -407,22 +450,43 @@ def import_workflow(db: Session, import_data: dict, agent_id: int, company_id: i
     created_workflow = create_workflow(db=db, workflow=new_workflow, company_id=company_id)
     return {"workflow": created_workflow}
 
-def find_similar_workflow(db: Session, company_id: int, query: str):
+def find_similar_workflow(db: Session, company_id: int, query: str, agent_id: int = None):
     """
-    Finds the most similar ACTIVE workflow.
+    Finds the most similar ACTIVE workflow assigned to the specified agent.
     First, it checks for an exact match in the trigger_phrases.
     If no exact match is found, it falls back to a semantic similarity search.
-    """
-    active_workflows = db.query(models_workflow.Workflow).options(
-        joinedload(models_workflow.Workflow.agent)
-    ).join(models_agent.Agent).filter(
-        models_agent.Agent.company_id == company_id,
-        models_workflow.Workflow.is_active == True
-    ).all()
 
-    if not active_workflows:
-        print("DEBUG: No active workflows found for company_id:", company_id)
+    Args:
+        agent_id: If provided, only returns workflows assigned to this agent.
+                  If None, returns workflows that have at least one agent assigned.
+    """
+    from app.models.workflow import agent_workflows
+    from sqlalchemy import distinct
+
+    # Build query to get workflow IDs that have agent assignments
+    # Use distinct on workflow ID to avoid duplicates from many-to-many join
+    id_query = db.query(distinct(models_workflow.Workflow.id)).join(
+        agent_workflows
+    ).filter(
+        models_workflow.Workflow.company_id == company_id,
+        models_workflow.Workflow.is_active == True,
+        models_workflow.Workflow.parent_workflow_id == None  # Only root workflows
+    )
+
+    # If agent_id is specified, filter to workflows assigned to that agent
+    if agent_id:
+        id_query = id_query.filter(agent_workflows.c.agent_id == agent_id)
+
+    workflow_ids = [row[0] for row in id_query.all()]
+
+    if not workflow_ids:
+        print(f"DEBUG: No active workflows found for company_id: {company_id}, agent_id: {agent_id}")
         return None
+
+    # Fetch full workflow objects
+    active_workflows = db.query(models_workflow.Workflow).filter(
+        models_workflow.Workflow.id.in_(workflow_ids)
+    ).all()
 
     # 1. Check for an exact match in trigger phrases (case-insensitive)
     for workflow in active_workflows:
@@ -449,8 +513,8 @@ def find_similar_workflow(db: Session, company_id: int, query: str):
             highest_similarity = similarity
             best_match = workflow
             
-    # Adjust the threshold as needed
-    SIMILARITY_THRESHOLD = 0.2 
+    # Adjust the threshold as needed (0.75 = high confidence matches only)
+    SIMILARITY_THRESHOLD = 0.75
     if highest_similarity > SIMILARITY_THRESHOLD:
         print(f"DEBUG: Best match found: '{best_match.name}' (Version: {best_match.version}) with similarity: {highest_similarity}")
         return get_workflow(db, best_match.id, company_id)

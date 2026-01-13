@@ -200,7 +200,7 @@ def create_workflow_from_template(
         "id": workflow.id,
         "name": workflow.name,
         "description": workflow.description,
-        "agent_id": workflow.agent_id,
+        "agent_ids": [agent.id for agent in workflow.agents] if workflow.agents else [],
         "message": "Workflow created from template. Please assign an agent in the workflow builder."
     }
 

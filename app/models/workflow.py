@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, Text, JSON, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, JSON, ForeignKey, Boolean, Table
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.database import Base
+
+# Junction table for many-to-many relationship between agents and workflows
+agent_workflows = Table(
+    'agent_workflows',
+    Base.metadata,
+    Column('agent_id', Integer, ForeignKey('agents.id', ondelete='CASCADE'), primary_key=True),
+    Column('workflow_id', Integer, ForeignKey('workflows.id', ondelete='CASCADE'), primary_key=True)
+)
+
 
 class Workflow(Base):
     __tablename__ = "workflows"
@@ -9,7 +18,7 @@ class Workflow(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     description = Column(String, nullable=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # Nullable for template-created workflows
+    # agent_id removed - now using many-to-many via agent_workflows table
     steps = Column(JSON, nullable=False)
     visual_steps = Column(JSON, nullable=True)
     trigger_phrases = Column(JSON, nullable=True)
@@ -49,7 +58,7 @@ class Workflow(Base):
     parent_workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=True)
     
     # Relationships
-    agent = relationship("Agent", back_populates="workflows")
+    agents = relationship("Agent", secondary=agent_workflows, back_populates="workflows")
     parent_workflow = relationship("Workflow", remote_side=[id], back_populates="versions")
     versions = relationship("Workflow", back_populates="parent_workflow")
     triggers = relationship("WorkflowTrigger", back_populates="workflow", cascade="all, delete-orphan")

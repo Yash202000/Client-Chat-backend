@@ -288,14 +288,11 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
             except Exception as e:
                 print(f"Error fetching tools from MCP server {tool.mcp_server_url}: {e}")
 
-    # Add workflows as callable functions (LLM-driven routing)
+    # Add workflows as callable functions (only workflows assigned to this agent)
     if db and company_id:
         try:
-            active_workflows = workflow_service.get_workflows(db, company_id)
+            active_workflows = workflow_service.get_workflows_for_agent(db, agent.id, company_id)
             for workflow in active_workflows:
-                if not workflow.is_active:
-                    continue
-
                 # Build description with trigger hints
                 description = workflow.description or f"Start the {workflow.name} process"
                 if workflow.trigger_phrases:

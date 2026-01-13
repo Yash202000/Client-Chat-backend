@@ -329,11 +329,12 @@ async def reset_session_workflow(db: Session, session: ConversationSession, comp
         return False  # Nothing to reset
 
     # Get agent_id before clearing workflow (needed to clear memories)
-    agent_id = None
-    if session.workflow_id:
+    # Prefer session.agent_id (the agent handling the conversation), fallback to workflow's first agent
+    agent_id = session.agent_id
+    if not agent_id and session.workflow_id:
         workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
-        if workflow:
-            agent_id = workflow.agent_id
+        if workflow and workflow.agents:
+            agent_id = workflow.agents[0].id
 
     # Clear session workflow state
     session.workflow_id = None

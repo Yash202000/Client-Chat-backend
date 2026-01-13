@@ -14,6 +14,7 @@ def run(params: dict, config: dict):
     try:
         db = config.get("db")
         company_id = config.get("company_id")
+        agent_id = config.get("agent_id")  # Optional: filter to workflows assigned to this agent
         user_query = params.get("user_query")
         inputs = params.get("inputs", {})
 
@@ -23,9 +24,9 @@ def run(params: dict, config: dict):
 
         debug_info["step"] = "Finding similar workflow"
         debug_info["user_query"] = user_query
-        
-        # Find the most similar workflow based on the user's query
-        workflow = workflow_service.find_similar_workflow(db, company_id, user_query)
+
+        # Find the most similar workflow based on the user's query (filtered by agent if provided)
+        workflow = workflow_service.find_similar_workflow(db, company_id, user_query, agent_id=agent_id)
         
         print(workflow)
         debug_info["found_workflow"] = workflow.name if workflow else "None"

@@ -738,7 +738,11 @@ async def websocket_endpoint(
 
                     execution_result = None
                     try:
-                        # Try trigger-based workflow finding first (new system)
+                        # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
+                        workflow = None
+                        execution_result = None
+
+                        # 1. Try trigger-based workflow finding first
                         print(f"[websocket_conversations] Calling trigger service for company_id={company_id}, channel=WEBSOCKET")
                         try:
                             workflow = await workflow_trigger_service.find_workflow_for_channel_message(
@@ -755,17 +759,20 @@ async def websocket_endpoint(
                             traceback.print_exc()
                             workflow = None
 
-                        # Fallback to old similarity search if no trigger-based workflow found
-                        if not workflow:
-                            workflow = workflow_service.find_similar_workflow(
-                                db,
+                        # If trigger found workflow, execute it
+                        if workflow:
+                            print(f"[websocket_conversations] 🚀 Executing trigger-matched workflow with {len(attachments)} attachment(s)")
+                            execution_result = await workflow_exec_service.execute_workflow(
+                                user_message=user_message,
+                                conversation_id=session_id,
                                 company_id=company_id,
-                                query=user_message
+                                workflow=workflow,
+                                attachments=attachments,
+                                option_key=option_key
                             )
-
-                        if not workflow:
-                            # If no specific workflow matches, provide a generic response
-                            print(f"[websocket_conversations] No specific workflow found for message: '{user_message}'")
+                        else:
+                            # 2. No trigger match - try LLM-based routing (2nd priority)
+                            print(f"[websocket_conversations] No trigger match, trying LLM-based routing")
 
                             # Check if streaming is enabled
                             should_stream = settings.LLM_STREAMING_ENABLED
@@ -774,6 +781,8 @@ async def websocket_endpoint(
 
                             if should_stream:
                                 # STREAMING MODE: Stream tokens as they arrive
+                                # Note: In streaming mode, we can't easily check for workflow triggers mid-stream
+                                # So we stream first, then check similarity as fallback
                                 print(f"[websocket_conversations] Using streaming mode for session: {session_id}")
                                 full_response = ""
                                 async for token_json in agent_execution_service.generate_agent_response_stream(
@@ -797,14 +806,15 @@ async def websocket_endpoint(
                                     agent_message = schemas_chat_message.ChatMessageCreate(message=full_response, message_type="message")
                                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                                     print(f"[websocket_conversations] Saved streamed response to database for session: {session_id}")
+                                continue
                             else:
-                                # NON-STREAMING MODE: Original behavior
+                                # NON-STREAMING MODE: Can check LLM response for workflow trigger
                                 print(f"[websocket_conversations] Using non-streaming mode for session: {session_id}")
                                 agent_response = await agent_execution_service.generate_agent_response(
                                     db, agent_id, session_id, session_id, company_id, message_data['message']
                                 )
 
-                                # Check if LLM decided to trigger a workflow
+                                # Check if LLM decided to trigger a workflow (context-aware routing)
                                 if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                                     workflow_id = agent_response.get("workflow_id")
                                     print(f"[websocket_conversations] LLM triggered workflow {workflow_id}")
@@ -818,7 +828,7 @@ async def websocket_endpoint(
                                             attachments=attachments,
                                             option_key=option_key
                                         )
-                                        # Don't continue - let the workflow result handling below process it
+                                        # execution_result will be handled below
                                     else:
                                         print(f"[websocket_conversations] Workflow {workflow_id} not found")
                                         continue
@@ -830,29 +840,33 @@ async def websocket_endpoint(
                                     agent_message = schemas_chat_message.ChatMessageCreate(message=error_msg, message_type="message")
                                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                                     await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                                    # TODO: Trigger actual handoff to human agent here
                                     continue
                                 else:
-                                    # Regular text response from LLM
-                                    agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
-                                    agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
-                                    db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
-                                    await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                                    print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
-                                    continue
+                                    # LLM returned normal text - try similarity search as 3rd fallback
+                                    print(f"[websocket_conversations] LLM returned text, trying similarity search as fallback")
+                                    similar_workflow = workflow_service.find_similar_workflow(
+                                        db, company_id=company_id, query=user_message, agent_id=agent_id
+                                    )
 
-                            continue
-
-                        # 3. Execute the matched workflow with the current state (conversation_id)
-                        print(f"[websocket_conversations] 🚀 Executing workflow with {len(attachments)} attachment(s), option_key={option_key}")
-                        execution_result = await workflow_exec_service.execute_workflow(
-                            user_message=user_message,
-                            conversation_id=session_id,
-                            company_id=company_id,
-                            workflow=workflow,
-                            attachments=attachments,
-                            option_key=option_key
-                        )
+                                    if similar_workflow:
+                                        print(f"[websocket_conversations] 🚀 Found similar workflow '{similar_workflow.name}'")
+                                        execution_result = await workflow_exec_service.execute_workflow(
+                                            user_message=user_message,
+                                            conversation_id=session_id,
+                                            company_id=company_id,
+                                            workflow=similar_workflow,
+                                            attachments=attachments,
+                                            option_key=option_key
+                                        )
+                                        # execution_result will be handled below
+                                    else:
+                                        # No workflow found anywhere - use LLM's text response
+                                        agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+                                        agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
+                                        db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
+                                        await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
+                                        print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
+                                        continue
                     finally:
                         # Turn off typing indicator after workflow/AI processing completes
                         if typing_indicator_sent:
@@ -1203,9 +1217,10 @@ async def public_websocket_endpoint(
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
+                            # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
                             print(f"[websocket_conversations] Looking for workflow - company_id={company_id}")
 
-                            # Try trigger-based workflow finding first (new system)
+                            # 1. Try trigger-based workflow finding first
                             try:
                                 workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                                     db=db,
@@ -1221,22 +1236,17 @@ async def public_websocket_endpoint(
                                 traceback.print_exc()
                                 workflow = None
 
-                            # Fallback to old similarity search if no trigger-based workflow found
-                            if not workflow:
-                                print(f"[websocket_conversations] Falling back to similarity search")
-                                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage)
-
                             if workflow:
-                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting new workflow with {len(attachments)} attachment(s), option_key={option_key}")
+                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting workflow from trigger with {len(attachments)} attachment(s)")
                                 execution_result = await workflow_exec_service.execute_workflow(
                                     user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
 
-                        # If no workflow was found or resumed, fallback to the default agent response
+                        # If no trigger-based workflow, try LLM-based routing (2nd priority)
                         if not execution_result:
                             agent_response = await agent_execution_service.generate_agent_response(db, agent_id, session.id, session_id, company_id, message_for_storage)
                             if agent_response:
-                                # Check if LLM decided to trigger a workflow
+                                # Check if LLM decided to trigger a workflow (context-aware routing)
                                 if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                                     workflow_id = agent_response.get("workflow_id")
                                     print(f"[websocket_conversations] PUBLIC: LLM triggered workflow {workflow_id}")
@@ -1250,7 +1260,6 @@ async def public_websocket_endpoint(
                                             attachments=attachments,
                                             option_key=option_key
                                         )
-                                        # execution_result will be handled below
                                     else:
                                         print(f"[websocket_conversations] Workflow {workflow_id} not found")
 
@@ -1270,8 +1279,18 @@ async def public_websocket_endpoint(
                                     agent_response_text = agent_response
                                     call_initiated = False
 
-                                # Only save/broadcast if we have a text response (not a workflow trigger)
-                                if not (isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger"):
+                                # 3. Last fallback: similarity search (only if LLM didn't trigger workflow)
+                                if not execution_result and not (isinstance(agent_response, dict) and agent_response.get("type") in ["workflow_trigger", "handoff"]):
+                                    print(f"[websocket_conversations] PUBLIC: Trying similarity search as last fallback")
+                                    similar_workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage, agent_id=agent_id)
+                                    if similar_workflow:
+                                        print(f"[websocket_conversations] 🚀 PUBLIC: Found similar workflow '{similar_workflow.name}'")
+                                        execution_result = await workflow_exec_service.execute_workflow(
+                                            user_message=message_for_storage, company_id=company_id, workflow=similar_workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
+                                        )
+
+                                # Only save/broadcast LLM response if no workflow was executed
+                                if not execution_result and not (isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger"):
                                     agent_message = schemas_chat_message.ChatMessageCreate(message=str(agent_response_text), message_type="message")
                                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
 
