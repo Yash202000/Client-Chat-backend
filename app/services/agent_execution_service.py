@@ -14,7 +14,7 @@ import chromadb
 from app.llm_providers import gemini_provider, nvidia_provider, nvidia_api_provider, groq_provider, openai_provider
 from app.services.faiss_vector_database import VectorDatabase
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
-from app.core.object_storage import s3_client, chroma_client
+from app.core.object_storage import s3_client, get_company_chroma_client
 from app.services.prompt_guard_service import scan_user_message, get_safe_system_prompt, prompt_guard
 from app.services import security_log_service
 from app.services import token_usage_service
@@ -78,11 +78,12 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
         try:
             print(kb.type, kb.provider, kb.connection_details, kb.chroma_collection_name, kb.faiss_index_id)
             if kb.type == "local" and kb.chroma_collection_name:
-                # Query the local ChromaDB collection managed by our pipeline
-                collections = chroma_client.list_collections() # Debug line to ensure connection
+                # Query the local ChromaDB collection using company-specific client (multi-tenant isolation)
+                company_chroma_client = get_company_chroma_client(agent.company_id)
+                collections = company_chroma_client.list_collections() # Debug line to ensure connection
                 print(f"Available collections: {[col.name for col in collections]}")
-                print(chroma_client.count_collections())
-                collection = chroma_client.get_collection(name=kb.chroma_collection_name)
+                print(company_chroma_client.count_collections())
+                collection = company_chroma_client.get_collection(name=kb.chroma_collection_name)
                 results = collection.query(
                     query_embeddings=[query_embedding.tolist()],
                     n_results=k

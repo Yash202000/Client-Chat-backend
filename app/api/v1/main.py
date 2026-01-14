@@ -6,6 +6,14 @@ from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
 from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations
+from app.api.v1.endpoints.cms import content_types as cms_content_types
+from app.api.v1.endpoints.cms import content_items as cms_content_items
+from app.api.v1.endpoints.cms import media as cms_media
+from app.api.v1.endpoints.cms import search as cms_search
+from app.api.v1.endpoints.cms import categories as cms_categories
+from app.api.v1.endpoints.cms import tags as cms_tags
+from app.api.v1.endpoints.cms import publishing as cms_publishing
+from app.api.v1.endpoints.cms import public as cms_public
 
 
 api_router = APIRouter()
@@ -106,3 +114,13 @@ api_router.include_router(token_usage.router, prefix="/token-usage", tags=["toke
 # External API Channel (for third-party integrations)
 api_router.include_router(api_channel.router, prefix="/external", tags=["external-api"])
 api_router.include_router(api_integrations.router, prefix="/api-integrations", tags=["api-integrations"])
+
+# CMS (Content Management System)
+api_router.include_router(cms_content_types.router, prefix="/cms/types", tags=["cms"])
+api_router.include_router(cms_content_items.router, prefix="/cms/items", tags=["cms"])
+api_router.include_router(cms_media.router, prefix="/cms/media", tags=["cms"])
+api_router.include_router(cms_search.router, prefix="/cms/search", tags=["cms"])
+api_router.include_router(cms_categories.router, prefix="/cms/categories", tags=["cms"])
+api_router.include_router(cms_tags.router, prefix="/cms/tags", tags=["cms"])
+api_router.include_router(cms_publishing.router, prefix="/cms/publishing", tags=["cms"])
+api_router.include_router(cms_public.router, prefix="/public/cms", tags=["cms-public"])
