@@ -186,6 +186,24 @@ def create_knowledge_base(
         db=db, text=knowledge_base.content, agent=agent, company_id=current_user.company_id, name=knowledge_base.name, description=knowledge_base.description, vector_store_type=vector_store_type
     )
 
+@router.post("/create-empty", response_model=schemas_knowledge_base.KnowledgeBase, dependencies=[Depends(require_permission("knowledgebase:create"))])
+def create_empty_knowledge_base(
+    kb_data: schemas_knowledge_base.KnowledgeBaseCreateEmpty,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Create an empty knowledge base without any initial content.
+    Documents can be added later through the Documents tab.
+    """
+    return knowledge_base_processing_service.create_empty_knowledge_base(
+        db=db,
+        company_id=current_user.company_id,
+        name=kb_data.name,
+        description=kb_data.description,
+        vector_store_type=kb_data.vector_store_type
+    )
+
 @router.get("/{knowledge_base_id}", response_model=schemas_knowledge_base.KnowledgeBase, dependencies=[Depends(require_permission("knowledgebase:read"))])
 def get_knowledge_base(
     knowledge_base_id: int,

@@ -24,3 +24,10 @@ class KnowledgeBase(Base):
 
     company = relationship("Company", back_populates="knowledge_bases")
     agents = relationship("Agent", secondary=agent_knowledge_bases, back_populates="knowledge_bases")
+
+    # CMS relationships
+    content_types = relationship("ContentType", back_populates="knowledge_base", cascade="all, delete-orphan")
+    content_items = relationship("ContentItem", back_populates="knowledge_base", cascade="all, delete-orphan")
+    content_categories = relationship("ContentCategory", back_populates="knowledge_base", cascade="all, delete-orphan")
+    content_api_tokens = relationship("ContentApiToken", back_populates="knowledge_base", cascade="all, delete-orphan")
+    content_exports = relationship("ContentExport", back_populates="knowledge_base", cascade="all, delete-orphan")
