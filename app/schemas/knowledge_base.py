@@ -17,6 +17,13 @@ class KnowledgeBaseBase(BaseModel):
 class KnowledgeBaseCreate(KnowledgeBaseBase):
     content: str
 
+class KnowledgeBaseCreateEmpty(BaseModel):
+    """Schema for creating an empty knowledge base without initial content."""
+    name: str
+    description: Optional[str] = None
+    embedding_model: str = "nvidia"
+    vector_store_type: str = "chroma"
+
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None

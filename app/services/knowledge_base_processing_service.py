@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from app.models.knowledge_base import KnowledgeBase
 from app.services.agent_execution_service import _get_embeddings
-from app.core.object_storage import s3_client, BUCKET_NAME, chroma_client
+from app.core.object_storage import s3_client, BUCKET_NAME, get_company_chroma_client
 import uuid
 from app.core.config import settings
 import tempfile
@@ -39,9 +39,11 @@ def process_and_store_text(db: Session, text: str, agent: dict, company_id: int,
 
     if vector_store_type == "chroma":
         print("Creating ChromaDB collection")
-        # Create ChromaDB Collection
-        collection_name = f"kb_{company_id}_{uuid.uuid4()}"
-        collection = chroma_client.create_collection(name=collection_name)
+        # Get company-specific ChromaDB client (multi-tenant isolation)
+        company_chroma_client = get_company_chroma_client(company_id)
+        # Collection name is simpler now since tenant provides isolation
+        collection_name = f"kb_{uuid.uuid4()}"
+        collection = company_chroma_client.create_collection(name=collection_name)
         collection.add(
             embeddings=embeddings.tolist(),
             documents=text_chunks,
@@ -53,10 +55,10 @@ def process_and_store_text(db: Session, text: str, agent: dict, company_id: int,
         faiss_index_id = str(uuid.uuid4())
         # For FAISS, we need a directory to store the index
         faiss_db_path = os.path.join(settings.FAISS_INDEX_DIR, str(company_id), faiss_index_id)
-        
+
         faiss_db = VectorDatabase(
-            embeddings=embeddings_instance, 
-            db_path=faiss_db_path, 
+            embeddings=embeddings_instance,
+            db_path=faiss_db_path,
             index_name=faiss_index_id # Use the ID as the index name within the path
         )
         faiss_db.create_index_from_texts(text_chunks) # Pass langchain Document objects
@@ -150,9 +152,11 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
 
     if vector_store_type == "chroma":
         print("Creating ChromaDB collection")
-        # Create ChromaDB Collection
-        collection_name = f"kb_{company_id}_{uuid.uuid4()}"
-        collection = chroma_client.create_collection(name=collection_name)
+        # Get company-specific ChromaDB client (multi-tenant isolation)
+        company_chroma_client = get_company_chroma_client(company_id)
+        # Collection name is simpler now since tenant provides isolation
+        collection_name = f"kb_{uuid.uuid4()}"
+        collection = company_chroma_client.create_collection(name=collection_name)
         collection.add(
             embeddings=embeddings.tolist(),
             documents=text_chunks,
@@ -164,10 +168,10 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
         faiss_index_id = str(uuid.uuid4())
         # For FAISS, we need a directory to store the index
         faiss_db_path = os.path.join(settings.FAISS_INDEX_DIR, str(company_id), faiss_index_id)
-        
+
         faiss_db = VectorDatabase(
-            embeddings=embeddings_instance, 
-            db_path=faiss_db_path, 
+            embeddings=embeddings_instance,
+            db_path=faiss_db_path,
             index_name=faiss_index_id # Use the ID as the index name within the path
         )
         faiss_db.create_index(split_docs) # Pass langchain Document objects
@@ -183,6 +187,57 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
         type='local',
         storage_type='s3',
         storage_details={"bucket": BUCKET_NAME, "key": file_key},
+        chroma_collection_name=chroma_collection_name,
+        faiss_index_id=faiss_index_id
+    )
+    db.add(kb_entry)
+    db.commit()
+    db.refresh(kb_entry)
+
+    return kb_entry
+
+
+def create_empty_knowledge_base(db: Session, company_id: int, name: str, description: str = None, vector_store_type: str = "chroma"):
+    """
+    Creates an empty knowledge base with just a ChromaDB collection (no initial documents).
+    Documents can be added later through the Documents tab in the UI.
+
+    Args:
+        db: Database session
+        company_id: Company ID for multi-tenant isolation
+        name: Name of the knowledge base
+        description: Optional description
+        vector_store_type: Type of vector store (only "chroma" supported for empty KB)
+
+    Returns:
+        KnowledgeBase: The created knowledge base entry
+    """
+    chroma_collection_name = None
+    faiss_index_id = None
+
+    if vector_store_type == "chroma":
+        # Get company-specific ChromaDB client (multi-tenant isolation)
+        company_chroma_client = get_company_chroma_client(company_id)
+        # Create an empty collection - documents will be added later
+        collection_name = f"kb_{uuid.uuid4()}"
+        company_chroma_client.create_collection(name=collection_name)
+        chroma_collection_name = collection_name
+    elif vector_store_type == "faiss":
+        # FAISS requires documents to create an index, so we can't create an empty one
+        # For empty KB, we'll just create the DB entry without an index
+        # The index will be created when the first document is added
+        pass
+    else:
+        raise ValueError(f"Unsupported vector store type: {vector_store_type}")
+
+    # Create KnowledgeBase Entry (empty - no storage, documents added later)
+    kb_entry = KnowledgeBase(
+        name=name,
+        description=description,
+        company_id=company_id,
+        type='local',
+        storage_type=None,
+        storage_details=None,
         chroma_collection_name=chroma_collection_name,
         faiss_index_id=faiss_index_id
     )

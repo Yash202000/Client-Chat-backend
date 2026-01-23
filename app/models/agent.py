@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.tool import agent_tools
+from app.models.workflow import agent_workflows
 
 agent_knowledge_bases = Table('agent_knowledge_bases', Base.metadata,
     Column('agent_id', Integer, ForeignKey('agents.id'), primary_key=True),
@@ -42,7 +43,7 @@ class Agent(Base):
     knowledge_bases = relationship("KnowledgeBase", secondary=agent_knowledge_bases, back_populates="agents")
     tools = relationship("Tool", secondary=agent_tools, back_populates="agents")
     webhooks = relationship("Webhook", back_populates="agent")
-    workflows = relationship("Workflow", back_populates="agent")
+    workflows = relationship("Workflow", secondary=agent_workflows, back_populates="agents")
     widget_settings = relationship("WidgetSettings", uselist=False, back_populates="agent")
     published_settings = relationship("PublishedWidgetSettings", uselist=False, back_populates="agent")
     parent_version = relationship("Agent", remote_side=[id])

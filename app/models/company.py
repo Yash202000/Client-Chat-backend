@@ -22,3 +22,12 @@ class Company(Base):
     intents = relationship("Intent", back_populates="company")
     entities = relationship("Entity", back_populates="company")
     workflow_triggers = relationship("WorkflowTrigger", back_populates="company")
+
+    # CMS relationships
+    content_types = relationship("ContentType", back_populates="company", cascade="all, delete-orphan")
+    content_items = relationship("ContentItem", back_populates="company", cascade="all, delete-orphan")
+    content_media = relationship("ContentMedia", back_populates="company", cascade="all, delete-orphan")
+    content_categories = relationship("ContentCategory", back_populates="company", cascade="all, delete-orphan")
+    content_tags = relationship("ContentTag", back_populates="company", cascade="all, delete-orphan")
+    content_api_tokens = relationship("ContentApiToken", back_populates="company", cascade="all, delete-orphan")
+    content_exports = relationship("ContentExport", back_populates="company", cascade="all, delete-orphan")

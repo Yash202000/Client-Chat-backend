@@ -199,7 +199,9 @@ class ApiChannelService:
                     session, workflow, message_text, company_id, message_data, user_message_id
                 )
 
-        # Find matching workflow via triggers
+        # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
+
+        # 1. Find matching workflow via triggers
         workflow = await workflow_trigger_service.find_workflow_for_channel_message(
             db=self.db,
             channel=TriggerChannel.API,
@@ -208,21 +210,95 @@ class ApiChannelService:
             session_data={"session_id": session.conversation_id}
         )
 
-        # Fallback to similarity search
-        if not workflow:
-            workflow = workflow_service.find_similar_workflow(
-                self.db, company_id=company_id, query=message_text
-            )
-
-        # Execute workflow or fall back to agent
         if workflow:
             return await self._execute_workflow(
                 session, workflow, message_text, company_id, message_data, user_message_id
             )
-        else:
-            return await self._execute_agent_response(
-                session, message_text, company_id, api_integration, message_data, user_message_id
+
+        # 2. No trigger match - try LLM-based routing
+        agent_id = api_integration.default_agent_id
+        if not agent_id:
+            agents = agent_service.get_agents(self.db, company_id=company_id, limit=1)
+            if agents:
+                agent_id = agents[0].id
+
+        if agent_id:
+            response = await agent_execution_service.generate_agent_response(
+                self.db, agent_id, session.conversation_id,
+                session.conversation_id, company_id, message_text
             )
+
+            # Check if LLM decided to trigger a workflow (context-aware routing)
+            if isinstance(response, dict) and response.get("type") == "workflow_trigger":
+                workflow_id = response.get("workflow_id")
+                workflow = workflow_service.get_workflow(self.db, workflow_id, company_id)
+                if workflow:
+                    logger.info(f"[API] LLM triggered workflow {workflow_id}")
+                    return await self._execute_workflow(
+                        session, workflow, message_text, company_id, message_data, user_message_id
+                    )
+
+            # Handle handoff request
+            if isinstance(response, dict) and response.get("type") == "handoff":
+                return ApiMessageResponse(
+                    session_id=session.conversation_id,
+                    message_id=user_message_id,
+                    response_message="I'm connecting you with a human agent who can help.",
+                    response_type="handoff",
+                    status="handoff_requested",
+                    metadata=message_data.metadata,
+                    created_at=datetime.now(timezone.utc)
+                )
+
+            # 3. LLM returned text - try similarity search as last fallback
+            workflow = workflow_service.find_similar_workflow(
+                self.db, company_id=company_id, query=message_text, agent_id=session.agent_id
+            )
+
+            if workflow:
+                logger.info(f"[API] Found similar workflow via fallback: {workflow.name}")
+                return await self._execute_workflow(
+                    session, workflow, message_text, company_id, message_data, user_message_id
+                )
+
+            # No workflow found - use LLM's text response
+            response_text = response if isinstance(response, str) else str(response)
+            agent_message = ChatMessageCreate(message=response_text, message_type="text")
+            db_message = chat_service.create_chat_message(
+                self.db, agent_message, agent_id,
+                session.conversation_id, company_id, "agent"
+            )
+
+            # Broadcast to WebSocket
+            try:
+                await session_ws_manager.broadcast_to_session(
+                    session.conversation_id,
+                    schemas_chat_message.ChatMessage.model_validate(db_message, from_attributes=True).model_dump_json(),
+                    "agent"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to broadcast to WebSocket: {e}")
+
+            return ApiMessageResponse(
+                session_id=session.conversation_id,
+                message_id=db_message.id,
+                response_message=response_text,
+                response_type="text",
+                status="completed",
+                metadata=message_data.metadata,
+                created_at=datetime.now(timezone.utc)
+            )
+
+        # No agent available
+        return ApiMessageResponse(
+            session_id=session.conversation_id,
+            message_id=user_message_id,
+            response_message="No agent available to handle this request.",
+            response_type="error",
+            status="error",
+            metadata=message_data.metadata,
+            created_at=datetime.now(timezone.utc)
+        )
 
     async def _execute_workflow(
         self,
@@ -234,9 +310,12 @@ class ApiChannelService:
         user_message_id: int
     ) -> ApiMessageResponse:
         """Execute a workflow and return response."""
-        # Update session with workflow's agent_id
-        if workflow.agent_id and session.agent_id != workflow.agent_id:
-            session.agent_id = workflow.agent_id
+        # Get agent_id from workflow's agents (many-to-many) or use session's agent_id
+        workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
+
+        # Update session with workflow's agent_id if needed
+        if workflow_agent_id and session.agent_id != workflow_agent_id:
+            session.agent_id = workflow_agent_id
             self.db.commit()
             self.db.refresh(session)
 
@@ -246,11 +325,12 @@ class ApiChannelService:
             user_message=message_text,
             conversation_id=session.conversation_id,
             company_id=company_id,
-            attachments=message_data.attachments
+            attachments=message_data.attachments,
+            agent_id=workflow_agent_id
         )
 
         return await self._build_response_from_workflow_result(
-            result, session, company_id, workflow.agent_id, message_data, user_message_id
+            result, session, company_id, workflow_agent_id, message_data, user_message_id
         )
 
     async def _resume_workflow(
@@ -263,17 +343,21 @@ class ApiChannelService:
         user_message_id: int
     ) -> ApiMessageResponse:
         """Resume a paused workflow."""
+        # Get agent_id from workflow's agents (many-to-many) or use session's agent_id
+        workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
+
         workflow_exec_service = WorkflowExecutionService(self.db)
         result = await workflow_exec_service.execute_workflow(
             user_message=message_text,
             conversation_id=session.conversation_id,
             company_id=company_id,
             workflow=workflow,
-            attachments=message_data.attachments
+            attachments=message_data.attachments,
+            agent_id=workflow_agent_id
         )
 
         return await self._build_response_from_workflow_result(
-            result, session, company_id, workflow.agent_id, message_data, user_message_id
+            result, session, company_id, workflow_agent_id, message_data, user_message_id
         )
 
     async def _build_response_from_workflow_result(

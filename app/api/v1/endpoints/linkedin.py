@@ -103,7 +103,8 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                                 if execution_result.get("status") == "completed":
                                     response_text = execution_result.get("response", "Workflow completed.")
                                     agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
-                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+                                    workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
 
                                     await messaging_service.send_linkedin_message(
                                         recipient_urn=sender_id,
@@ -138,7 +139,10 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
 
                                 continue
 
-                        # Try trigger-based workflow finding first (new system)
+                        # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
+                        workflow = None
+
+                        # 1. Try trigger-based workflow finding first
                         workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                             db=db,
                             channel=TriggerChannel.LINKEDIN,
@@ -147,15 +151,71 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                             session_data={"session_id": session.conversation_id}
                         )
 
-                        # Fallback to old similarity search if no trigger-based workflow found
                         if not workflow:
-                            workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text)
+                            # 2. No trigger match - try LLM-based routing (2nd priority)
+                            logging.info(f"[LinkedIn] No trigger match, trying LLM-based routing")
+                            agents = agent_service.get_agents(db, company_id=company_id, limit=1)
+                            if not agents:
+                                print(f"Error: No agents found for company {company_id} to handle the response.")
+                                continue
+                            agent = agents[0]
+
+                            agent_response = await agent_execution_service.generate_agent_response(
+                                db, agent.id, session.conversation_id, session.conversation_id, company_id, message_text
+                            )
+
+                            # Check if LLM decided to trigger a workflow (context-aware routing)
+                            if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
+                                workflow_id = agent_response.get("workflow_id")
+                                logging.info(f"[LinkedIn] LLM triggered workflow {workflow_id}")
+                                workflow = workflow_service.get_workflow(db, workflow_id, company_id)
+                                if not workflow:
+                                    logging.warning(f"[LinkedIn] Workflow {workflow_id} not found")
+                                    continue
+                                # Continue to workflow execution below
+                            elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
+                                # LLM routing failed - notify user and initiate handoff
+                                reason = agent_response.get("reason", "AI routing unavailable")
+                                logging.warning(f"[LinkedIn] LLM failed, initiating handoff: {reason}")
+                                error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
+                                await messaging_service.send_linkedin_message(
+                                    recipient_urn=sender_id,
+                                    message_text=error_msg,
+                                    integration=integration
+                                )
+                                continue
+                            else:
+                                # 3. LLM returned text - try similarity search as last fallback
+                                logging.info(f"[LinkedIn] LLM returned text, trying similarity search as fallback")
+                                workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text, agent_id=session.agent_id)
+
+                                if not workflow:
+                                    # No workflow found anywhere - use LLM's text response
+                                    agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
+
+                                    agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
+
+                                    await messaging_service.send_linkedin_message(
+                                        recipient_urn=sender_id,
+                                        message_text=agent_response_text,
+                                        integration=integration
+                                    )
+
+                                    await session_ws_manager.broadcast_to_session(
+                                        session.conversation_id,
+                                        schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
+                                        "agent"
+                                    )
+                                    continue
 
                         if workflow:
                             # --- Workflow Execution ---
+                            # Get agent_id from workflow's agents (many-to-many) or use session's agent_id
+                            workflow_agent_id = session.agent_id or (workflow.agents[0].id if workflow.agents else None)
                             # Update session with workflow's agent_id (needed for handoff team lookup)
-                            if workflow.agent_id and session.agent_id != workflow.agent_id:
-                                session.agent_id = workflow.agent_id
+                            if workflow_agent_id and session.agent_id != workflow_agent_id:
+                                session.agent_id = workflow_agent_id
                                 db.commit()
                                 db.refresh(session)
 
@@ -163,13 +223,14 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                             execution_result = await workflow_exec_service.execute_workflow(
                                 workflow_id=workflow.id,
                                 user_message=message_text,
-                                conversation_id=session.conversation_id
+                                conversation_id=session.conversation_id,
+                                agent_id=workflow_agent_id
                             )
 
                             if execution_result.get("status") == "completed":
                                 response_text = execution_result.get("response", "Workflow completed.")
                                 agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
-                                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow.agent_id, session.conversation_id, company_id, "agent")
+                                db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
 
                                 await messaging_service.send_linkedin_message(
                                     recipient_urn=sender_id,
@@ -193,36 +254,6 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                                     )
 
                             logging.info(f"Processed LinkedIn message from {sender_id} for company {company_id} with workflow '{workflow.name}'")
-                            continue
-
-                        # No workflow found - use default agent response
-                        logging.info(f"No matching workflow found for message: '{message_text}'. Using default agent response.")
-                        agents = agent_service.get_agents(db, company_id=company_id, limit=1)
-                        if not agents:
-                            print(f"Error: No agents found for company {company_id} to handle the response.")
-                            continue
-                        agent = agents[0]
-
-                        agent_response_text = await agent_execution_service.generate_agent_response(
-                            db, agent.id, session.conversation_id, company_id, message_text
-                        )
-                        
-                        agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
-                        db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
-
-                        # The messaging_service needs a send_linkedin_message function
-                        # For now, this will call a placeholder function
-                        await messaging_service.send_linkedin_message(
-                            recipient_urn=sender_id,
-                            message_text=agent_response_text,
-                            integration=integration
-                        )
-
-                        await session_ws_manager.broadcast_to_session(
-                            session.conversation_id,
-                            schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(),
-                            "agent"
-                        )
 
     except (KeyError, IndexError) as e:
         logging.error(f"Error parsing LinkedIn webhook data: {e}\n{traceback.format_exc()}")

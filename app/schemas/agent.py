@@ -8,6 +8,19 @@ from app.schemas.knowledge_base import KnowledgeBase
 from app.schemas.tool import Tool
 import datetime
 
+
+# Simplified workflow schema for agent response (without heavy fields)
+class AgentWorkflow(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    is_active: bool = True
+    agent_id: Optional[int] = None
+    trigger_phrases: Optional[List[str]] = None
+
+    class Config:
+        from_attributes = True
+
 class AgentBase(BaseModel):
     name: str
     welcome_message: str
@@ -70,6 +83,7 @@ class Agent(AgentBase):
     knowledge_bases: List[KnowledgeBase] = []
     webhooks: List[Webhook] = []
     tools: List[Tool] = []
+    workflows: List[AgentWorkflow] = []
     version_number: int
     parent_version_id: Optional[int] = None
     status: str
