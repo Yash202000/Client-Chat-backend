@@ -244,6 +244,7 @@ def get_license_status(db: Session) -> LicenseStatusResponse:
     Get the current license status for the instance.
 
     Works in both cloud and on-premise modes.
+    Checks both .env LICENSE_KEY and database for activated license.
     """
     if settings.DEPLOYMENT_MODE != "on_premise":
         # Cloud mode - return cloud status
@@ -253,18 +254,26 @@ def get_license_status(db: Session) -> LicenseStatusResponse:
             features=["all"],  # All features available in cloud
         )
 
-    # On-premise mode
-    instance_license = get_instance_license(db)
+    # On-premise mode - check .env first, then database
+    license_key = settings.LICENSE_KEY
+    activated_at = None
 
-    if not instance_license or not instance_license.license_key:
+    if not license_key:
+        # Check database for activated license
+        instance_license = get_instance_license(db)
+        if instance_license and instance_license.license_key:
+            license_key = instance_license.license_key
+            activated_at = instance_license.activated_at
+
+    if not license_key:
         return LicenseStatusResponse(
             mode="on_premise",
             status="not_activated",
             features=[],
         )
 
-    # Validate the stored license
-    payload = validate_license_key(instance_license.license_key)
+    # Validate the license
+    payload = validate_license_key(license_key)
     if not payload:
         return LicenseStatusResponse(
             mode="on_premise",
@@ -283,7 +292,7 @@ def get_license_status(db: Session) -> LicenseStatusResponse:
             features=payload.features,
             expires_at=datetime.fromtimestamp(payload.expires_at),
             days_until_expiry=0,
-            activated_at=instance_license.activated_at,
+            activated_at=activated_at,
         )
 
     # License is valid
@@ -304,7 +313,7 @@ def get_license_status(db: Session) -> LicenseStatusResponse:
         features=payload.features,
         expires_at=expires_at,
         days_until_expiry=max(0, days_until_expiry),
-        activated_at=instance_license.activated_at,
+        activated_at=activated_at,
     )
 
 
