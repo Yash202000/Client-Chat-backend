@@ -104,28 +104,81 @@ async def generate_response(
 
     return {"type": "text", "content": response.text, "usage": usage_data}
 
-def generate_image(prompt: str):
-    
+def generate_image(db: Session, company_id: int, prompt: str, api_key: str = None):
+    """
+    Generate an image using Google's Imagen API via vault credentials.
 
-    model = genai.GenerativeModel('gemini-2.5-flash-image-preview')
-    response = model.generate_content(prompt)
+    Args:
+        db: Database session
+        company_id: Company ID for vault lookup
+        prompt: Image generation prompt
+        api_key: Optional API key override
 
-    
-    for part in response.candidates[0].content.parts:
-        if part.text is not None:
-            print(part.text)
-        elif part.inline_data is not None:
-            image = Image.open(io.BytesIO(part.inline_data.data))
-            # Ensure the directory exists
-            save_dir = "/home/developer/personal/AgentConnect/backend/app/generated_images"
-            os.makedirs(save_dir, exist_ok=True)
-            
-            # Generate a unique filename
-            filename = f"{uuid.uuid4()}.png"
-            filepath = os.path.join(save_dir, filename)
-            
-            image.save(filepath)
-            
-            # Return the path to the saved image
-            
+    Returns:
+        PIL Image object
+    """
+    # Get API key from vault if not provided
+    if api_key is None:
+        credential = credential_service.get_credential_by_service_name(
+            db, service_name="gemini", company_id=company_id
+        )
+        if credential:
+            api_key = vault_service.decrypt(credential.encrypted_credentials)
+
+    # Fallback to settings if no vault credential
+    if not api_key:
+        api_key = settings.GOOGLE_API_KEY
+
+    if not api_key:
+        raise ValueError("Google API key not found. Please add a 'gemini' credential in the vault.")
+
+    # Configure with the API key
+    genai.configure(api_key=api_key)
+
+    # Use Imagen 3 for image generation
+    from google import genai as google_genai
+    from google.genai import types
+
+    client = google_genai.Client(api_key=api_key)
+
+    try:
+        # Try Imagen 3 first (best quality)
+        response = client.models.generate_images(
+            model='imagen-3.0-generate-002',
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="1:1",
+                safety_filter_level="BLOCK_MEDIUM_AND_ABOVE",
+            )
+        )
+
+        if response.generated_images:
+            image_data = response.generated_images[0].image.image_bytes
+            image = Image.open(io.BytesIO(image_data))
             return image
+        else:
+            raise ValueError("No image generated")
+
+    except Exception as e:
+        print(f"Imagen 3 failed: {e}, trying Gemini 2.0 Flash...")
+
+        # Fallback to Gemini 2.0 Flash experimental
+        try:
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            response = model.generate_content(
+                f"Generate an image of: {prompt}",
+                generation_config=genai.types.GenerationConfig(
+                    response_mime_type="image/png"
+                )
+            )
+
+            for part in response.candidates[0].content.parts:
+                if part.inline_data is not None:
+                    image = Image.open(io.BytesIO(part.inline_data.data))
+                    return image
+
+            raise ValueError("No image generated from Gemini")
+
+        except Exception as e2:
+            raise ValueError(f"Image generation failed: {e2}")
