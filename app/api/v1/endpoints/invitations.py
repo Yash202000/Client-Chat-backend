@@ -14,14 +14,14 @@ from app.schemas.user_invitation import (
     ValidateInvitationResponse
 )
 from app.services import invitation_service
-from app.core.dependencies import get_db, get_current_active_user, require_permission
+from app.core.dependencies import get_db, get_current_active_user, require_permission, require_user_limit_not_exceeded
 from app.models.user import User
 
 router = APIRouter()
 
 
 @router.post("/", response_model=UserInvitationResponse, status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_permission("user:create"))])
+             dependencies=[Depends(require_permission("user:create")), Depends(require_user_limit_not_exceeded)])
 async def create_invitation(
     invitation_data: UserInvitationCreate,
     db: Session = Depends(get_db),

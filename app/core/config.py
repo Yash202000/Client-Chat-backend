@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"
 
+    # Deployment Mode: "cloud" (Stripe subscriptions) or "on_premise" (license key)
+    DEPLOYMENT_MODE: str = "cloud"
+    LICENSE_KEY_SECRET: str = ""  # HMAC secret for signing/verifying license keys
+    LICENSE_KEY: str = ""  # The license key for on-premise instances (optional, can also be in DB)
+
     # Twilio SMS settings
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""

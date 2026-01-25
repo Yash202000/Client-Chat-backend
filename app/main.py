@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
 from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, public_pages
 from app.core.dependencies import get_db
+from app.core.license_exceptions import LicenseError, license_exception_handler
 from app.services.connection_manager import manager
 from app.services.websocket_cleanup_service import cleanup_inactive_sessions
 from app.services.call_timeout_service import call_timeout_service
@@ -27,6 +28,9 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )
+
+# Register license exception handler (shows HTML page for browser, JSON for API)
+app.add_exception_handler(LicenseError, license_exception_handler)
 
 # CORS middleware to allow frontend to connect
 # Note: Widget needs to be accessible from any origin

@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.core import security
 from app.core.config import settings
 from app.schemas import token as schemas_token, user as schemas_user
-from app.services import user_service, api_key_service
+from app.services import user_service, api_key_service, company_subscription_service, license_service
+from app.core.license_exceptions import LicenseExpiredError, LicenseInvalidError, LicenseNotConfiguredError
 from app.models import user as models_user, company as models_company, role as models_role
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -88,10 +89,37 @@ async def get_current_user_from_ws(websocket: WebSocket, db: Session = Depends(g
     return user
 
 async def get_current_active_user(
+    db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_user),
 ) -> models_user.User:
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+
+    # On-premise mode: enforce license validation on EVERY authenticated request
+    if settings.DEPLOYMENT_MODE == "on_premise":
+        # Check for license key (env var or database)
+        license_key = settings.LICENSE_KEY
+        if not license_key:
+            # Check database for activated license
+            instance_license = license_service.get_instance_license(db)
+            if instance_license:
+                license_key = instance_license.license_key
+
+        # If no license is configured at all, only super_admin can access (to set up license)
+        if not license_key:
+            if current_user.is_super_admin:
+                return current_user  # Allow super_admin to configure license
+            raise LicenseNotConfiguredError()
+
+        # Validate the license
+        payload = license_service.validate_license_key(license_key)
+        if not payload:
+            raise LicenseInvalidError()
+
+        # Check if license is expired
+        if license_service.is_license_expired(payload):
+            raise LicenseExpiredError()
+
     return current_user
 
 async def get_current_company(current_user: models_user.User = Depends(get_current_active_user)) -> int:
@@ -132,4 +160,99 @@ def require_super_admin(current_user: models_user.User = Depends(get_current_act
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This action requires super admin privileges.",
         )
+    return current_user
+
+
+async def require_active_subscription(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Dependency that blocks access if subscription is expired/canceled or trial ended.
+    Super admins bypass this check.
+    """
+    if current_user.is_super_admin:
+        return current_user
+
+    if not current_user.company_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not associated with a company.",
+        )
+
+    if not company_subscription_service.is_subscription_active(db, current_user.company_id):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Your subscription has expired. Please upgrade to continue.",
+        )
+
+    return current_user
+
+
+def require_user_limit_not_exceeded(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Dependency that blocks user creation if company is at user limit.
+    Super admins bypass this check.
+    """
+    if current_user.is_super_admin:
+        return current_user
+
+    if not current_user.company_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not associated with a company.",
+        )
+
+    if not company_subscription_service.can_add_user(db, current_user.company_id):
+        # Get current status for helpful error message
+        status_info = company_subscription_service.get_subscription_status(db, current_user.company_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User limit reached. Your plan allows {status_info.user_limit} users. Please upgrade to add more users.",
+        )
+
+    return current_user
+
+
+async def require_valid_license(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Full lockout dependency for on-premise mode.
+    Blocks ALL access if license is expired/invalid.
+    In cloud mode, this check is skipped (Stripe subscriptions handle access).
+    Super admins bypass this check to allow license configuration.
+    """
+    # Cloud mode uses Stripe subscriptions
+    if settings.DEPLOYMENT_MODE != "on_premise":
+        return current_user
+
+    # Super admins can bypass to configure license
+    if current_user.is_super_admin:
+        return current_user
+
+    # Check license validity
+    license_key = settings.LICENSE_KEY
+    if not license_key:
+        # Check database for activated license
+        instance_license = license_service.get_instance_license(db)
+        if instance_license:
+            license_key = instance_license.license_key
+
+    if not license_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No license configured. Please contact your administrator.",
+        )
+
+    if not license_service.is_license_valid(license_key):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="License expired or invalid. Please contact your administrator to renew the license.",
+        )
+
     return current_user

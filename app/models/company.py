@@ -31,3 +31,6 @@ class Company(Base):
     content_tags = relationship("ContentTag", back_populates="company", cascade="all, delete-orphan")
     content_api_tokens = relationship("ContentApiToken", back_populates="company", cascade="all, delete-orphan")
     content_exports = relationship("ContentExport", back_populates="company", cascade="all, delete-orphan")
+
+    # Subscription relationship (one-to-one)
+    subscription = relationship("CompanySubscription", back_populates="company", uselist=False, cascade="all, delete-orphan")

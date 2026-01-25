@@ -16,6 +16,7 @@ from app.models.optimization_suggestion import OptimizationSuggestion
 from app.models.permission import Permission
 from app.models.role import Role
 from app.models.subscription_plan import SubscriptionPlan
+from app.models.company_subscription import CompanySubscription
 from app.models.team import Team
 from app.models.team_membership import TeamMembership
 from app.models.tool import Tool
@@ -77,4 +78,7 @@ from app.models.content_media import ContentMedia
 from app.models.content_category import ContentCategory
 from app.models.content_tag import ContentTag
 from app.models.content_publishing import ContentCopy, ContentApiToken, ContentExport
+
+# Licensing Models
+from app.models.instance_license import InstanceLicense
 

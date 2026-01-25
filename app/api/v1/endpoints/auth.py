@@ -8,7 +8,7 @@ from app.core import security
 from app.core.config import settings
 from app.core.dependencies import get_db, get_current_active_user
 from app.schemas import user as schemas_user, token as schemas_token, company as schemas_company
-from app.services import user_service, company_service
+from app.services import user_service, company_service, company_subscription_service
 from app.models import user as models_user
 
 router = APIRouter()
@@ -19,11 +19,18 @@ def signup(user: schemas_user.UserCreate, db: Session = Depends(get_db)):
     db_user = user_service.get_user_by_email(db, email=user.email)
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # For now, create a new company for each user signup.
-    # In a real app, you might handle invitations or a default company.
+
+    # Create a new company for each user signup.
     company = company_service.create_company(db, company=schemas_company.CompanyCreate(name=f"{user.email}'s Company"))
-    
+
+    # Create trial subscription for the new company
+    company_subscription_service.create_trial_subscription(
+        db=db,
+        company_id=company.id,
+        trial_days=14,
+        user_limit=5
+    )
+
     return user_service.create_user(db=db, user=user, company_id=company.id)
 
 

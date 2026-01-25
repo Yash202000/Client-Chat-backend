@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from app.schemas import user as schemas_user
 from app.services import user_service
-from app.core.dependencies import get_db, get_current_active_user, require_permission
+from app.core.dependencies import get_db, get_current_active_user, require_permission, require_user_limit_not_exceeded
 from app.models import user as models_user
 
 router = APIRouter()
@@ -14,7 +14,7 @@ router = APIRouter()
 def read_users_me(current_user: models_user.User = Depends(get_current_active_user)):
     return current_user
 
-@router.post("/", response_model=schemas_user.User, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("user:create"))])
+@router.post("/", response_model=schemas_user.User, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("user:create")), Depends(require_user_limit_not_exceeded)])
 def create_user(
     user: schemas_user.UserCreate,
     db: Session = Depends(get_db),
