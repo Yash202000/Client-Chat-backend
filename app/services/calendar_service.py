@@ -17,12 +17,28 @@ def get_google_calendar_client(db: Session, integration: Integration) -> Resourc
     """
     credentials = integration_service.get_decrypted_credentials(integration)
     
+    # Debug: print credentials keys and values to trace the issue
+    print(f"[CALENDAR CLIENT] Credentials keys: {list(credentials.keys())}")
+    print(f"[CALENDAR CLIENT] token present: {'token' in credentials}")
+    print(f"[CALENDAR CLIENT] access_token present: {'access_token' in credentials}")
+    print(f"[CALENDAR CLIENT] refresh_token present: {'refresh_token' in credentials}")
+    print(f"[CALENDAR CLIENT] refresh_token value: {credentials.get('refresh_token', 'NOT FOUND')[:20] if credentials.get('refresh_token') else 'NONE'}")
+    
+    # Note: google.py callback stores 'token' but older code stored 'access_token'
+    access_token = credentials.get("token") or credentials.get("access_token")
+    refresh_token = credentials.get("refresh_token")
+    
+    print(f"[CALENDAR CLIENT] Using access_token: {bool(access_token)}")
+    print(f"[CALENDAR CLIENT] Using refresh_token: {bool(refresh_token)}")
+    print(f"[CALENDAR CLIENT] client_id: {settings.GOOGLE_CLIENT_ID[:20] if settings.GOOGLE_CLIENT_ID else 'NONE'}...")
+    print(f"[CALENDAR CLIENT] client_secret: {bool(settings.GOOGLE_CLIENT_SECRET)}")
+    
     creds = Credentials(
-        token=credentials.get("access_token"),
-        refresh_token=credentials.get("refresh_token"),
+        token=access_token,
+        refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.GMAIL_CLIENT_ID,
-        client_secret=settings.GMAIL_CLIENT_SECRET,
+        client_id=settings.GOOGLE_CLIENT_ID,
+        client_secret=settings.GOOGLE_CLIENT_SECRET,
         scopes=["https://www.googleapis.com/auth/calendar"]
     )
 
@@ -122,3 +138,61 @@ def create_event(db: Session, integration_id: int, title: str, start_time: datet
 
     created_event = client.events().insert(calendarId='primary', body=event).execute()
     return created_event
+
+
+def cancel_event(db: Session, integration_id: int, event_id: str, send_updates: str = "all") -> bool:
+    integration = integration_service.get_integration(db, integration_id=integration_id, company_id=1)
+    if not integration or integration.type != "google_calendar":
+        raise ValueError("Invalid Google Calendar integration.")
+
+    client = get_google_calendar_client(db, integration)
+    
+    client.events().delete(
+        calendarId='primary',
+        eventId=event_id,
+        sendUpdates=send_updates  # Notifies attendees about cancellation
+    ).execute()
+    
+    return True
+
+
+def get_upcoming_events(db: Session, integration_id: int, days: int = 7, max_results: int = 50) -> List[Dict[str, Any]]:
+    integration = integration_service.get_integration(db, integration_id=integration_id, company_id=1)
+    if not integration or integration.type != "google_calendar":
+        raise ValueError("Invalid Google Calendar integration.")
+
+    client = get_google_calendar_client(db, integration)
+    
+    now = datetime.datetime.utcnow()
+    time_min = now.isoformat() + 'Z'
+    time_max = (now + datetime.timedelta(days=days)).isoformat() + 'Z'
+    
+    events_result = client.events().list(
+        calendarId='primary',
+        timeMin=time_min,
+        timeMax=time_max,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+    
+    events = events_result.get('items', [])
+    
+    # Format the response
+    formatted_events = []
+    for event in events:
+        start = event['start'].get('dateTime', event['start'].get('date'))
+        end = event['end'].get('dateTime', event['end'].get('date'))
+        formatted_events.append({
+            'id': event.get('id'),
+            'summary': event.get('summary', 'No Title'),
+            'start': start,
+            'end': end,
+            'location': event.get('location'),
+            'description': event.get('description'),
+            'attendees': [a.get('email') for a in event.get('attendees', [])],
+            'htmlLink': event.get('htmlLink'),
+            'status': event.get('status')  # confirmed, tentative, cancelled
+        })
+    
+    return formatted_events

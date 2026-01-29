@@ -29,10 +29,7 @@ async def get_user_from_token(db: Session, token: str) -> User:
 
 @router.get("/client-id")
 def get_google_client_id():
-    """
-    Provides the Google Client ID to the frontend.
-    """
-    return {"client_id": settings.GMAIL_CLIENT_ID}
+    return {"client_id": settings.GOOGLE_CLIENT_ID}
 
 @router.get("/callback")
 async def google_callback(request: Request, db: Session = Depends(get_db)):
@@ -61,8 +58,8 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
         client_config = {
             "web": {
-                "client_id": settings.GMAIL_CLIENT_ID,
-                "client_secret": settings.GMAIL_CLIENT_SECRET,
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
                 "redirect_uris": [redirect_uri],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
@@ -71,9 +68,19 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
         flow = google_auth_oauthlib.flow.Flow.from_client_config(
             client_config,
-            scopes=['https://www.googleapis.com/auth/gmail.modify'], # Add more scopes as needed
+            scopes=[
+                'openid',
+                'https://www.googleapis.com/auth/gmail.modify',
+                'https://www.googleapis.com/auth/calendar',
+                'https://www.googleapis.com/auth/userinfo.email'
+            ],
             redirect_uri=redirect_uri
         )
+        
+        # Disable strict scope checking - Google may return different scopes than requested
+        import os
+        os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+        
         flow.fetch_token(code=code)
         credentials = flow.credentials
 
@@ -86,7 +93,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             'token_uri': credentials.token_uri,
             'client_id': credentials.client_id,
             'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
+            'scopes': list(credentials.scopes) if credentials.scopes else []  # Convert to list for JSON
         }
         
         credentials_json = json.dumps(credential_data)
@@ -98,6 +105,10 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             credential_schema = schemas_credential.CredentialCreate(name="Google Credential", service='google', credentials=credentials_json)
             credential_service.create_credential(db, credential=credential_schema, company_id=current_user.company_id)
 
+        # Validate that we have the required credentials before saving integrations
+        if not credential_data.get('refresh_token'):
+            raise Exception("OAuth did not return a refresh_token. Please revoke app access in Google Account and try again.")
+
         # Create or update the Gmail integration
         db_integration = integration_service.get_integration_by_type_and_company(db, integration_type='gmail', company_id=current_user.company_id)
         if db_integration:
@@ -107,9 +118,20 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             integration_schema = schemas_integration.IntegrationCreate(name="Gmail", type='gmail', enabled=True, credentials=credential_data)
             integration_service.create_integration(db, integration=integration_schema, company_id=current_user.company_id)
 
+        # Also create or update Google Calendar integration (same credentials)
+        db_calendar_integration = integration_service.get_integration_by_type_and_company(db, integration_type='google_calendar', company_id=current_user.company_id)
+        if db_calendar_integration:
+            integration_schema = schemas_integration.IntegrationUpdate(enabled=True, credentials=credential_data)
+            integration_service.update_integration(db, db_integration=db_calendar_integration, integration_in=integration_schema)
+        else:
+            integration_schema = schemas_integration.IntegrationCreate(name="Google Calendar", type='google_calendar', enabled=True, credentials=credential_data)
+            integration_service.create_integration(db, integration=integration_schema, company_id=current_user.company_id)
+
         # This script securely closes the popup window and notifies the parent window of success.
         return Response(content="<script>window.opener.postMessage('google-success', '*');window.close();</script>", media_type="text/html")
 
     except Exception as e:
+        import traceback
         logging.error(f"Error during Google OAuth callback: {e}")
-        raise HTTPException(status_code=500, detail="Failed to authenticate with Google")
+        logging.error(traceback.format_exc())  # Log full stack trace
+        raise HTTPException(status_code=500, detail=f"Failed to authenticate with Google: {str(e)}")

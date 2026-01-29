@@ -1,0 +1,204 @@
+{% extends "voice_forms/base_form.html" %}
+
+{% block title %}Complete Your Request - {{ session_id[:8] }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h1>📋 Complete Your Request</h1>
+        <p>Please provide the additional information below</p>
+    </div>
+
+    <div class="card-body">
+        <div id="form-container">
+            <form id="workflow-form" enctype="multipart/form-data">
+                <!-- Voice captured data summary -->
+                {% if voice_data %}
+                <div class="alert alert-success">
+                    <strong>✓ Already captured via voice:</strong>
+                    <ul style="margin-top: 8px; padding-left: 20px;">
+                        {% for key, value in voice_data.items() %}
+                        <li>{{ key }}: {{ value }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                <!-- Dynamic form fields -->
+                {% for field in fields %}
+                <div class="form-group">
+                    <label for="{{ field.name }}">
+                        {{ field.label }}
+                        {% if field.required %}<span class="required">*</span>{% endif %}
+                    </label>
+
+                    {% if field.field_type == 'text' %}
+                    <input type="text" id="{{ field.name }}" name="{{ field.name }}" class="form-control"
+                        placeholder="{{ field.placeholder or '' }}" {% if field.required %}required{% endif %}>
+
+                    {% elif field.field_type == 'textarea' %}
+                    <textarea id="{{ field.name }}" name="{{ field.name }}" class="form-control"
+                        placeholder="{{ field.placeholder or '' }}" {% if field.required %}required{% endif
+                        %}></textarea>
+
+                    {% elif field.field_type == 'file' %}
+                    <div class="file-upload" id="{{ field.name }}-upload">
+                        <div class="file-upload-icon">📁</div>
+                        <div class="file-upload-text">
+                            Drag & drop or click to upload<br>
+                            <small>Supported: Images, PDF, Documents</small>
+                        </div>
+                        <input type="file" id="{{ field.name }}" name="{{ field.name }}"
+                            accept="image/*,.pdf,.doc,.docx" {% if field.required %}required{% endif %}>
+                        <div class="file-name" id="{{ field.name }}-filename" style="display: none;"></div>
+                    </div>
+
+                    {% elif field.field_type == 'location' %}
+                    <button type="button" class="location-btn" id="{{ field.name }}-btn"
+                        onclick="getLocation('{{ field.name }}')">
+                        📍 Get My Location
+                    </button>
+                    <input type="hidden" id="{{ field.name }}" name="{{ field.name }}">
+                    <div class="location-result" id="{{ field.name }}-result" style="display: none;"></div>
+
+                    {% elif field.field_type == 'select' %}
+                    <select id="{{ field.name }}" name="{{ field.name }}" class="form-control" {% if field.required
+                        %}required{% endif %}>
+                        <option value="">Select...</option>
+                        {% for option in field.options %}
+                        <option value="{{ option }}">{{ option }}</option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
+                </div>
+                {% endfor %}
+
+                <button type="submit" class="submit-btn" id="submit-btn">
+                    Submit Information
+                </button>
+            </form>
+        </div>
+
+        <div id="success-container" style="display: none;">
+            <div class="success-animation">
+                <div class="success-icon">✓</div>
+                <h2 style="margin-bottom: 10px;">Thank You!</h2>
+                <p style="color: var(--text-secondary);">
+                    Your information has been submitted.<br>
+                    You can now return to your call.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+// File upload handling
+document.querySelectorAll('.file-upload input[type="file"]').forEach(input => {
+const uploadDiv = input.closest('.file-upload');
+const filenameDiv = document.getElementById(input.id + '-filename');
+
+// Drag and drop
+uploadDiv.addEventListener('dragover', (e) => {
+e.preventDefault();
+uploadDiv.classList.add('dragover');
+});
+
+uploadDiv.addEventListener('dragleave', () => {
+uploadDiv.classList.remove('dragover');
+});
+
+uploadDiv.addEventListener('drop', (e) => {
+e.preventDefault();
+uploadDiv.classList.remove('dragover');
+if (e.dataTransfer.files.length) {
+input.files = e.dataTransfer.files;
+showFileName(input, filenameDiv);
+}
+});
+
+// Regular file selection
+input.addEventListener('change', () => {
+showFileName(input, filenameDiv);
+});
+});
+
+function showFileName(input, filenameDiv) {
+if (input.files.length > 0) {
+filenameDiv.textContent = '📎 ' + input.files[0].name;
+filenameDiv.style.display = 'block';
+}
+}
+
+// Location handling
+function getLocation(fieldName) {
+const btn = document.getElementById(fieldName + '-btn');
+const input = document.getElementById(fieldName);
+const result = document.getElementById(fieldName + '-result');
+
+btn.disabled = true;
+btn.innerHTML = '<span class="spinner"></span> Getting location...';
+
+if (navigator.geolocation) {
+navigator.geolocation.getCurrentPosition(
+(position) => {
+const lat = position.coords.latitude.toFixed(6);
+const lng = position.coords.longitude.toFixed(6);
+input.value = `${lat},${lng}`;
+result.innerHTML = `📍 Location captured: ${lat}, ${lng}`;
+result.style.display = 'block';
+btn.innerHTML = '✓ Location Captured';
+btn.style.background = '#10b981';
+},
+(error) => {
+btn.disabled = false;
+btn.innerHTML = '📍 Try Again';
+result.innerHTML = '❌ Could not get location: ' + error.message;
+result.style.display = 'block';
+result.style.background = '#fef2f2';
+result.style.color = '#dc2626';
+},
+{ enableHighAccuracy: true, timeout: 10000 }
+);
+} else {
+btn.innerHTML = '❌ Not Supported';
+result.innerHTML = 'Geolocation is not supported by your browser';
+result.style.display = 'block';
+}
+}
+
+// Form submission
+document.getElementById('workflow-form').addEventListener('submit', async (e) => {
+e.preventDefault();
+
+const btn = document.getElementById('submit-btn');
+btn.disabled = true;
+btn.innerHTML = '<span class="spinner"></span> Submitting...';
+
+const formData = new FormData(e.target);
+
+try {
+const response = await fetch('/api/v1/voice-workflow/submit/{{ session_id }}', {
+method: 'POST',
+body: formData
+});
+
+const result = await response.json();
+
+if (response.ok && result.success) {
+document.getElementById('form-container').style.display = 'none';
+document.getElementById('success-container').style.display = 'block';
+} else {
+btn.disabled = false;
+btn.innerHTML = 'Submit Information';
+alert('Error: ' + (result.message || 'Submission failed'));
+}
+} catch (error) {
+btn.disabled = false;
+btn.innerHTML = 'Submit Information';
+alert('Error submitting form. Please try again.');
+console.error('Submission error:', error);
+}
+});
+{% endblock %}
