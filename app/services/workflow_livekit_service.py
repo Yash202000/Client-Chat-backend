@@ -39,40 +39,43 @@ async def create_room_on_server(room_name: str, metadata_json: str) -> bool:
     """
     Actually create the room on the LiveKit server.
     This is required for agent dispatch to work.
-    
+
     Args:
         room_name: Name of the room to create
         metadata_json: JSON string of room metadata
-        
+
     Returns:
         True if room was created successfully
     """
     if not all([LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
         logger.error("LiveKit credentials not configured")
         return False
-    
+
     try:
-        # Create room service client
+        # Create LiveKit API client (new SDK pattern)
         livekit_host = LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://")
-        room_service = api.RoomService(
+        lk_api = api.LiveKitAPI(
             livekit_host,
             LIVEKIT_API_KEY,
             LIVEKIT_API_SECRET
         )
-        
+
         # Create the room with metadata
-        room = await room_service.create_room(
-            api.CreateRoomRequest(
+        from livekit.api import CreateRoomRequest
+        room = await lk_api.room.create_room(
+            CreateRoomRequest(
                 name=room_name,
                 metadata=metadata_json,
                 empty_timeout=600,  # 10 minutes
                 max_participants=10
             )
         )
-        
+
+        await lk_api.aclose()
+
         logger.info(f"Created room on LiveKit server: {room.name} (sid: {room.sid})")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to create room on LiveKit server: {e}")
         # Room might already exist, which is fine
@@ -186,48 +189,51 @@ async def send_data_message_to_room(
 ) -> bool:
     """
     Send a data message to all participants in a room.
-    
+
     This is used to notify the agent when a form is submitted.
-    
+
     Args:
         room_name: LiveKit room name
         message_type: Type of message (e.g., 'FORM_SUBMITTED')
         data: Message payload
-        
+
     Returns:
         True if sent successfully
     """
     if not all([LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
         logger.error("LiveKit credentials not configured")
         return False
-    
+
     try:
-        # Create room service client
-        room_service = api.RoomService(
+        # Create LiveKit API client (new SDK pattern)
+        lk_api = api.LiveKitAPI(
             LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://"),
             LIVEKIT_API_KEY,
             LIVEKIT_API_SECRET
         )
-        
+
         # Prepare the message
         message = {
             "type": message_type,
             "timestamp": int(time.time()),
             **data
         }
-        
+
         # Send data to the room
-        await room_service.send_data(
-            api.SendDataRequest(
+        from livekit.api import SendDataRequest, DataPacketKind
+        await lk_api.room.send_data(
+            SendDataRequest(
                 room=room_name,
                 data=json.dumps(message).encode(),
-                kind=api.DataPacketKind.RELIABLE
+                kind=DataPacketKind.KIND_RELIABLE
             )
         )
-        
+
+        await lk_api.aclose()
+
         logger.info(f"Sent {message_type} message to room {room_name}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send data message to room {room_name}: {e}")
         return False

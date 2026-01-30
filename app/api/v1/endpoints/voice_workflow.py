@@ -170,18 +170,25 @@ async def get_session_data(session_id: str):
     Get session data including workflow JSON.
     Used by the agent as a fallback when room metadata is empty.
     """
-    session = voice_workflow_session_service.get_session(session_id)
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found or expired")
-    
-    return {
-        "session_id": session_id,
-        "room_name": session.get("room_name"),
-        "workflow_json": session.get("workflow_json"),
-        "voice_data": session.get("voice_data", {}),
-        "status": session.get("status", "active")
-    }
+    try:
+        session = voice_workflow_session_service.get_session(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found or expired")
+        
+        # PendingFormData is a Pydantic model, access attributes directly
+        return {
+            "session_id": session_id,
+            "room_name": session.room_name,
+            "workflow_json": session.workflow_json,
+            "voice_data": session.voice_captured_data if hasattr(session, 'voice_captured_data') else {},
+            "status": session.status if hasattr(session, 'status') else "active"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/step", response_model=WorkflowStepResponse)

@@ -16,9 +16,12 @@ import asyncio
 import json
 import logging
 import os
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Optional
 
 import httpx
+import requests
+from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
@@ -58,6 +61,234 @@ LLM_MODEL = os.getenv("AGENT_LLM_MODEL", "gpt-4o-mini")
 TTS_VOICE = os.getenv("AGENT_TTS_VOICE", "alloy")
 STT_LANGUAGE = os.getenv("AGENT_STT_LANGUAGE", "en")
 VAD_ENABLED = os.getenv("AGENT_VAD_ENABLED", "true").lower() == "true"
+
+# Automax3 API configuration
+AUTOMAX3_BASEURL = os.getenv("AUTOMAX3_BASEURL", "https://automax.discretal.com")
+AUTOMAX3_USERNAME = os.getenv("AUTOMAX3_USERNAME", "430410420708900865")
+AUTOMAX3_PASSWORD = os.getenv("AUTOMAX3_PASSWORD", "eCOALLWlcunoKl3Y2yHEfSS7h1swZvrXBCOPnPGS0WboqSkzZ1BaR9R3x2dPkBV0")
+
+
+class Automax3Client:
+    """Client for Automax3 API - handles authentication and incident creation."""
+
+    def __init__(self):
+        self.base_url = AUTOMAX3_BASEURL
+        self.userid = AUTOMAX3_USERNAME
+        self.password = AUTOMAX3_PASSWORD
+
+        self.token: Optional[str] = None
+        self.id_token: Optional[str] = None
+
+        self.common_headers = {
+            'Content-Type': "application/json",
+        }
+
+        # Cache for classifications and locations
+        self._classifications_cache: Optional[list] = None
+        self._locations_cache: Optional[list] = None
+
+    def client_login(self) -> Optional[dict]:
+        """Authenticate with Automax3 API using client credentials."""
+        url = f'{self.base_url}/auth/oauth2/token'
+
+        data = {
+            'grant_type': 'client_credentials',
+            'scope': 'profile api'
+        }
+
+        auth = HTTPBasicAuth(self.userid, self.password)
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+
+        try:
+            response = requests.post(url, data=data, headers=headers, auth=auth)
+
+            if response.status_code == 200:
+                response_data = response.json()
+
+                self.token = response_data['access_token']
+                self.id_token = response_data['id_token']
+
+                logger.info("Automax3: Access token obtained successfully!")
+                return response_data
+            else:
+                logger.error(f'Automax3 login error: {response.status_code} {response.text}')
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Automax3 login request failed: {e}')
+            return None
+
+    def ensure_authenticated(self) -> bool:
+        """Ensure we have a valid token, login if necessary."""
+        if not self.token:
+            result = self.client_login()
+            return result is not None
+        return True
+
+    def get_classifications(self) -> Optional[list]:
+        """Get classification hierarchy from Automax3."""
+        if self._classifications_cache:
+            return self._classifications_cache
+
+        url = f'{self.base_url}/api/classifications/hierarchy'
+
+        if not self.ensure_authenticated():
+            return None
+
+        self.common_headers['Authorization'] = f"Bearer {self.token}"
+
+        try:
+            response = requests.get(url, headers=self.common_headers)
+            if response.status_code == 200:
+                data = response.json()
+                self._classifications_cache = data.get('data', {}).get('hierarchy', [])
+                return self._classifications_cache
+            else:
+                logger.error(f'Automax3 get_classifications error: {response.status_code}')
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Automax3 get_classifications failed: {e}')
+            return None
+
+    def get_locations(self) -> Optional[list]:
+        """Get location hierarchy from Automax3."""
+        if self._locations_cache:
+            return self._locations_cache
+
+        url = f'{self.base_url}/api/locations/hierarchy'
+
+        if not self.ensure_authenticated():
+            return None
+
+        self.common_headers['Authorization'] = f"Bearer {self.token}"
+
+        try:
+            response = requests.get(url, headers=self.common_headers)
+            if response.status_code == 200:
+                data = response.json()
+                self._locations_cache = data.get('data', {}).get('hierarchy', [])
+                return self._locations_cache
+            else:
+                logger.error(f'Automax3 get_locations error: {response.status_code}')
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Automax3 get_locations failed: {e}')
+            return None
+
+    def get_classification_id_by_name(self, name: str) -> Optional[str]:
+        """Get classification ID by name."""
+        classifications = self.get_classifications()
+        if not classifications:
+            return None
+
+        for classification in classifications:
+            if classification.get('en_name', '').lower() == name.lower():
+                return classification.get('id')
+        return None
+
+    def get_location_id_by_name(self, name: str) -> Optional[str]:
+        """Get location ID by name."""
+        locations = self.get_locations()
+        if not locations:
+            return None
+
+        for location in locations:
+            if location.get('en_name', '').lower() == name.lower():
+                return location.get('id')
+        return None
+
+    def get_classification_names(self) -> list:
+        """Get list of available classification names."""
+        classifications = self.get_classifications()
+        if not classifications:
+            return []
+        return [c.get('en_name', '') for c in classifications if c.get('en_name')]
+
+    def get_location_names(self) -> list:
+        """Get list of available location names."""
+        locations = self.get_locations()
+        if not locations:
+            return []
+        return [loc.get('en_name', '') for loc in locations if loc.get('en_name')]
+
+    def create_incident(
+        self,
+        caller_name: str,
+        classification_id: str,
+        location_id: str,
+        attachment_id: str = "",
+        coordinates: dict = None,
+        description: str = "",
+        criticality: str = "LOW"
+    ) -> Optional[dict]:
+        """Create an incident in Automax3."""
+        url = f'{self.base_url}/api/compose/namespace/431842611944685569/module/431842611943440385/record/'
+
+        if not self.ensure_authenticated():
+            return None
+
+        self.common_headers['Authorization'] = f"Bearer {self.token}"
+
+        coordinates_str = json.dumps({"coordinates": coordinates}) if coordinates else ""
+
+        body = {
+            "meta": {},
+            "records": [],
+            "values": [
+                {"name": "Channel", "value": "Chatbot"},
+                {"name": "Criticality", "value": criticality},
+                {"name": "Caller_name", "value": caller_name},
+                {"name": "Last_call_date", "value": datetime.now().isoformat() + "Z"},
+                {"name": "National_ID", "value": ""},
+                {"name": "Mobile_number", "value": ""},
+                {"name": "Classification", "value": classification_id},
+                {"name": "Incident_reason", "value": ""},
+                {"name": "Incident_Description", "value": description or "Incident created via voice agent"},
+                {"name": "Map", "value": coordinates_str},
+                {"name": "Primary_Location", "value": location_id},
+                {"name": "District", "value": ""},
+                {"name": "Street", "value": ""},
+                {"name": "Status", "value": ""},
+                {"name": "Assigned_To", "value": "425635139776282625"},
+                {"name": "Comments", "value": json.dumps({
+                    'created': datetime.now().isoformat() + "Z",
+                    'comment': 'Created via voice workflow agent',
+                    'author': 'voice-agent',
+                    'name': 'Voice Agent'
+                })},
+                {"name": "Attachments", "value": attachment_id}
+            ]
+        }
+
+        try:
+            response = requests.post(url, json=body, headers=self.common_headers)
+            logger.info(f"Automax3 create_incident response: {response.status_code}")
+
+            if response.status_code == 200:
+                response_data = response.json()
+                logger.info("Automax3: Incident created successfully!")
+                return response_data
+            else:
+                logger.error(f'Automax3 create_incident error: {response.status_code} {response.text}')
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Automax3 create_incident failed: {e}')
+            return None
+
+
+# Global Automax3 client instance
+_automax_client: Optional[Automax3Client] = None
+
+
+def get_automax_client() -> Automax3Client:
+    """Get or create Automax3 client instance."""
+    global _automax_client
+    if _automax_client is None:
+        _automax_client = Automax3Client()
+        _automax_client.client_login()
+    return _automax_client
 
 
 class WorkflowContext:
@@ -186,6 +417,7 @@ class WorkflowContext:
                     "requires_form": step.get("requires_form", False)
                 })
         return variables
+    
     def _build_workflow_graph(self) -> str:
         """Build a readable workflow graph using BFS traversal."""
         from collections import defaultdict, deque
@@ -297,46 +529,39 @@ class WorkflowContext:
         return self.workflow.get("edges", [])
         
     def generate_system_prompt(self) -> str:
-        """Generate a system prompt based on the workflow."""
-        # Build services text
-        services_text = ""
-        if self.services:
-            services_text = f"\n\nYou can help with: {', '.join(self.services)}"
-        
-        # Build workflow graph
-        workflow_graph = self._build_workflow_graph()
-        
-        # Build variables list for structured extraction
-        variables = self.get_variables_to_collect()
-        var_list = "\n".join([f"  - ${v['name']}: {'📎 (requires form)' if v['requires_form'] else '🎤 (voice)'}" for v in variables])
-        
-        base_prompt = f"""You are a helpful voice assistant executing the "{self.workflow_name}" workflow.{services_text}
-
-CONVERSATION FLOW (follow this path):
-{workflow_graph}
-
-VARIABLES TO COLLECT:
-{var_list}
+        """Generate a system prompt for EPM 940 assistant."""
+        base_prompt = """You are a helpful voice assistant for EPM 940.
 
 YOUR JOB:
-1. Follow the CONVERSATION FLOW above step by step
-2. After user answers each question, call store_collected_data with the variable name and value
-3. For 📎 FILE or 📍 LOCATION steps: call request_form_input, then keep asking user to fill the form
-4. For ⚙️ EXECUTE steps: say "Let me process that" and call execute_workflow_step
-5. Move to the next step after each action
+- Answer user questions and assist with their requests
+- Keep responses SHORT and conversational (this is voice)
+- Be friendly and professional
+
+
+When the user wants to report an incident, you MUST collect following information BEFORE calling function "create_automax_incident":
+1. Ask for caller's name (who is reporting)
+2. Call get_available_classifications() to see all available classification options, and prompt the available options to user, then ask user to choose one
+3. Call get_available_locations() to see all available location options, and prompt the available options to user, then ask user to choose one
+4. Ask for description of the incident (optional but recommended)
+5. Ask about criticality: LOW, MEDIUM, HIGH, or CRITICAL (default is LOW)
+6. If attachments are needed, use request_form_input first to get the attachment_id
+7. If location coordinates are needed, use request_form_input for GPS
+
+Once all required data is collected, call create_automax_incident with the collected information.
 
 TOOL USAGE:
-- store_collected_data({{"variable_name": "value"}}) - ALWAYS call after user answers
+- store_collected_data({"variable_name": "value"}) - Store user-provided data
 - request_form_input("attachment", "var_name") - When file/location needed
-- execute_workflow_step("step_id") - For processing steps
+- get_available_classifications() - Get incident classification options
+- get_available_locations() - Get location options
+- create_automax_incident(...) - Create an incident after collecting all required info
 
 RULES:
-- Follow the flow EXACTLY as shown above
 - Keep responses SHORT (this is voice)
-- Say what the 💬 SAY nodes tell you to say
-- Ask what the ❓ ASK nodes tell you to ask
+- Be helpful and conversational
+- ALWAYS collect required data before creating an incident
 """
-        
+
         return base_prompt
 
 
@@ -549,6 +774,138 @@ async def execute_workflow_step(step_id: str, step_type: str = "code") -> str:
         return f"ERROR: {str(e)}"
 
 
+# ============================================================================
+# Automax3 API Function Tools
+# ============================================================================
+
+@llm.function_tool()
+async def get_available_classifications() -> str:
+    """
+    Get list of available incident classifications from Automax3.
+    Call this to know what classification options are available when creating an incident.
+
+    Returns:
+        List of available classification names
+    """
+    try:
+        client = get_automax_client()
+        classifications = client.get_classification_names()
+
+        if classifications:
+            return f"CLASSIFICATIONS_AVAILABLE: {', '.join(classifications)}"
+        else:
+            return "CLASSIFICATIONS_ERROR: Could not retrieve classifications"
+    except Exception as e:
+        logger.error(f"Get classifications failed: {e}")
+        return f"ERROR: {str(e)}"
+
+
+@llm.function_tool()
+async def get_available_locations() -> str:
+    """
+    Get list of available locations from Automax3.
+    Call this to know what location options are available when creating an incident.
+
+    Returns:
+        List of available location names
+    """
+    try:
+        client = get_automax_client()
+        locations = client.get_location_names()
+
+        if locations:
+            return f"LOCATIONS_AVAILABLE: {', '.join(locations)}"
+        else:
+            return "LOCATIONS_ERROR: Could not retrieve locations"
+    except Exception as e:
+        logger.error(f"Get locations failed: {e}")
+        return f"ERROR: {str(e)}"
+
+
+@llm.function_tool()
+async def create_automax_incident(
+    caller_name: str,
+    classification_name: str,
+    location_name: str,
+    description: str = "",
+    attachment_id: str = "",
+    coordinates: str = "",
+    criticality: str = "LOW"
+) -> str:
+    """
+    Create an incident in Automax3 system. You MUST collect all required information
+    from the user BEFORE calling this function:
+
+    Required information to collect from user:
+    1. caller_name - The name of the person reporting the incident
+    2. classification_name - Type of incident (call get_available_classifications first)
+    3. location_name - Where the incident occurred (call get_available_locations first)
+
+    Optional information:
+    4. description - Details about the incident
+    5. attachment_id - ID of any attached files (from form submission)
+    6. coordinates - GPS coordinates as JSON string, e.g. '{"lat": 12.34, "lng": 56.78}'
+    7. criticality - Severity level: "LOW", "MEDIUM", "HIGH", or "CRITICAL" (default: LOW)
+
+    Args:
+        caller_name: Name of the person reporting
+        classification_name: Classification type name (must match available classifications)
+        location_name: Location name (must match available locations)
+        description: Incident description
+        attachment_id: ID of attached file if any
+        coordinates: GPS coordinates as JSON string
+        criticality: Severity level
+
+    Returns:
+        Success message with incident ID or error message
+    """
+    logger.info(f"Creating Automax incident: caller={caller_name}, classification={classification_name}, location={location_name}")
+
+    try:
+        client = get_automax_client()
+
+        # Get classification ID by name
+        classification_id = client.get_classification_id_by_name(classification_name)
+        if not classification_id:
+            available = client.get_classification_names()
+            return f"INCIDENT_ERROR: Classification '{classification_name}' not found. Available: {', '.join(available[:10])}"
+
+        # Get location ID by name
+        location_id = client.get_location_id_by_name(location_name)
+        if not location_id:
+            available = client.get_location_names()
+            return f"INCIDENT_ERROR: Location '{location_name}' not found. Available: {', '.join(available[:10])}"
+
+        # Parse coordinates if provided
+        coords_dict = None
+        if coordinates:
+            try:
+                coords_dict = json.loads(coordinates)
+            except json.JSONDecodeError:
+                logger.warning(f"Could not parse coordinates: {coordinates}")
+
+        # Create the incident
+        result = client.create_incident(
+            caller_name=caller_name,
+            classification_id=classification_id,
+            location_id=location_id,
+            attachment_id=attachment_id,
+            coordinates=coords_dict,
+            description=description,
+            criticality=criticality
+        )
+
+        if result:
+            record_id = result.get('response', {}).get('recordID', 'unknown')
+            return f"INCIDENT_CREATED: Successfully created incident #{record_id}. Tell the user their incident has been registered and they will be contacted soon."
+        else:
+            return "INCIDENT_ERROR: Failed to create incident in Automax3. Please try again."
+
+    except Exception as e:
+        logger.error(f"Create incident failed: {e}")
+        return f"INCIDENT_ERROR: {str(e)}"
+
+
 class WorkflowVoiceAssistant(Agent):
     """Voice assistant that executes workflows."""
     
@@ -688,19 +1045,10 @@ async def entrypoint(ctx: JobContext):
         )
         logger.info("Agent session started successfully")
         
-        # Generate greeting with services list
-        services = workflow_ctx.services
-        if services:
-            if len(services) > 1:
-                services_text = ", ".join(services[:-1]) + f" or {services[-1]}"
-            else:
-                services_text = services[0]
-            greeting = f"Hello! Welcome to {workflow_ctx.workflow_name}. I can help you with {services_text}. What would you like to do today?"
-        else:
-            greeting = workflow_ctx.greeting_message or \
-                f"Hello! I'm here to help you with {workflow_ctx.workflow_name}. How can I assist you today?"
-        
-        logger.info(f"Services extracted: {services}")
+        # Fixed greeting for EPM 940
+        greeting = "Hello, welcome to EPM 940. How can I assist you today?"
+
+        logger.info("Using fixed EPM 940 greeting")
         
         await session.generate_reply(
             instructions=greeting,
@@ -716,10 +1064,22 @@ async def entrypoint(ctx: JobContext):
 def prewarm(proc: JobProcess):
     """Prewarm function to load models before the agent starts."""
     logger.info("Prewarming workflow agent models...")
-    
+
     if VAD_ENABLED:
         proc.userdata["vad"] = silero.VAD.load()
-    
+
+    # Initialize Automax3 client and authenticate
+    logger.info("Initializing Automax3 client...")
+    try:
+        automax_client = get_automax_client()
+        # Pre-cache classifications and locations
+        classifications = automax_client.get_classifications()
+        locations = automax_client.get_locations()
+        logger.info(f"Automax3: Loaded {len(classifications) if classifications else 0} classifications, "
+                   f"{len(locations) if locations else 0} locations")
+    except Exception as e:
+        logger.warning(f"Automax3 prewarm failed (will retry on first use): {e}")
+
     logger.info("Prewarm complete")
 
 
