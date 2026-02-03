@@ -78,16 +78,15 @@ async def start_voice_workflow_session(request: StartVoiceWorkflowRequest):
                             return {}
                     return vs
                 
-                # First log ALL active workflows to debug
                 all_workflows = db.query(models_workflow.Workflow).filter(
                     models_workflow.Workflow.is_active == True
                 ).all()
-                
-                logger.info(f"[VOICE WORKFLOW] Found {len(all_workflows)} active workflows in DB:")
-                for w in all_workflows:
-                    vs = parse_visual_steps(w.visual_steps)
-                    vs_nodes = len(vs.get('nodes', [])) if vs else 0
-                    logger.info(f"  - id={w.id}, name={w.name}, visual_steps_nodes={vs_nodes}")
+
+                # logger.info(f"[VOICE WORKFLOW] Found {len(all_workflows)} active workflows in DB:")
+                # for w in all_workflows:
+                #     vs = parse_visual_steps(w.visual_steps)
+                #     vs_nodes = len(vs.get('nodes', [])) if vs else 0
+                #     logger.info(f"  - id={w.id}, name={w.name}, visual_steps_nodes={vs_nodes}")
                 
                 # Find workflow with visual_steps that has nodes (the real workflow, not default)
                 workflow = None
@@ -115,7 +114,7 @@ async def start_voice_workflow_session(request: StartVoiceWorkflowRequest):
                         "nodes": visual_steps.get("nodes", []),
                         "edges": visual_steps.get("edges", [])
                     }
-                    logger.info(f"[VOICE WORKFLOW] Final workflow: {workflow.name} with {len(visual_steps.get('nodes', []))} nodes")
+                    # logger.info(f"[VOICE WORKFLOW] Final workflow: {workflow.name} with {len(visual_steps.get('nodes', []))} nodes")
                 else:
                     logger.warning(f"[VOICE WORKFLOW] No active workflow found for agent {request.agent_id}")
                     raise ValueError(f"No active workflow found for agent {request.agent_id}")
@@ -281,68 +280,27 @@ async def handle_workflow_step(request: WorkflowStepRequest):
             url=form_url
         )
     
-    # ==== NEW: execute_step - Execute workflow code/HTTP nodes ====
+    # ==== NEW: execute_step - Voice workflow step acknowledgment ====
+    # NOTE: Voice workflows do NOT use the shared WorkflowExecutionService to avoid
+    # state pollution with chat workflows. All workflow logic is handled by the
+    # voice agent's LLM function tools (in workflow_voice_agent.py).
     elif action == "execute_step":
         step_id = data.get("step_id", "")
         step_type = data.get("step_type", "code")
         
-        logger.info(f"Executing step {step_id} (type: {step_type})")
+        logger.info(f"Voice workflow step acknowledged: {step_id} (type: {step_type})")
         
-        try:
-            # Import workflow execution service
-            from app.services.workflow_execution_service import WorkflowExecutionService
-            from app.core.database import SessionLocal
-            
-            db = SessionLocal()
-            try:
-                workflow_exec = WorkflowExecutionService(db)
-                
-                # Get node data from workflow
-                nodes = session.workflow_json.get("visual_steps", {}).get("nodes", [])
-                node_data = None
-                for node in nodes:
-                    if node.get("id") == step_id:
-                        node_data = node.get("data", {})
-                        break
-                
-                if not node_data:
-                    return WorkflowStepResponse(
-                        status="error",
-                        message=f"Step {step_id} not found in workflow"
-                    )
-                
-                # Build context from collected data
-                context = session.voice_captured_data.copy()
-                results = {}
-                
-                # Execute based on step type
-                if step_type == "code":
-                    result = await workflow_exec._execute_code_node(node_data, context, results)
-                elif step_type == "http_request":
-                    result = await workflow_exec._execute_http_request_node(node_data, context, results)
-                else:
-                    result = {"output": "Step type not supported"}
-                
-                # Store result in session
-                voice_workflow_session_service.update_session(
-                    session_id=request.session_id,
-                    voice_data={step_id: result}
-                )
-                
-                return WorkflowStepResponse(
-                    status="success",
-                    message="Step executed successfully",
-                    data=result
-                )
-            finally:
-                db.close()
-                
-        except Exception as e:
-            logger.error(f"Step execution failed: {e}")
-            return WorkflowStepResponse(
-                status="error",
-                message=f"Step execution failed: {str(e)}"
-            )
+        # Store acknowledgment in voice-specific session (isolated from chat sessions)
+        voice_workflow_session_service.update_session(
+            session_id=request.session_id,
+            voice_data={f"step_{step_id}_acknowledged": True}
+        )
+        
+        return WorkflowStepResponse(
+            status="success",
+            message="Step acknowledged - voice workflow uses agent-side execution",
+            data={"step_id": step_id, "note": "Voice workflow steps are executed by the voice agent"}
+        )
     
     # ==== Legacy: update_data ====
     elif action == "update_data":
@@ -535,6 +493,107 @@ async def submit_form(
     return {
         "success": True,
         "message": "Form submitted successfully",
+        "session_id": session_id
+    }
+
+
+@router.post("/upload-data")
+async def upload_incident_data(
+    request: Request,
+    location_ai: str = Form(None),
+    caller_name: str = Form(None),
+    classification: str = Form(None),
+    description: str = Form(None),
+    criticality: str = Form(None),
+    latitude: str = Form(None),
+    longitude: str = Form(None),
+    session_id: str = Form(None),
+    conversation: str = Form(None),
+    file1: UploadFile = File(None)
+):
+    """
+    Endpoint for the LiveKitPopupForm to submit all gathered data.
+    Logs the conversation, AI data, manual location, and saves the file.
+    """
+    logger.info("="*60)
+    logger.info("RECEIVED DATA FROM POPUP FORM")
+    logger.info(f"Session ID: {session_id}")
+    
+    if conversation:
+        logger.info("--- CONVERSATION TRANSCRIPT ---")
+        logger.info(conversation)
+        logger.info("-------------------------------")
+
+    # Log AI-extracted fields
+    logger.info("--- AI EXTRACTED DATA ---")
+    logger.info(f"Caller Name: {caller_name}")
+    logger.info(f"Classification: {classification}")
+    logger.info(f"AI Location Hint: {location_ai}")
+    logger.info(f"Description: {description}")
+    logger.info(f"Criticality: {criticality}")
+    
+    # Log Manual Location
+    if latitude and longitude:
+        logger.info(f"--- MANUAL LOCATION (MAP) ---")
+        logger.info(f"Latitude: {latitude}")
+        logger.info(f"Longitude: {longitude}")
+    
+    upload_dir = None
+    if session_id:
+        upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", session_id)
+        os.makedirs(upload_dir, exist_ok=True)
+
+    async def save_upload(file_obj, label):
+        if not file_obj or not upload_dir:
+            return
+        file_path = os.path.join(upload_dir, file_obj.filename)
+        content = await file_obj.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+        logger.info(f"{label} saved: {file_obj.filename} -> {file_path}")
+
+    await save_upload(file1, "File Upload")
+
+    logger.info("="*60)
+
+    # If we have a session ID, we can update the session status and notify the agent
+    if session_id:
+        try:
+            processed_data = {
+                "location": location_ai, # Fix: Use the correct variable name
+                "caller_name": caller_name,
+                "classification": classification,
+                "description": description,
+                "criticality": criticality,
+                "latitude": latitude,    # New: Save manual coordinates
+                "longitude": longitude,  # New: Save manual coordinates
+                "has_conversation": bool(conversation)
+            }
+            
+            voice_workflow_session_service.update_session(
+                session_id=session_id,
+                form_data=processed_data,
+                status="form_submitted"
+            )
+            logger.info(f"Successfully updated session {session_id} in database")
+            
+            # Send data message to LiveKit room to notify agent
+            session = voice_workflow_session_service.get_session(session_id)
+            if session:
+                await workflow_livekit_service.send_data_message_to_room(
+                    room_name=session.room_name,
+                    message_type="FORM_DONE",
+                    data={
+                        "session_id": session_id,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Session update/notification failed: {e}")
+    
+    return {
+        "success": True,
+        "message": "Data and files received successfully",
         "session_id": session_id
     }
 

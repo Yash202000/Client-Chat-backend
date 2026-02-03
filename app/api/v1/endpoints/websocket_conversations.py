@@ -1310,6 +1310,8 @@ async def public_websocket_endpoint(
                                     await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
 
                                     # Generate TTS for chat_and_voice mode
+                                    # Track if TTS was already sent to avoid duplicate audio
+                                    tts_already_sent = False
                                     if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
                                         try:
                                             # Get agent's voice settings
@@ -1332,6 +1334,7 @@ async def public_websocket_endpoint(
                                             await tts_service.close()
                                             # Send audio_end marker
                                             await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                            tts_already_sent = True
                                             print(f"[websocket_conversations] TTS audio sent for chat_and_voice mode in session: {session_id}")
                                         except Exception as tts_error:
                                             print(f"[websocket_conversations] TTS error in chat_and_voice mode: {tts_error}")
@@ -1348,6 +1351,10 @@ async def public_websocket_endpoint(
                     if not execution_result:
                         continue
 
+                    # Track if TTS was already sent (from LLM response above)
+                    # This prevents duplicate TTS when workflow also generates a response
+                    tts_already_sent = locals().get('tts_already_sent', False)
+
                     # Handle execution result
                     if execution_result.get("status") == "completed":
                         agent_response_text = execution_result.get("response", "Workflow finished.")
@@ -1356,7 +1363,8 @@ async def public_websocket_endpoint(
                         await manager.broadcast_to_session(str(session_id), schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
 
                         # Generate TTS for chat_and_voice mode (workflow completed)
-                        if widget_settings and widget_settings.communication_mode == 'chat_and_voice':
+                        # Skip if TTS was already sent for the LLM response
+                        if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and not tts_already_sent:
                             try:
                                 tts_provider = agent.tts_provider or 'voice_engine'
                                 voice_id = agent.voice_id or 'default'
@@ -1374,6 +1382,7 @@ async def public_websocket_endpoint(
                                 await tts_service.close()
                                 # Send audio_end marker
                                 await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
+                                tts_already_sent = True
                                 print(f"[websocket_conversations] TTS audio sent for workflow completion in session: {session_id}")
                             except Exception as tts_error:
                                 print(f"[websocket_conversations] TTS error: {tts_error}")

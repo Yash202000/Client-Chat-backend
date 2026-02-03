@@ -34,7 +34,7 @@ def create_session(
     Create a new pending form session.
     
     Args:
-        session_id: Unique session identifier
+        session_id: Unique session identifier (will be prefixed with "vw_" for isolation)
         room_name: LiveKit room name
         workflow_json: The workflow being executed
         voice_captured_data: Data already captured via voice
@@ -43,6 +43,10 @@ def create_session(
     Returns:
         PendingFormData object
     """
+    # Ensure session ID has voice workflow prefix for isolation from chat sessions
+    if not session_id.startswith("vw_"):
+        session_id = f"vw_{session_id}"
+    
     with _lock:
         session = PendingFormData(
             session_id=session_id,
@@ -68,6 +72,10 @@ def get_session(session_id: str) -> Optional[PendingFormData]:
     Returns:
         PendingFormData if found, None otherwise
     """
+    # Ensure session ID has voice workflow prefix for isolation
+    if not session_id.startswith("vw_"):
+        session_id = f"vw_{session_id}"
+    
     with _lock:
         session = _pending_forms.get(session_id)
         if session:
@@ -97,6 +105,10 @@ def update_session(
     Returns:
         Updated PendingFormData if found
     """
+    # Ensure session ID has voice workflow prefix for isolation
+    if not session_id.startswith("vw_"):
+        session_id = f"vw_{session_id}"
+    
     with _lock:
         session = _pending_forms.get(session_id)
         if not session:
@@ -127,6 +139,10 @@ def complete_session(session_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Combined voice and form data
     """
+    # Ensure session ID has voice workflow prefix for isolation
+    if not session_id.startswith("vw_"):
+        session_id = f"vw_{session_id}"
+    
     with _lock:
         session = _pending_forms.get(session_id)
         if not session:
@@ -149,6 +165,10 @@ def delete_session(session_id: str) -> bool:
     Returns:
         True if deleted, False if not found
     """
+    # Ensure session ID has voice workflow prefix for isolation
+    if not session_id.startswith("vw_"):
+        session_id = f"vw_{session_id}"
+    
     with _lock:
         if session_id in _pending_forms:
             del _pending_forms[session_id]

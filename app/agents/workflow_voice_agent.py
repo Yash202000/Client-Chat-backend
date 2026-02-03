@@ -1,17 +1,3 @@
-"""
-Workflow Voice Agent - LiveKit agent for executing voice workflows.
-
-This agent:
-- Reads workflow JSON from room metadata on connection
-- Uses OpenAI LLM + Deepgram STT + OpenAI TTS
-- Implements BackendBridge tool for calling server endpoints
-- Listens for data_received events to resume after form submission
-- Generates system prompt dynamically from workflow context
-
-Run with:
-    python app/agents/workflow_voice_agent.py dev    # Development mode
-    python app/agents/workflow_voice_agent.py start  # Production mode
-"""
 import asyncio
 import json
 import logging
@@ -35,6 +21,7 @@ from livekit.agents import (
     cli,
     llm,
 )
+from livekit import rtc
 from livekit.plugins import openai, silero
 
 # Load environment variables
@@ -63,9 +50,9 @@ STT_LANGUAGE = os.getenv("AGENT_STT_LANGUAGE", "en")
 VAD_ENABLED = os.getenv("AGENT_VAD_ENABLED", "true").lower() == "true"
 
 # Automax3 API configuration
-AUTOMAX3_BASEURL = os.getenv("AUTOMAX3_BASEURL", "https://automax.discretal.com")
-AUTOMAX3_USERNAME = os.getenv("AUTOMAX3_USERNAME", "430410420708900865")
-AUTOMAX3_PASSWORD = os.getenv("AUTOMAX3_PASSWORD", "eCOALLWlcunoKl3Y2yHEfSS7h1swZvrXBCOPnPGS0WboqSkzZ1BaR9R3x2dPkBV0")
+AUTOMAX3_BASEURL = os.getenv("AUTOMAX3_BASEURL", "https://epmstg.automaxsw.com")
+AUTOMAX3_USERNAME = os.getenv("AUTOMAX3_USERNAME", "474062237214310401")
+AUTOMAX3_PASSWORD = os.getenv("AUTOMAX3_PASSWORD", "FFtq2lE3V3HrLO9DrjQAd6yxb2i4Xehq1zWRK3zELuewQOgOw0p59bx4bkun0jdI")
 
 
 class Automax3Client:
@@ -537,29 +524,39 @@ YOUR JOB:
 - Keep responses SHORT and conversational (this is voice)
 - Be friendly and professional
 
+INCIDENT CLASSIFICATION OPTIONS (hardcoded):
+1. Manholes
+2. Street Lights
+3. Street Furniture
+4. Potholes
+5. Barriers
 
-When the user wants to report an incident, you MUST collect following information BEFORE calling function "create_automax_incident":
+LOCATION OPTIONS (hardcoded):
+1. Dammam
+2. Dammam East
+3. Dammam West
+
+When the user wants to report an incident, follow this EXACT flow:
 1. Ask for caller's name (who is reporting)
-2. Call get_available_classifications() to see all available classification options, and prompt the available options to user, then ask user to choose one
-3. Call get_available_locations() to see all available location options, and prompt the available options to user, then ask user to choose one
-4. Ask for description of the incident (optional but recommended)
+2. Present the INCIDENT CLASSIFICATION OPTIONS above and ask which one describes their issue
+3. Present the LOCATION OPTIONS above and ask where the incident is located
+4. Ask for a brief description of the incident (optional but recommended)
 5. Ask about criticality: LOW, MEDIUM, HIGH, or CRITICAL (default is LOW)
-6. If attachments are needed, use request_form_input first to get the attachment_id
-7. If location coordinates are needed, use request_form_input for GPS
-
-Once all required data is collected, call create_automax_incident with the collected information.
+6. IMPORTANT: After collecting all information, follow these steps in order:
+   a. Immediately say your final summary and gooodbye:must say these exact words that is written after this inside inveerted comma and do not change a single letter "I've opened the report form for you. [Brief Summary]... Goodbye!"
+   b. Call terminate_call() to end the session.
 
 TOOL USAGE:
 - store_collected_data({"variable_name": "value"}) - Store user-provided data
-- request_form_input("attachment", "var_name") - When file/location needed
-- get_available_classifications() - Get incident classification options
-- get_available_locations() - Get location options
-- create_automax_incident(...) - Create an incident after collecting all required info
+- get_available_classifications() - Returns the hardcoded classification list
+- get_available_locations() - Returns the hardcoded location list
+- terminate_call() - MUST call this at the very end to end the conversation
+- create_automax_incident(...) - Only call this if you need to create the incident WITHOUT user form confirmation
 
 RULES:
 - Keep responses SHORT (this is voice)
 - Be helpful and conversational
-- ALWAYS collect required data before creating an incident
+- Wait for FORM_DONE signal before finalizing
 """
 
         return base_prompt
@@ -781,45 +778,156 @@ async def execute_workflow_step(step_id: str, step_type: str = "code") -> str:
 @llm.function_tool()
 async def get_available_classifications() -> str:
     """
-    Get list of available incident classifications from Automax3.
-    Call this to know what classification options are available when creating an incident.
+    Get list of available incident classifications.
+    These are the hardcoded classification options for incident reporting.
 
     Returns:
         List of available classification names
     """
-    try:
-        client = get_automax_client()
-        classifications = client.get_classification_names()
-
-        if classifications:
-            return f"CLASSIFICATIONS_AVAILABLE: {', '.join(classifications)}"
-        else:
-            return "CLASSIFICATIONS_ERROR: Could not retrieve classifications"
-    except Exception as e:
-        logger.error(f"Get classifications failed: {e}")
-        return f"ERROR: {str(e)}"
+    # Hardcoded classification options
+    classifications = ["Manholes", "Street Lights", "Street Furniture", "Potholes", "Barriers"]
+    logger.info(f"Returning hardcoded classifications: {classifications}")
+    return f"CLASSIFICATIONS_AVAILABLE: {', '.join(classifications)}"
 
 
 @llm.function_tool()
 async def get_available_locations() -> str:
     """
-    Get list of available locations from Automax3.
-    Call this to know what location options are available when creating an incident.
+    Get list of available locations.
+    These are the hardcoded location options for incident reporting.
 
     Returns:
         List of available location names
     """
-    try:
-        client = get_automax_client()
-        locations = client.get_location_names()
+    # Hardcoded location options
+    locations = ["Dammam", "Dammam East", "Dammam West"]
+    logger.info(f"Returning hardcoded locations: {locations}")
+    return f"LOCATIONS_AVAILABLE: {', '.join(locations)}"
 
-        if locations:
-            return f"LOCATIONS_AVAILABLE: {', '.join(locations)}"
+
+# Global reference to room and event for sending data messages and waiting
+_current_room = None
+_form_event = asyncio.Event()
+
+
+@llm.function_tool()
+async def trigger_form_popup(
+    caller_name: str,
+    classification: str,
+    location: str,
+    description: str = "",
+    criticality: str = "LOW"
+) -> str:
+    """
+    Trigger the popup form on the frontend to confirm incident details.
+    MUST call this after collecting all incident information from the user.
+    
+    This sends an OPEN_FORM signal to the frontend with all collected data.
+    The user will see a popup to review and confirm the incident details.
+    Wait for the form submission before creating the incident.
+    
+    Args:
+        caller_name: Name of the person reporting the incident
+        classification: Type of incident (Manholes, Street Lights, Street Furniture, Potholes, or Barriers)
+        location: Where the incident is (Dammam, Dammam East, or Dammam West)
+        description: Description of the incident
+        criticality: Severity level (LOW, MEDIUM, HIGH, or CRITICAL)
+    
+    Returns:
+        Status message indicating form was triggered
+    """
+    global _current_room, _form_event
+    
+    logger.info(f"Triggering form popup with data: caller={caller_name}, classification={classification}, location={location}")
+    
+    try:
+        # Clear the event before triggering
+        _form_event.clear()
+        
+        # SIMPLE TRIGGER: Send plain string as requested to ensure it opens
+        signal = "OPEN_FORM"
+        
+        if _current_room:
+            logger.info(f"Room state: {_current_room.name}, connected={_current_room.isconnected}")
+            if hasattr(_current_room, 'local_participant'):
+                # Prepare data payload
+                data_payload = {
+                    "type": "OPEN_FORM",
+                    "caller_name": caller_name or "N/A",
+                    "classification": classification or "N/A",
+                    "location": location or "N/A",
+                    "description": description or "N/A",
+                    "criticality": criticality or "LOW"
+                }
+                json_msg = json.dumps(data_payload).encode('utf-8')
+
+                # Send signal multiple times with slight delay to ensure delivery
+                remote_count = len(_current_room.remote_participants)
+                logger.info(f"Broadcasting OPEN_FORM (Topic: form_trigger) with payload: {data_payload} to {remote_count} participants")
+                
+                for i in range(3):
+                    # 1. Plain string (legacy/simple)
+                    await _current_room.local_participant.publish_data(
+                        signal.encode('utf-8'),
+                        kind=rtc.DataPacketKind.RELIABLE
+                    )
+                    # 2. Topic based (String)
+                    await _current_room.local_participant.publish_data(
+                        signal.encode('utf-8'),
+                        kind=rtc.DataPacketKind.RELIABLE,
+                        topic="form_trigger"
+                    )
+                    # 3. JSON payload (Topic-based now for better routing)
+                    await _current_room.local_participant.publish_data(
+                        json_msg,
+                        kind=rtc.DataPacketKind.RELIABLE,
+                        topic="form_trigger"
+                    )
+                    
+                    logger.info(f"Burst {i+1} sent (Plain, Topic, Full JSON with Topic)")
+                    await asyncio.sleep(0.4)
+                
+                return "FORM_SIGNAL_SENT: Signal sent with AI data payload. Proceeding to goodbye."
+            else:
+                logger.warning("Room object has no local_participant attribute")
         else:
-            return "LOCATIONS_ERROR: Could not retrieve locations"
+            logger.warning("Global _current_room is None - cannot send data message")
+            return "FORM_TRIGGERED: The incident details have been saved, but I couldn't open the popup."
+            
     except Exception as e:
-        logger.error(f"Get locations failed: {e}")
-        return f"ERROR: {str(e)}"
+        logger.error(f"Failed to trigger form popup: {e}")
+        return f"FORM_ERROR: Could not trigger the form. Error: {str(e)}."
+
+
+@llm.function_tool()
+async def terminate_call() -> str:
+    """
+    Disconnect the agent and terminate the voice call session.
+    Call this ONLY after saying goodbye to the user.
+    """
+    logger.info("Agent requested call termination. Waiting 3s for audio to clear...")
+    
+    async def delayed_disconnect():
+        # Final "Force" trigger to the frontend as a safeguard
+        if _current_room and hasattr(_current_room, 'local_participant'):
+            try:
+                msg = "OPEN_FORM".encode('utf-8')
+                await _current_room.local_participant.publish_data(msg, kind=rtc.DataPacketKind.RELIABLE)
+                await _current_room.local_participant.publish_data(msg, kind=rtc.DataPacketKind.RELIABLE, topic="form_trigger")
+                # Also JSON for good measure
+                json_msg = json.dumps({"type": "OPEN_FORM"}).encode('utf-8')
+                await _current_room.local_participant.publish_data(json_msg, kind=rtc.DataPacketKind.RELIABLE)
+                logger.info("FINAL signal burst sent before disconnect")
+            except Exception as e:
+                logger.warning(f"Final signal fail: {e}")
+                
+        await asyncio.sleep(3.0)
+        if _current_room:
+            logger.info("Closing room connection...")
+            await _current_room.disconnect()
+            
+    asyncio.create_task(delayed_disconnect())
+    return "CALL_TERMINATED: I'm ending the call now. You can finish the report on your screen. Goodbye!"
 
 
 @llm.function_tool()
@@ -929,7 +1037,7 @@ _current_session: AgentSession = None
 
 async def entrypoint(ctx: JobContext):
     """Main entrypoint for the workflow voice agent worker."""
-    global _current_session, _workflow_ctx
+    global _current_session, _workflow_ctx, _current_room
     
     try:
         logger.info(f"Workflow agent connecting to room: {ctx.room.name}")
@@ -937,6 +1045,9 @@ async def entrypoint(ctx: JobContext):
         # Connect to the room (audio only)
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
         logger.info("Connected to room successfully")
+        
+        # Set current room for tool reference
+        _current_room = ctx.room
         
         # Extract session_id from room name (format: voice_workflow_{session_id})
         room_name = ctx.room.name
@@ -958,7 +1069,7 @@ async def entrypoint(ctx: JobContext):
                     
                     if response.status_code == 200:
                         session_data = response.json()
-                        logger.info(f"[WORKFLOW FETCH] Session data keys: {list(session_data.keys())}")
+                        # logger.info(f"[WORKFLOW FETCH] Session data keys: {list(session_data.keys())}")
                         
                         if session_data.get("workflow_json"):
                             metadata["workflow"] = session_data["workflow_json"]
@@ -967,7 +1078,7 @@ async def entrypoint(ctx: JobContext):
                             wf_name = session_data["workflow_json"].get("name", "Unknown")
                             wf_nodes = len(session_data["workflow_json"].get("nodes", []))
                             vs_nodes = len(session_data["workflow_json"].get("visual_steps", {}).get("nodes", []))
-                            logger.info(f"[WORKFLOW FETCH] SUCCESS! Workflow: {wf_name}, root nodes: {wf_nodes}, visual_steps nodes: {vs_nodes}")
+                            # logger.info(f"[WORKFLOW FETCH] SUCCESS! Workflow: {wf_name}, root nodes: {wf_nodes}, visual_steps nodes: {vs_nodes}")
                     else:
                         logger.error(f"[WORKFLOW FETCH] Failed: {response.status_code} - {response.text[:200]}")
             except Exception as e:
@@ -980,15 +1091,15 @@ async def entrypoint(ctx: JobContext):
         _workflow_ctx = workflow_ctx  # Set global context for function tools
         
         # Detailed logging for debugging
-        logger.info(f"[AGENT DEBUG] Session ID: {workflow_ctx.session_id}")
-        logger.info(f"[AGENT DEBUG] Workflow Name: {workflow_ctx.workflow_name}")
-        logger.info(f"[AGENT DEBUG] Services extracted: {workflow_ctx.services}")
-        logger.info(f"[AGENT DEBUG] Input steps count: {len(workflow_ctx.input_steps)}")
-        logger.info(f"[AGENT DEBUG] Variables to collect: {workflow_ctx.get_variables_to_collect()}")
+        # logger.info(f"[AGENT DEBUG] Session ID: {workflow_ctx.session_id}")
+        # logger.info(f"[AGENT DEBUG] Workflow Name: {workflow_ctx.workflow_name}")
+        # logger.info(f"[AGENT DEBUG] Services extracted: {workflow_ctx.services}")
+        # logger.info(f"[AGENT DEBUG] Input steps count: {len(workflow_ctx.input_steps)}")
+        # logger.info(f"[AGENT DEBUG] Variables to collect: {workflow_ctx.get_variables_to_collect()}")
         
         # Log first part of system prompt
         system_prompt = workflow_ctx.generate_system_prompt()
-        logger.info(f"[AGENT DEBUG] System prompt (first 500 chars):\n{system_prompt[:500]}...")
+        # logger.info(f"[AGENT DEBUG] Session prompt (first 500 chars):\n{system_prompt[:500]}...")
         
         # Check for already-present participants first, then wait if none
         participants = list(ctx.room.remote_participants.values())
@@ -1006,24 +1117,48 @@ async def entrypoint(ctx: JobContext):
         )
         _current_session = session
         
+        # Set up connection state handlers for network resilience
+        @ctx.room.on("connection_state_changed")
+        def on_connection_state_changed(state):
+            """Monitor connection state for reconnection handling."""
+            logger.info(f"[CONNECTION] State changed to: {state}")
+            if str(state) == "ConnectionState.CONNECTED":
+                logger.info("[CONNECTION] Successfully connected/reconnected!")
+            elif str(state) == "ConnectionState.RECONNECTING":
+                logger.warning("[CONNECTION] Reconnecting due to network issues...")
+        
+        @ctx.room.on("reconnected")
+        def on_reconnected():
+            """Handle successful reconnection."""
+            logger.info("[CONNECTION] Successfully reconnected to room!")
+        
+        @ctx.room.on("disconnected")
+        def on_disconnected():
+            """Log disconnection event."""
+            logger.warning("[CONNECTION] Disconnected from room.")
+        
         # Set up data message listener for form completion
         @ctx.room.on("data_received")
         def on_data_received(data: bytes, participant, kind):
-            """Handle data messages from the backend (e.g., form submissions)."""
+            """Handle data messages from the frontend (e.g., form submissions)."""
             try:
-                payload = json.loads(data.decode())
-                message_type = payload.get("type", "")
+                decoded = data.decode().strip()
                 
-                logger.info(f"Received data message: {message_type}")
+                # Try JSON first
+                try:
+                    payload = json.loads(decoded)
+                    message_type = payload.get("type", "")
+                    if message_type in ["FORM_SUBMITTED", "FORM_DONE"]:
+                        logger.info(f"Form submission signal received (JSON): {message_type}")
+                        _form_event.set()
+                        return
+                except:
+                    pass
                 
-                if message_type == "FORM_SUBMITTED":
-                    # The form has been submitted, resume the conversation
-                    fields = payload.get("fields_submitted", [])
-                    message = f"I've received your submission with the following information: {', '.join(fields)}. Let me process this for you."
-                    
-                    asyncio.create_task(
-                        session.generate_reply(instructions=message)
-                    )
+                # Fallback to plain string
+                if decoded in ["FORM_DONE", "OPEN_FORM_DONE", "FORM_SUBMITTED"]:
+                    logger.info(f"Form submission signal received (String): {decoded}")
+                    _form_event.set()
                     
             except Exception as e:
                 logger.error(f"Error handling data message: {e}")
@@ -1032,18 +1167,35 @@ async def entrypoint(ctx: JobContext):
         agent = WorkflowVoiceAssistant(workflow_ctx)
         logger.info("Created WorkflowVoiceAssistant")
         
-        # Start the session with RoomIO options (REQUIRED for agent to be detected as active)
+        # Start the session with RoomIO options
         logger.info("Starting agent session with RoomIO...")
         await session.start(
             room=ctx.room,
             agent=agent,
-            room_input_options=RoomInputOptions(audio_enabled=True),
+            room_input_options=RoomInputOptions(
+                audio_enabled=True,
+                close_on_disconnect=False  # Keep agent alive on temporary network drops
+            ),
             room_output_options=RoomOutputOptions(
                 audio_enabled=True,
                 transcription_enabled=True
-            ),
+            )
         )
         logger.info("Agent session started successfully")
+
+        # Log AGENT speech (what the AI says)
+        @session.on("agent_speech_committed")
+        def on_agent_speech_committed(msg):
+            """Log agent speech to terminal for transcript visibility."""
+            content = getattr(msg, 'content', getattr(msg, 'text', str(msg)))
+            logger.info(f"[TRANSCRIPT] 🤖 AGENT: {content}")
+        
+        # Log USER speech (what the user says)
+        @session.on("user_speech_committed")
+        def on_user_speech_committed(msg):
+            """Log user speech to terminal for transcript visibility."""
+            content = getattr(msg, 'content', getattr(msg, 'text', str(msg)))
+            logger.info(f"[TRANSCRIPT] 👤 USER: {content}")
         
         # Fixed greeting for EPM 940
         greeting = "Hello, welcome to EPM 940. How can I assist you today?"
@@ -1069,16 +1221,16 @@ def prewarm(proc: JobProcess):
         proc.userdata["vad"] = silero.VAD.load()
 
     # Initialize Automax3 client and authenticate
-    logger.info("Initializing Automax3 client...")
-    try:
-        automax_client = get_automax_client()
-        # Pre-cache classifications and locations
-        classifications = automax_client.get_classifications()
-        locations = automax_client.get_locations()
-        logger.info(f"Automax3: Loaded {len(classifications) if classifications else 0} classifications, "
-                   f"{len(locations) if locations else 0} locations")
-    except Exception as e:
-        logger.warning(f"Automax3 prewarm failed (will retry on first use): {e}")
+    # logger.info("Initializing Automax3 client...")
+    # try:
+    #     automax_client = get_automax_client()
+    #     # Pre-cache classifications and locations
+    #     classifications = automax_client.get_classifications()
+    #     locations = automax_client.get_locations()
+    #     logger.info(f"Automax3: Loaded {len(classifications) if classifications else 0} classifications, "
+    #                f"{len(locations) if locations else 0} locations")
+    # except Exception as e:
+    #     logger.warning(f"Automax3 prewarm failed (will retry on first use): {e}")
 
     logger.info("Prewarm complete")
 
@@ -1132,3 +1284,5 @@ if __name__ == "__main__":
             api_secret=LIVEKIT_API_SECRET,
         ),
     )
+
+
