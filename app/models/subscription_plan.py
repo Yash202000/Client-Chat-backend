@@ -13,9 +13,8 @@ class SubscriptionPlan(Base):
     features = Column(String, nullable=True)  # JSON string or comma-separated list of features
     is_active = Column(Boolean, default=True)
 
-    # Stripe integration fields
-    stripe_price_id = Column(String, nullable=True, index=True)
-    stripe_product_id = Column(String, nullable=True, index=True)
+    # Razorpay integration fields
+    razorpay_plan_id = Column(String, nullable=True, index=True)
 
     # User limit and trial configuration
     default_user_limit = Column(Integer, default=5, nullable=False)

@@ -27,17 +27,17 @@ def get_subscription_by_company_id(db: Session, company_id: int) -> Optional[Com
     ).first()
 
 
-def get_subscription_by_stripe_customer_id(db: Session, stripe_customer_id: str) -> Optional[CompanySubscription]:
-    """Get subscription by Stripe customer ID."""
+def get_subscription_by_razorpay_customer_id(db: Session, razorpay_customer_id: str) -> Optional[CompanySubscription]:
+    """Get subscription by Razorpay customer ID."""
     return db.query(CompanySubscription).filter(
-        CompanySubscription.stripe_customer_id == stripe_customer_id
+        CompanySubscription.razorpay_customer_id == razorpay_customer_id
     ).first()
 
 
-def get_subscription_by_stripe_subscription_id(db: Session, stripe_subscription_id: str) -> Optional[CompanySubscription]:
-    """Get subscription by Stripe subscription ID."""
+def get_subscription_by_razorpay_subscription_id(db: Session, razorpay_subscription_id: str) -> Optional[CompanySubscription]:
+    """Get subscription by Razorpay subscription ID."""
     return db.query(CompanySubscription).filter(
-        CompanySubscription.stripe_subscription_id == stripe_subscription_id
+        CompanySubscription.razorpay_subscription_id == razorpay_subscription_id
     ).first()
 
 
@@ -80,15 +80,15 @@ def create_trial_subscription(
 def activate_subscription(
     db: Session,
     company_id: int,
-    stripe_customer_id: str,
-    stripe_subscription_id: str,
+    razorpay_customer_id: str,
+    razorpay_subscription_id: str,
     subscription_plan_id: int,
     current_period_start: datetime,
     current_period_end: datetime,
 ) -> CompanySubscription:
     """
-    Activate a subscription after successful checkout.
-    Updates the company subscription with Stripe details and sets status to active.
+    Activate a subscription after successful payment.
+    Updates the company subscription with Razorpay details and sets status to active.
     """
     subscription = get_subscription_by_company_id(db, company_id)
 
@@ -97,8 +97,8 @@ def activate_subscription(
         subscription = CompanySubscription(
             company_id=company_id,
             subscription_plan_id=subscription_plan_id,
-            stripe_customer_id=stripe_customer_id,
-            stripe_subscription_id=stripe_subscription_id,
+            razorpay_customer_id=razorpay_customer_id,
+            razorpay_subscription_id=razorpay_subscription_id,
             status="active",
             current_period_start=current_period_start,
             current_period_end=current_period_end,
@@ -107,8 +107,8 @@ def activate_subscription(
         db.add(subscription)
     else:
         # Update existing subscription
-        subscription.stripe_customer_id = stripe_customer_id
-        subscription.stripe_subscription_id = stripe_subscription_id
+        subscription.razorpay_customer_id = razorpay_customer_id
+        subscription.razorpay_subscription_id = razorpay_subscription_id
         subscription.subscription_plan_id = subscription_plan_id
         subscription.status = "active"
         subscription.current_period_start = current_period_start
@@ -202,7 +202,7 @@ def get_subscription_status(db: Session, company_id: int) -> SubscriptionStatus:
             current_user_count=current_user_count,
             users_remaining=5 - current_user_count,
             cancel_at_period_end=False,
-            stripe_customer_id=None,
+            razorpay_customer_id=None,
         )
 
     # Calculate trial days remaining
@@ -231,7 +231,7 @@ def get_subscription_status(db: Session, company_id: int) -> SubscriptionStatus:
         current_user_count=current_user_count,
         users_remaining=max(0, subscription.user_limit - current_user_count),
         cancel_at_period_end=subscription.cancel_at_period_end or False,
-        stripe_customer_id=subscription.stripe_customer_id,
+        razorpay_customer_id=subscription.razorpay_customer_id,
     )
 
 
@@ -251,15 +251,15 @@ def update_user_limit(db: Session, company_id: int, new_limit: int) -> CompanySu
 
 def handle_subscription_renewed(
     db: Session,
-    stripe_subscription_id: str,
+    razorpay_subscription_id: str,
     current_period_start: datetime,
     current_period_end: datetime,
 ) -> Optional[CompanySubscription]:
     """
-    Handle subscription renewal from Stripe webhook (invoice.paid).
+    Handle subscription renewal from Razorpay webhook.
     Updates the billing period dates.
     """
-    subscription = get_subscription_by_stripe_subscription_id(db, stripe_subscription_id)
+    subscription = get_subscription_by_razorpay_subscription_id(db, razorpay_subscription_id)
 
     if not subscription:
         return None
@@ -275,15 +275,15 @@ def handle_subscription_renewed(
 
 def handle_subscription_canceled(
     db: Session,
-    stripe_subscription_id: str,
+    razorpay_subscription_id: str,
     cancel_at_period_end: bool = False,
 ) -> Optional[CompanySubscription]:
     """
-    Handle subscription cancellation from Stripe webhook.
+    Handle subscription cancellation from Razorpay webhook.
     If cancel_at_period_end is True, just mark it as scheduled for cancellation.
     Otherwise, mark as canceled immediately.
     """
-    subscription = get_subscription_by_stripe_subscription_id(db, stripe_subscription_id)
+    subscription = get_subscription_by_razorpay_subscription_id(db, razorpay_subscription_id)
 
     if not subscription:
         return None
@@ -302,13 +302,13 @@ def handle_subscription_canceled(
 
 def handle_payment_failed(
     db: Session,
-    stripe_subscription_id: str,
+    razorpay_subscription_id: str,
 ) -> Optional[CompanySubscription]:
     """
-    Handle failed payment from Stripe webhook (invoice.payment_failed).
+    Handle failed payment from Razorpay webhook.
     Marks the subscription as past_due.
     """
-    subscription = get_subscription_by_stripe_subscription_id(db, stripe_subscription_id)
+    subscription = get_subscription_by_razorpay_subscription_id(db, razorpay_subscription_id)
 
     if not subscription:
         return None

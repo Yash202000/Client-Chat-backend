@@ -10,7 +10,7 @@ class CompanySubscription(Base):
     """
     Represents a company's subscription to a plan.
     Each company has one subscription that tracks:
-    - Stripe billing information
+    - Razorpay billing information
     - Subscription status (trial, active, past_due, canceled, expired)
     - User limits
     - Billing period dates
@@ -21,9 +21,9 @@ class CompanySubscription(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), unique=True, nullable=False)
     subscription_plan_id = Column(Integer, ForeignKey("subscription_plans.id"), nullable=True)
 
-    # Stripe identifiers
-    stripe_customer_id = Column(String, nullable=True, index=True)
-    stripe_subscription_id = Column(String, nullable=True, index=True)
+    # Razorpay identifiers
+    razorpay_customer_id = Column(String, nullable=True, index=True)
+    razorpay_subscription_id = Column(String, nullable=True, index=True)
 
     # Subscription status: trial, active, past_due, canceled, expired
     status = Column(String, default="trial", nullable=False)

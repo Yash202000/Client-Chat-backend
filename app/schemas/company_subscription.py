@@ -29,8 +29,8 @@ class CompanySubscriptionCreate(CompanySubscriptionBase):
 class CompanySubscriptionUpdate(BaseModel):
     """Schema for updating a company subscription."""
     subscription_plan_id: Optional[int] = None
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
+    razorpay_customer_id: Optional[str] = None
+    razorpay_subscription_id: Optional[str] = None
     status: Optional[str] = None
     trial_start_date: Optional[datetime] = None
     trial_end_date: Optional[datetime] = None
@@ -44,8 +44,8 @@ class CompanySubscription(CompanySubscriptionBase):
     """Schema for company subscription response."""
     id: int
     company_id: int
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
+    razorpay_customer_id: Optional[str] = None
+    razorpay_subscription_id: Optional[str] = None
     status: str
     trial_start_date: Optional[datetime] = None
     trial_end_date: Optional[datetime] = None
@@ -72,7 +72,7 @@ class SubscriptionStatus(BaseModel):
     current_user_count: int
     users_remaining: int
     cancel_at_period_end: bool = False
-    stripe_customer_id: Optional[str] = None
+    razorpay_customer_id: Optional[str] = None
 
 
 class UserLimitUpdate(BaseModel):
@@ -80,17 +80,17 @@ class UserLimitUpdate(BaseModel):
     user_limit: int
 
 
-class CheckoutSessionCreate(BaseModel):
-    """Schema for creating a checkout session."""
+class SubscriptionCreateRequest(BaseModel):
+    """Schema for creating a Razorpay subscription."""
     plan_id: int
 
 
-class CheckoutSessionResponse(BaseModel):
-    """Response schema for checkout session creation."""
-    url: str
-    session_id: str
-
-
-class PortalSessionResponse(BaseModel):
-    """Response schema for Stripe portal session."""
-    url: str
+class SubscriptionCreateResponse(BaseModel):
+    """Response schema for Razorpay subscription creation."""
+    subscription_id: str
+    razorpay_key_id: str
+    plan_id: str
+    plan_name: str
+    amount: int
+    currency: str
+    customer_id: Optional[str] = None

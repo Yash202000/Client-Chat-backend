@@ -28,7 +28,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
 
     # 2. Save user message
     user_message = models_chat_message.ChatMessage(
-        session_id=session.conversation_id,
+        session_id=session.id,  # Use session.id (integer PK), not conversation_id (UUID string)
         message=chat_request.message,
         sender='user',
         company_id=company_id,
@@ -42,15 +42,17 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
     # 3. Generate response
     if chat_request.agent_id:
         # Use the selected agent to generate a response
+        # Note: generate_agent_response expects conversation_id (UUID string) for session_id and boradcast_session_id
         await agent_execution_service.generate_agent_response(
             db=db,
             agent_id=chat_request.agent_id,
             session_id=session.conversation_id,
+            boradcast_session_id=session.conversation_id,
             company_id=company_id,
             user_message=chat_request.message
         )
         last_agent_message = db.query(models_chat_message.ChatMessage).filter(
-            models_chat_message.ChatMessage.session_id == session.conversation_id,
+            models_chat_message.ChatMessage.session_id == session.id,  # ChatMessage.session_id is integer FK
             models_chat_message.ChatMessage.sender == 'agent'
         ).order_by(models_chat_message.ChatMessage.timestamp.desc()).first()
         return last_agent_message
@@ -58,7 +60,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
     else:
         # Use default provider (Groq)
         history = db.query(models_chat_message.ChatMessage).filter(
-            models_chat_message.ChatMessage.session_id == session.conversation_id
+            models_chat_message.ChatMessage.session_id == session.id
         ).order_by(models_chat_message.ChatMessage.timestamp.asc()).all()
 
         formatted_history = agent_execution_service.format_chat_history(history)
@@ -89,7 +91,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         response_text = llm_response.get('content', 'No response content.')
 
         model_message = models_chat_message.ChatMessage(
-            session_id=session.conversation_id,
+            session_id=session.id,  # Use session.id (integer PK), not conversation_id (UUID string)
             message=response_text,
             sender='agent',
             company_id=company_id,
