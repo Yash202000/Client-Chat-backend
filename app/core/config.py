@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"
+    BACKEND_URL: str = "https://livechat.discretal.com/"
 
     # Twilio SMS settings
     TWILIO_ACCOUNT_SID: str = ""

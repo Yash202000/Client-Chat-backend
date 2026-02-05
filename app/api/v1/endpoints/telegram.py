@@ -18,19 +18,22 @@ from app.services import (
     agent_execution_service
 )
 from app.services.workflow_execution_service import WorkflowExecutionService
+from app.services.telegram_webhook_service import TelegramWebhookService
 from app.models.workflow_trigger import TriggerChannel
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import chat_message as schemas_chat_message
 from app.api.v1.endpoints.websocket_conversations import manager as session_ws_manager
 
 router = APIRouter()
+telegram_webhook_service = TelegramWebhookService()
 
-@router.post("/webhook/{token}")
-async def receive_message(token: str, request: Request, db: Session = Depends(get_db)):
+@router.post("/webhook/{integration_id}")
+async def receive_message(integration_id: int, request: Request, db: Session = Depends(get_db)):
     
-    integration = integration_service.get_integration_by_telegram_bot_token(db, bot_token=token)
-    if not integration:
-        logging.error(f"Error: No active integration found for Telegram bot token: {token}")
+    # Get integration by ID
+    integration = integration_service.get_integration_by_id(db, integration_id=integration_id)
+    if not integration or integration.type != "telegram" or not integration.enabled:
+        logging.error(f"Error: No active Telegram integration found for id: {integration_id}")
         raise HTTPException(status_code=404, detail="Integration not found")
 
     data = await request.json()
