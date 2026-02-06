@@ -514,6 +514,9 @@ async def upload_incident_data(
     """
     Endpoint for the LiveKitPopupForm to submit all gathered data.
     Logs the conversation, AI data, manual location, and saves the file.
+    
+    NOTE: Frontend should upload image to Automax directly and get attachment_id,
+    then send {attachment_id, lat, long} via LiveKit data channel to MCP agent.
     """
     logger.info("="*60)
     logger.info("RECEIVED DATA FROM POPUP FORM")
@@ -556,17 +559,17 @@ async def upload_incident_data(
 
     logger.info("="*60)
 
-    # If we have a session ID, we can update the session status and notify the agent
+    # If we have a session ID, we can update the session status
     if session_id:
         try:
             processed_data = {
-                "location": location_ai, # Fix: Use the correct variable name
+                "location": location_ai,
                 "caller_name": caller_name,
                 "classification": classification,
                 "description": description,
                 "criticality": criticality,
-                "latitude": latitude,    # New: Save manual coordinates
-                "longitude": longitude,  # New: Save manual coordinates
+                "latitude": latitude,
+                "longitude": longitude,
                 "has_conversation": bool(conversation)
             }
             
@@ -576,24 +579,12 @@ async def upload_incident_data(
                 status="form_submitted"
             )
             logger.info(f"Successfully updated session {session_id} in database")
-            
-            # Send data message to LiveKit room to notify agent
-            session = voice_workflow_session_service.get_session(session_id)
-            if session:
-                await workflow_livekit_service.send_data_message_to_room(
-                    room_name=session.room_name,
-                    message_type="FORM_DONE",
-                    data={
-                        "session_id": session_id,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                )
         except Exception as e:
-            logger.warning(f"Session update/notification failed: {e}")
+            logger.warning(f"Session update failed: {e}")
     
     return {
         "success": True,
-        "message": "Data and files received successfully",
+        "message": "Data received. Frontend should send attachment_id + coordinates to MCP via LiveKit.",
         "session_id": session_id
     }
 

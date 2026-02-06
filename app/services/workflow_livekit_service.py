@@ -26,7 +26,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET2")
 
 # Backend URL for agent callbacks
 # BACKEND_URL = os.getenv("BACKEND_URL", os.getenv("PUBLIC_HOST", "http://localhost:8000"))
-BACKEND_URL = "https://lightweight-schema-focuses-retreat.trycloudflare.com"
+BACKEND_URL = "http://localhost:8000"
 
 
 def generate_session_id() -> str:
