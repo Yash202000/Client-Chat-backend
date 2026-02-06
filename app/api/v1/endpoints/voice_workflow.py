@@ -447,23 +447,18 @@ async def submit_form(
         if isinstance(value, UploadFile):
             # Handle file upload
             if value.filename:
-                # Save file to uploads directory
-                upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", session_id)
-                os.makedirs(upload_dir, exist_ok=True)
-                
-                file_path = os.path.join(upload_dir, value.filename)
-                content = await value.read()
-                
-                with open(file_path, "wb") as f:
-                    f.write(content)
-                
+                # NOTE: Local file persistence is disabled. Keep metadata only.
+                # upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", session_id)
+                # os.makedirs(upload_dir, exist_ok=True)
+                # file_path = os.path.join(upload_dir, value.filename)
+                # content = await value.read()
+                # with open(file_path, "wb") as f:
+                #     f.write(content)
                 processed_data[key] = {
                     "filename": value.filename,
-                    "path": file_path,
                     "content_type": value.content_type,
-                    "size": len(content)
                 }
-                logger.info(f"Saved uploaded file: {value.filename}")
+                logger.info(f"Received uploaded file metadata: {value.filename}")
         else:
             # Regular form field
             if value:  # Only include non-empty values
@@ -546,16 +541,16 @@ async def upload_incident_data(
         upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", session_id)
         os.makedirs(upload_dir, exist_ok=True)
 
-    async def save_upload(file_obj, label):
-        if not file_obj or not upload_dir:
-            return
-        file_path = os.path.join(upload_dir, file_obj.filename)
-        content = await file_obj.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
-        logger.info(f"{label} saved: {file_obj.filename} -> {file_path}")
+    # async def save_upload(file_obj, label):
+    #     if not file_obj or not upload_dir:
+    #         return
+    #     file_path = os.path.join(upload_dir, file_obj.filename)
+    #     content = await file_obj.read()
+    #     with open(file_path, "wb") as f:
+    #         f.write(content)
+    #     logger.info(f"{label} saved: {file_obj.filename} -> {file_path}")
 
-    await save_upload(file1, "File Upload")
+    # await save_upload(file1, "File Upload")
 
     logger.info("="*60)
 
