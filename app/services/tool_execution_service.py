@@ -171,8 +171,6 @@ async def execute_tool(
     # Check if it's an MCP tool (contains '__' separator)
     if '__' in tool_name:
         connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
-        # Try the name as-is first (handles names with underscores like 'automax_mcp'),
-        # then fall back to replacing underscores with spaces (handles names like 'my server' → 'my_server')
         db_tool = tool_service.get_tool_by_name(db, connection_name_from_llm, company_id)
         if not db_tool:
             fallback_name = connection_name_from_llm.replace('_', ' ')
