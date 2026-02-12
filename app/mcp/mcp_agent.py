@@ -22,7 +22,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET2", os.getenv("LIVEKIT_API_SEC
 
 # MCP Server URL (where automax_mcp.py is running)
 # Using streamable-http transport endpoint (not SSE which is deprecated)
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8001/mcp")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8002/mcp")
 
 # Room name prefix filter - only join rooms with this prefix
 ROOM_NAME_PREFIX = "voice_workflow_"

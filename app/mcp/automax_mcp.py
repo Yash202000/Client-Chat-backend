@@ -78,5 +78,5 @@ def get_locations():
 if __name__ == "__main__":
     # Run on port 8001 to avoid conflict with main FastAPI backend on 8000
     # Using streamable-http transport (recommended over deprecated SSE)
-    print("Starting MCP Tool Server on http://localhost:8001/mcp")
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=8001)
+    print("Starting MCP Tool Server on http://localhost:8002/mcp")
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=8002)

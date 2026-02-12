@@ -171,12 +171,16 @@ async def execute_tool(
     # Check if it's an MCP tool (contains '__' separator)
     if '__' in tool_name:
         connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
-        original_connection_name = connection_name_from_llm.replace('_', ' ')
-        db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
+        # Try the name as-is first (handles names with underscores like 'automax_mcp'),
+        # then fall back to replacing underscores with spaces (handles names like 'my server' → 'my_server')
+        db_tool = tool_service.get_tool_by_name(db, connection_name_from_llm, company_id)
+        if not db_tool:
+            fallback_name = connection_name_from_llm.replace('_', ' ')
+            db_tool = tool_service.get_tool_by_name(db, fallback_name, company_id)
 
         if not db_tool or not db_tool.mcp_server_url:
-            print(f"[TOOL EXECUTION] Error: MCP connection '{original_connection_name}' not found.")
-            return {"error": f"MCP connection '{original_connection_name}' not found."}
+            print(f"[TOOL EXECUTION] Error: MCP connection '{connection_name_from_llm}' not found.")
+            return {"error": f"MCP connection '{connection_name_from_llm}' not found."}
 
         return await execute_mcp_tool(
             db_tool=db_tool,
