@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_SECRET: str = ""
     GMAIL_REDIRECT_URI: str = ""
     GOOGLE_CLIENT_SECRETS_FILE: str = ""
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     LINKEDIN_CLIENT_ID: str = ""
     LINKEDIN_CLIENT_SECRET: str = ""
@@ -29,6 +31,7 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     LOCALAI_TTS_URL: str = "http://localhost:8082/tts"
+    BACKEND_URL: str = "https://livechat.discretal.com/"
 
     # Twilio SMS settings
     TWILIO_ACCOUNT_SID: str = ""

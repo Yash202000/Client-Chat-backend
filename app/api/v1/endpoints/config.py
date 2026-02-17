@@ -15,4 +15,4 @@ def get_google_client_id():
     """
     Provides the Google Client ID to the frontend.
     """
-    return {"client_id": settings.GMAIL_CLIENT_ID}
+    return {"client_id": settings.GOOGLE_CLIENT_ID}

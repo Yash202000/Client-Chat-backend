@@ -16,7 +16,12 @@ from app.services.builtin_tools import (
     execute_get_contact_info_tool,
     execute_translate_tool,
     execute_transfer_to_agent_tool,
-    execute_consult_agent_tool
+    execute_consult_agent_tool,
+    execute_check_calendar_availability_tool,
+    execute_schedule_calendar_event_tool,
+    execute_send_email_tool,
+    execute_read_emails_tool,
+    execute_get_email_content_tool
 )
 
 # Registry of builtin tools - maps tool name to executor function
@@ -28,6 +33,11 @@ BUILTIN_TOOL_REGISTRY = {
     "translate": execute_translate_tool,
     "transfer_to_agent": execute_transfer_to_agent_tool,
     "consult_agent": execute_consult_agent_tool,
+    "check_calendar_availability": execute_check_calendar_availability_tool,
+    "schedule_calendar_event": execute_schedule_calendar_event_tool,
+    "send_email": execute_send_email_tool,
+    "read_emails": execute_read_emails_tool,
+    "get_email_content": execute_get_email_content_tool,
 }
 
 
@@ -153,16 +163,22 @@ async def execute_tool(
             return await executor(db=db, session_id=session_id, parameters=parameters, company_id=company_id)
         elif tool_name in ("transfer_to_agent", "consult_agent"):
             return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
+        elif tool_name in ("check_calendar_availability", "schedule_calendar_event"):
+            return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
+        elif tool_name in ("send_email", "read_emails", "get_email_content"):
+            return await executor(db=db, session_id=session_id, company_id=company_id, parameters=parameters)
 
     # Check if it's an MCP tool (contains '__' separator)
     if '__' in tool_name:
         connection_name_from_llm, mcp_tool_name = tool_name.split('__', 1)
-        original_connection_name = connection_name_from_llm.replace('_', ' ')
-        db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
+        db_tool = tool_service.get_tool_by_name(db, connection_name_from_llm, company_id)
+        if not db_tool:
+            fallback_name = connection_name_from_llm.replace('_', ' ')
+            db_tool = tool_service.get_tool_by_name(db, fallback_name, company_id)
 
         if not db_tool or not db_tool.mcp_server_url:
-            print(f"[TOOL EXECUTION] Error: MCP connection '{original_connection_name}' not found.")
-            return {"error": f"MCP connection '{original_connection_name}' not found."}
+            print(f"[TOOL EXECUTION] Error: MCP connection '{connection_name_from_llm}' not found.")
+            return {"error": f"MCP connection '{connection_name_from_llm}' not found."}
 
         return await execute_mcp_tool(
             db_tool=db_tool,

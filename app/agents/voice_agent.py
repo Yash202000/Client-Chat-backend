@@ -1,6 +1,5 @@
 """
 LiveKit Voice Agent - Standalone worker for voice interactions.
-
 This agent can be run as a separate process using the LiveKit agents CLI:
     python app/agents/voice_agent.py dev
     python app/agents/voice_agent.py start
@@ -146,7 +145,6 @@ class VoiceAssistant(Agent):
 async def entrypoint(ctx: JobContext):
     """
     Main entrypoint for the voice agent worker.
-
     This function is called when the agent joins a LiveKit room.
     """
     logger.info(f"Agent connecting to room: {ctx.room.name}")
@@ -216,14 +214,11 @@ def prewarm(proc: JobProcess):
 if __name__ == "__main__":
     """
     Run the agent worker.
-
     Usage:
         # Development mode (auto-reload on code changes)
         python app/agents/voice_agent.py dev
-
         # Production mode
         python app/agents/voice_agent.py start
-
         # With custom worker options
         python app/agents/voice_agent.py start --room "my-room"
     """

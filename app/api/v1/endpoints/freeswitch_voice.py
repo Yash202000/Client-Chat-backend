@@ -820,7 +820,179 @@ async def delete_phone_number(
     return {"status": "deleted"}
 
 
-# --- FreeSWITCH Dialplan Helper ---
+# --- Simple PCM16 Audio Streaming WebSocket (No Auth) ---
+
+import os
+import wave
+import uuid
+from datetime import datetime
+
+# Directory to store audio recordings
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))), "downloads")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+
+@router.websocket("/pcm16-stream/{session_id}")
+async def pcm16_audio_stream(
+    websocket: WebSocket,
+    session_id: str
+):
+    """
+    Simple WebSocket endpoint for PCM16 audio streaming.
+    No authentication or security checks.
+
+    - Connect to: wss://your-server/api/v1/freeswitch/pcm16-stream/{session_id}
+    - Send raw PCM16 audio bytes (16-bit signed, mono, 16kHz)
+    - Audio is saved to the 'downloads' folder as a .wav file
+    - Send a text message "stop" to close and save the file
+
+    Example with wscat:
+        wscat -c wss://your-server/api/v1/freeswitch/pcm16-stream/test123
+
+    The audio file will be saved as: downloads/{session_id}_{timestamp}.wav
+    """
+    await websocket.accept()
+    logger.info(f"[PCM16 Stream] WebSocket connected for session: {session_id}")
+
+    # Audio buffer to accumulate incoming audio
+    audio_buffer = bytearray()
+
+    # Audio parameters (16-bit PCM, mono, 16kHz)
+    sample_rate = 16000
+    sample_width = 2  # 16-bit = 2 bytes
+    channels = 1
+
+    try:
+        while True:
+            # Receive data (can be bytes or text)
+            message = await websocket.receive()
+
+            if "bytes" in message:
+                # Raw audio bytes received
+                audio_data = message["bytes"]
+                audio_buffer.extend(audio_data)
+                logger.debug(f"[PCM16 Stream] Received {len(audio_data)} bytes, total buffer: {len(audio_buffer)}")
+
+            elif "text" in message:
+                text = message["text"].strip().lower()
+                if text == "stop":
+                    logger.info(f"[PCM16 Stream] Stop command received for session: {session_id}")
+                    break
+                else:
+                    # Acknowledge other text messages
+                    await websocket.send_text(f"Received text: {text}")
+
+    except WebSocketDisconnect:
+        logger.info(f"[PCM16 Stream] WebSocket disconnected for session: {session_id}")
+    except Exception as e:
+        logger.error(f"[PCM16 Stream] Error: {e}")
+    finally:
+        # Save the audio buffer to a WAV file
+        if audio_buffer:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{session_id}_{timestamp}.wav"
+            filepath = os.path.join(DOWNLOADS_DIR, filename)
+
+            try:
+                with wave.open(filepath, 'wb') as wav_file:
+                    wav_file.setnchannels(channels)
+                    wav_file.setsampwidth(sample_width)
+                    wav_file.setframerate(sample_rate)
+                    wav_file.writeframes(bytes(audio_buffer))
+
+                logger.info(f"[PCM16 Stream] Saved audio to: {filepath} ({len(audio_buffer)} bytes)")
+                try:
+                    await websocket.send_text(f"Audio saved: {filename}")
+                except:
+                    pass  # Connection might already be closed
+            except Exception as e:
+                logger.error(f"[PCM16 Stream] Error saving audio: {e}")
+        else:
+            logger.info(f"[PCM16 Stream] No audio data received for session: {session_id}")
+
+
+# --- Simple HTTP Audio Streaming Endpoint (No Auth) ---
+
+@router.post("/http-audio-stream/{session_id}")
+async def http_audio_stream(
+    request: Request,
+    session_id: str,
+    sample_rate: int = Query(default=16000, description="Audio sample rate in Hz"),
+    channels: int = Query(default=1, description="Number of audio channels"),
+    sample_width: int = Query(default=2, description="Sample width in bytes (2 for 16-bit)")
+):
+    """
+    HTTP POST endpoint for streaming PCM audio data.
+    No authentication or security checks.
+
+    - POST to: /api/v1/freeswitch/http-audio-stream/{session_id}
+    - Send raw PCM audio bytes in the request body
+    - Audio is saved to the 'downloads' folder as a .wav file
+
+    Example with curl (streaming from file):
+        curl -X POST \\
+            -H "Content-Type: application/octet-stream" \\
+            --data-binary @audio.raw \\
+            "https://your-server/api/v1/freeswitch/http-audio-stream/test123?sample_rate=16000"
+
+    Example with curl (streaming from pipe):
+        cat audio.raw | curl -X POST \\
+            -H "Content-Type: application/octet-stream" \\
+            -H "Transfer-Encoding: chunked" \\
+            --data-binary @- \\
+            "https://your-server/api/v1/freeswitch/http-audio-stream/test123"
+
+    The audio file will be saved as: downloads/{session_id}_{timestamp}.wav
+    """
+    logger.info(f"[HTTP Audio Stream] Receiving audio for session: {session_id}")
+
+    # Read the streaming body
+    audio_buffer = bytearray()
+
+    try:
+        # Read chunks from the streaming request body
+        async for chunk in request.stream():
+            audio_buffer.extend(chunk)
+            logger.debug(f"[HTTP Audio Stream] Received chunk: {len(chunk)} bytes, total: {len(audio_buffer)}")
+
+    except Exception as e:
+        logger.error(f"[HTTP Audio Stream] Error reading stream: {e}")
+        raise HTTPException(status_code=500, detail=f"Error reading audio stream: {str(e)}")
+
+    if not audio_buffer:
+        logger.warning(f"[HTTP Audio Stream] No audio data received for session: {session_id}")
+        return {"status": "error", "message": "No audio data received", "session_id": session_id}
+
+    # Save the audio buffer to a WAV file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{session_id}_{timestamp}.wav"
+    filepath = os.path.join(DOWNLOADS_DIR, filename)
+
+    try:
+        with wave.open(filepath, 'wb') as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(sample_width)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(bytes(audio_buffer))
+
+        logger.info(f"[HTTP Audio Stream] Saved audio to: {filepath} ({len(audio_buffer)} bytes)")
+
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "filename": filename,
+            "bytes_received": len(audio_buffer),
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "sample_width": sample_width,
+            "duration_seconds": len(audio_buffer) / (sample_rate * channels * sample_width)
+        }
+
+    except Exception as e:
+        logger.error(f"[HTTP Audio Stream] Error saving audio: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving audio: {str(e)}")
+
+
 
 @router.get("/dialplan-example")
 async def get_dialplan_example(

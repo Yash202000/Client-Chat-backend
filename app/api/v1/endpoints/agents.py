@@ -17,6 +17,41 @@ router = APIRouter()
 def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):
     return widget_settings_service.get_widget_settings(db, agent_id=agent_id, create_if_missing=True)
 
+
+@router.get("/{agent_id}/workflow")
+def get_agent_workflow(agent_id: int, db: Session = Depends(get_db)):
+    """
+    Get the workflow JSON assigned to an agent.
+    This is a public endpoint used by the voice workflow integration.
+    """
+    from app.models import agent as models_agent
+    
+    db_agent = db.query(models_agent.Agent).filter(models_agent.Agent.id == agent_id).first()
+    if db_agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get the agent's workflow JSON - check for workflow_json or workflow field
+    workflow = getattr(db_agent, 'workflow_json', None) or getattr(db_agent, 'workflow', None)
+    
+    if workflow is None:
+        # Return a default empty workflow structure
+        return {
+            "name": db_agent.name or "Voice Assistant",
+            "description": f"Voice workflow for {db_agent.name}",
+            "nodes": [],
+            "edges": []
+        }
+    
+    # If workflow is a string, try to parse it
+    if isinstance(workflow, str):
+        import json
+        try:
+            return json.loads(workflow)
+        except json.JSONDecodeError:
+            return {"name": db_agent.name, "description": "Workflow", "nodes": [], "edges": []}
+    
+    return workflow
+
 @router.put("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
 def update_widget_settings(agent_id: int, widget_settings: schemas_widget_settings.WidgetSettingsUpdate, db: Session = Depends(get_db)):
     return widget_settings_service.update_widget_settings(db, agent_id=agent_id, widget_settings=widget_settings)

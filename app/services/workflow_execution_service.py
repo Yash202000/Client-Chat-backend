@@ -206,6 +206,12 @@ class WorkflowExecutionService:
             return {"error": f"Error manipulating data: {e}"}
 
     async def _execute_code_node(self, node_data: dict, context: dict, results: dict):
+        import time
+        start_time = time.time()
+        node_id = node_data.get("id", "unknown")
+        print(f"[CODE NODE] ========== EXECUTION STARTED ==========")
+        print(f"[CODE NODE] Node ID: {node_id}, Start Time: {time.strftime('%H:%M:%S')}")
+        
         code = node_data.get("code", "")
         arguments = node_data.get("arguments", [])  # [{name: "arg1", value: "{{context.var}}"}]
         return_variables = node_data.get("return_variables", [])  # ["result1", "result2"]
@@ -235,13 +241,13 @@ class WorkflowExecutionService:
         print(f"[CODE NODE] Arguments: {resolved_args}, Return vars: {return_variables}")
 
         # Build execution scope with arguments directly available
-        execution_scope = {
-            "context": context,
-            "results": results,
-            "db": self.db,
-            "output": None,  # Legacy support for setting output directly
-            **resolved_args  # Spread arguments into scope so they're directly accessible
-        }
+        # execution_scope = {
+        #     "context": context,
+        #     "results": results,
+        #     "db": self.db,
+        #     "output": None,  # Legacy support for setting output directly
+        #     **resolved_args  # Spread arguments into scope so they're directly accessible
+        # }
 
         # Define synchronous code execution function to run in thread pool
         def run_code_sync():
@@ -321,8 +327,22 @@ class WorkflowExecutionService:
                 print(f"[CODE NODE] Error: {e}")
                 return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
 
+        # Build execution scope with arguments directly available
+        execution_scope = {
+            "context": context,
+            "results": results,
+            "db": self.db,
+            "output": None,  # Legacy support for setting output directly
+            **resolved_args  # Spread arguments into scope so they're directly accessible
+        }
+
         # Run the synchronous code execution in a thread pool to avoid blocking the event loop
-        return await asyncio.to_thread(run_code_sync)
+        result = await asyncio.to_thread(run_code_sync)
+        
+        elapsed_time = time.time() - start_time
+        print(f"[CODE NODE] ========== EXECUTION FINISHED ==========")
+        print(f"[CODE NODE] Node ID: {node_id}, Elapsed: {elapsed_time:.3f}s, End Time: {time.strftime('%H:%M:%S')}")
+        return result
 
     async def _execute_knowledge_retrieval_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow):
         knowledge_base_id = node_data.get("knowledge_base_id")
@@ -2176,6 +2196,26 @@ Return only valid JSON, nothing else:"""
                 pending_prompt_text = context.get("pending_prompt_text", "")
                 retry_count = context.get("_validation_retry_count", 0)
                 max_retries = context.get("_validation_max_retries", 3)
+
+                # Voice option extraction: Use OpenAI structured output to extract chosen option
+                # This runs before multi-stage validation for more accurate voice input handling
+                if pending_options and not option_key and user_message:
+                    try:
+                        from app.services.voice_option_extraction_service import extract_chosen_option
+                        
+                        extraction_result = await extract_chosen_option(
+                            db=self.db,
+                            company_id=company_id,
+                            user_input=user_message,
+                            prompt_text=pending_prompt_text,
+                            options=pending_options
+                        )
+                        
+                        if extraction_result and extraction_result.get("chosen_option"):
+                            option_key = extraction_result["chosen_option"]
+                            print(f"DEBUG: OpenAI voice extraction - option_key set to: {option_key} (confidence: {extraction_result.get('confidence', 0)})")
+                    except Exception as e:
+                        print(f"DEBUG: Voice option extraction failed (will use fallback validation): {e}")
 
                 if pending_options:
                     input_value = option_key if option_key else user_message

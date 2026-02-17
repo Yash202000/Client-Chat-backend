@@ -50,7 +50,7 @@ async def public_voice_websocket_endpoint(
 
     final_voice_id = voice_id
     tts_provider = 'voice_engine' # Default provider
-    stt_provider = 'deepgram' # Default provider
+    stt_provider = 'openai'
     if agent:
         if agent.voice_id:
             final_voice_id = agent.voice_id

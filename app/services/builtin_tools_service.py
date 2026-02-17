@@ -220,6 +220,130 @@ BUILTIN_TOOLS = [
             "required": ["topic", "question"]
         },
         "follow_up_config": None
+    },
+    {
+        "name": "check_calendar_availability",
+        "description": "Check calendar availability for the next 7 days. Returns available 15-minute appointment slots between 9 AM and 6 PM. Use this to show available times for scheduling appointments.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to check ahead (default: 7)"
+                }
+            }
+        },
+        "follow_up_config": None
+    },
+    {
+        "name": "schedule_calendar_event",
+        "description": "Schedule a calendar event/appointment at the specified time. Requires the user's email, start time, and end time. Sends a calendar invite to the attendee.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start_time": {
+                    "type": "string",
+                    "description": "Start time of the event in ISO format (e.g., 2024-01-20T09:00:00)"
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "End time of the event in ISO format (e.g., 2024-01-20T09:15:00)"
+                },
+                "attendee_email": {
+                    "type": "string",
+                    "description": "Email address of the attendee to send the calendar invite to"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title/subject of the calendar event (default: 'Scheduled Appointment')"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional description or notes for the event"
+                }
+            },
+            "required": ["start_time", "end_time", "attendee_email"]
+        },
+        "follow_up_config": {
+            "enabled": True,
+            "fields": {
+                "attendee_email": {
+                    "question": "Please provide your email address so I can send you a calendar invite.",
+                    "lookup_source": "contact.email"
+                }
+            },
+            "completion_message_template": "I've scheduled your appointment and sent a calendar invite to {{attendee_email}}."
+        }
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email via Gmail. Use this to send emails on behalf of the company. Requires Gmail integration to be connected.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to_email": {
+                    "type": "string",
+                    "description": "Recipient email address"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject line"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                }
+            },
+            "required": ["to_email", "subject", "body"]
+        },
+        "follow_up_config": None
+    },
+    {
+        "name": "read_emails",
+        "description": "Read recent emails from the Gmail inbox. Can filter by search query and unread status. Use this to check for new messages or find specific emails.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of emails to return (default: 10, max: 50)"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Gmail search query (e.g., 'from:example@gmail.com', 'subject:invoice', 'after:2024/01/01')"
+                },
+                "unread_only": {
+                    "type": "boolean",
+                    "description": "If true, only return unread emails (default: false)"
+                }
+            }
+        },
+        "follow_up_config": None
+    },
+    {
+        "name": "get_email_content",
+        "description": "Get the full content of a specific email by its ID. Use this after read_emails to get the complete message body.",
+        "tool_type": "builtin",
+        "is_pre_built": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "email_id": {
+                    "type": "string",
+                    "description": "The unique ID of the email to retrieve (obtained from read_emails)"
+                }
+            },
+            "required": ["email_id"]
+        },
+        "follow_up_config": None
     }
 ]
 
