@@ -84,12 +84,26 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         flow.fetch_token(code=code)
         credentials = flow.credentials
 
+        # Fetch the authenticated user's email from Google
+        # Use a direct HTTP call to avoid the API client triggering a scope-mismatched token refresh
+        import requests as http_requests
+        try:
+            userinfo_resp = http_requests.get(
+                'https://www.googleapis.com/oauth2/v2/userinfo',
+                headers={'Authorization': f'Bearer {credentials.token}'}
+            )
+            user_email = userinfo_resp.json().get('email') if userinfo_resp.status_code == 200 else None
+        except Exception:
+            user_email = None
+
         # Check if a credential for 'google' service already exists and update it, or create a new one.
         db_credential = credential_service.get_credential_by_service_name(db, service_name='google', company_id=current_user.company_id)
         
         credential_data = {
             'token': credentials.token,
             'refresh_token': credentials.refresh_token,
+            'expiry': credentials.expiry.isoformat() if credentials.expiry else None,
+            'user_email': user_email,
             'token_uri': credentials.token_uri,
             'client_id': credentials.client_id,
             'client_secret': credentials.client_secret,

@@ -1,5 +1,7 @@
 import traceback
 import base64
+import json
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, Any
@@ -31,24 +33,30 @@ def get_gmail_client(db: Session, integration) -> Resource:
     print(f"[GMAIL CLIENT] Using access_token: {bool(access_token)}")
     print(f"[GMAIL CLIENT] Using refresh_token: {bool(refresh_token)}")
     
+    # Parse expiry if stored
+    expiry_str = credentials.get("expiry")
+    expiry = datetime.fromisoformat(expiry_str) if expiry_str else None
+
     creds = Credentials(
         token=access_token,
         refresh_token=refresh_token,
+        expiry=expiry,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
         scopes=["https://www.googleapis.com/auth/gmail.modify"]
     )
 
-    if creds.expired and creds.refresh_token:
+    if not creds.valid and creds.refresh_token:
         try:
             creds.refresh(Request())
             new_credentials = {
                 "user_email": credentials.get("user_email"),
                 "token": creds.token,
                 "refresh_token": creds.refresh_token,
+                "expiry": creds.expiry.isoformat() if creds.expiry else None,
             }
-            integration.credentials = integration_service.vault_service.encrypt(str(new_credentials))
+            integration.credentials = integration_service.vault_service.encrypt(json.dumps(new_credentials))
             db.commit()
             db.refresh(integration)
         except RefreshError as e:
@@ -73,6 +81,8 @@ async def execute_send_email_tool(db: Session, session_id: str, company_id: int,
     to_email = parameters.get("to_email")
     subject = parameters.get("subject", "")
     body = parameters.get("body", "")
+    cc = parameters.get("cc")
+    bcc = parameters.get("bcc")
     
     print(f"[GMAIL TOOL] Sending email to: {to_email}")
     print(f"[GMAIL TOOL] Subject: {subject}")
@@ -102,9 +112,16 @@ async def execute_send_email_tool(db: Session, session_id: str, company_id: int,
         
         # Get Gmail client
         client = get_gmail_client(db, integration)
-        
-        message['to'] = to_email
-        message['subject'] = subject
+
+        # Build MIME message
+        message = MIMEMultipart()
+        message["to"] = to_email
+        if cc:
+            message["cc"] = cc
+        if bcc:
+            message["bcc"] = bcc
+        message["subject"] = subject
+        message.attach(MIMEText(body, "plain"))
         
         raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
         

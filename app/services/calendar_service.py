@@ -3,6 +3,8 @@ from app.services import integration_service
 from app.models.integration import Integration
 from typing import Dict, Any, List
 import datetime
+import json
+from datetime import datetime as dt
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
@@ -16,26 +18,32 @@ def get_google_calendar_client(db: Session, integration: Integration) -> Resourc
     Handles token refresh and updates the integration if a new token is issued.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    
+
+    # Parse expiry if stored
+    expiry_str = credentials.get("expiry")
+    expiry = dt.fromisoformat(expiry_str) if expiry_str else None
+
     creds = Credentials(
         token=credentials.get("token") or credentials.get("access_token"),
         refresh_token=credentials.get("refresh_token"),
+        expiry=expiry,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
         scopes=["https://www.googleapis.com/auth/calendar"]
     )
 
-    if creds.expired and creds.refresh_token:
+    if not creds.valid and creds.refresh_token:
         try:
             creds.refresh(Request())
             # If refresh was successful, update the stored credentials
             new_credentials = {
                 "user_email": credentials.get("user_email"),
-                "access_token": creds.token,
+                "token": creds.token,
                 "refresh_token": creds.refresh_token,
+                "expiry": creds.expiry.isoformat() if creds.expiry else None,
             }
-            integration.credentials = integration_service.vault_service.encrypt(str(new_credentials))
+            integration.credentials = integration_service.vault_service.encrypt(json.dumps(new_credentials))
             db.commit()
             db.refresh(integration)
         except RefreshError as e:
