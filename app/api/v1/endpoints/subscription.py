@@ -17,9 +17,9 @@ def create_subscription_plan(
     current_user: User = Depends(get_current_user) # Only authenticated users can create plans
 ):
     # Optional: Add role-based access control here (e.g., only admins can create plans)
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.is_super_admin):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create subscription plans")
-    
+
     db_plan = subscription_service.get_subscription_plan_by_name(db, name=plan.name)
     if db_plan:
         raise HTTPException(status_code=400, detail="Subscription plan with this name already exists")
@@ -51,7 +51,7 @@ def update_subscription_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.is_super_admin):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update subscription plans")
 
     db_plan = subscription_service.update_subscription_plan(db, plan_id=plan_id, plan=plan)
@@ -65,7 +65,7 @@ def delete_subscription_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.is_super_admin):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete subscription plans")
 
     db_plan = subscription_service.delete_subscription_plan(db, plan_id=plan_id)

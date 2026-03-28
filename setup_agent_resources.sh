@@ -15,7 +15,7 @@ then
 fi
 
 # --- Get Groq API Key from .env ---
-ENV_FILE="/home/developer/personal/AgentConnect/backend/.env"
+ENV_FILE="/home/developer/personal/HeyGenAlly/backend/.env"
 if [ -f "$ENV_FILE" ]; then
   GROQ_API_KEY=$(grep -E '^GROQ_API_KEY=' "$ENV_FILE" | cut -d '=' -f2- | tr -d '"\')
 else
@@ -29,7 +29,7 @@ if [ -z "$GROQ_API_KEY" ]; then
 fi
 
 
-echo "--- Setting up AgentConnect Backend Resources ---"
+echo "--- Setting up HeyGenAlly Backend Resources ---"
 
 # --- 0. Delete the old 'trigger_workflow' tool if it exists ---
 echo "0. Deleting 'trigger_workflow' tool to ensure a clean slate..."

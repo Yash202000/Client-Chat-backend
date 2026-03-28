@@ -1,14 +1,50 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Literal, Optional
 
 from app.schemas import tool as schemas_tool
 from app.services import tool_service
+from app.services.tool_ai_service import tool_ai_chat
 from app.core.dependencies import get_current_active_user, get_db, require_permission
 from app.models import user as models_user
 
 router = APIRouter()
+
+
+class ToolAIChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ToolAIChatRequest(BaseModel):
+    message: str
+    history: List[ToolAIChatMessage] = []
+    existing_tool: Optional[dict] = None
+
+
+class ToolAIChatResponse(BaseModel):
+    stage: str
+    reply: str
+    tool: Optional[dict] = None
+
+
+@router.post("/ai-chat", response_model=ToolAIChatResponse,
+             dependencies=[Depends(require_permission("tool:create"))])
+async def tool_ai_chat_endpoint(
+    body: ToolAIChatRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    result = await tool_ai_chat(
+        db,
+        current_user.company_id,
+        body.message,
+        [{"role": m.role, "content": m.content} for m in body.history],
+        existing_tool=body.existing_tool,
+    )
+    return ToolAIChatResponse(**result)
+
 
 @router.post("/", response_model=schemas_tool.Tool, dependencies=[Depends(require_permission("tool:create"))])
 def create_tool(

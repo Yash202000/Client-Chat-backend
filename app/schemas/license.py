@@ -27,7 +27,7 @@ class LicensePayload(BaseModel):
     features: list[str] = []
     expires_at: int  # Unix timestamp
     issued_at: int  # Unix timestamp
-    iss: str = "AgentConnect License Authority"
+    iss: str = "HeyGenAlly License Authority"
 
 
 class LicenseStatusResponse(BaseModel):

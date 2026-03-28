@@ -1,4 +1,4 @@
-# AgentConnect CRM API Guide
+# HeyGenAlly CRM API Guide
 
 Complete API documentation for the CRM system including Leads, Campaigns, and Scoring.
 
@@ -642,4 +642,4 @@ POST /api/v1/webhooks
 
 ---
 
-For questions or support, contact the AgentConnect team.
+For questions or support, contact the HeyGenAlly team.

@@ -15,7 +15,9 @@ async def send_email_smtp(
     text_content: Optional[str] = None,
     from_email: Optional[str] = None,
     from_name: Optional[str] = None,
-    smtp_config: Optional[Dict[str, Any]] = None
+    smtp_config: Optional[Dict[str, Any]] = None,
+    cc: Optional[list] = None,
+    bcc: Optional[list] = None,
 ) -> Dict[str, Any]:
     """
     Send email using SMTP
@@ -26,7 +28,7 @@ async def send_email_smtp(
         html_content: HTML email body (optional)
         text_content: Plain text email body (optional)
         from_email: Sender email (required)
-        from_name: Sender name (defaults to 'AgentConnect')
+        from_name: Sender name (defaults to 'HeyGenAlly')
         smtp_config: SMTP configuration (required) - must contain host, port, user, password
 
     Returns:
@@ -50,13 +52,17 @@ async def send_email_smtp(
     if not from_email:
         from_email = smtp_user
     if not from_name:
-        from_name = 'AgentConnect'
+        from_name = 'HeyGenAlly'
 
     # Create message
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From'] = f"{from_name} <{from_email}>"
     msg['To'] = to_email
+    if cc:
+        msg['Cc'] = ', '.join(cc)
+    if bcc:
+        msg['Bcc'] = ', '.join(bcc)
 
     # Add plain text part if provided
     if text_content:

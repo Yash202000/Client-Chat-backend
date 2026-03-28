@@ -8,8 +8,8 @@ class CompanySettings(Base):
     __tablename__ = "company_settings"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_name = Column(String, default="AgentConnect")
-    support_email = Column(String, default="support@agentconnect.com")
+    company_name = Column(String, default="HeyGenAlly")
+    support_email = Column(String, default="support@heygenally.com")
     timezone = Column(String, default="UTC")
     language = Column(String, default="en")
     business_hours = Column(Boolean, default=True)
@@ -27,6 +27,7 @@ class CompanySettings(Base):
     smtp_use_tls = Column(Boolean, default=True)
     smtp_from_email = Column(String, nullable=True)
     smtp_from_name = Column(String, nullable=True)
+    email_signature = Column(Text, nullable=True)
 
     # Token Usage Tracking Settings
     token_tracking_mode = Column(String(20), default="detailed")  # none, aggregated, detailed

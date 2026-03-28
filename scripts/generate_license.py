@@ -48,7 +48,7 @@ def generate_license(
         "features": features,
         "expires_at": expires_at,
         "issued_at": now,
-        "iss": "AgentConnect License Authority",
+        "iss": "HeyGenAlly License Authority",
     }
 
     # Base64 URL-safe encoding
@@ -72,7 +72,7 @@ def generate_license(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate an AgentConnect license key")
+    parser = argparse.ArgumentParser(description="Generate an HeyGenAlly license key")
     parser.add_argument("--secret", type=str, help="HMAC secret key (or set LICENSE_KEY_SECRET env var)")
     parser.add_argument("--instance", type=str, required=True, help="Instance name (e.g., 'Acme Corp Production')")
     parser.add_argument("--users", type=int, default=50, help="Maximum users allowed (default: 50)")

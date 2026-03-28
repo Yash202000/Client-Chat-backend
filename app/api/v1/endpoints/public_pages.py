@@ -13,7 +13,7 @@ PRIVACY_POLICY_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Policy - AgentConnect</title>
+    <title>Privacy Policy - HeyGenAlly</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -38,7 +38,7 @@ PRIVACY_POLICY_HTML = """
         <p class="updated">Last updated: January 2026</p>
 
         <h2>1. Information We Collect</h2>
-        <p>AgentConnect collects information necessary to provide our conversational AI services, including:</p>
+        <p>HeyGenAlly collects information necessary to provide our conversational AI services, including:</p>
         <ul>
             <li>Messages sent through connected platforms (Instagram, WhatsApp, Messenger, etc.)</li>
             <li>Contact information provided through messaging platforms</li>
@@ -57,13 +57,13 @@ PRIVACY_POLICY_HTML = """
         <p>We implement appropriate security measures to protect your data. All credentials and sensitive information are encrypted at rest and in transit.</p>
 
         <h2>4. Third-Party Services</h2>
-        <p>AgentConnect integrates with third-party platforms including Meta (Instagram, Facebook Messenger), WhatsApp, Telegram, and others. Your use of these platforms is subject to their respective privacy policies.</p>
+        <p>HeyGenAlly integrates with third-party platforms including Meta (Instagram, Facebook Messenger), WhatsApp, Telegram, and others. Your use of these platforms is subject to their respective privacy policies.</p>
 
         <h2>5. Data Deletion</h2>
         <p>You may request deletion of your data by contacting us. We will process deletion requests in accordance with applicable laws.</p>
 
         <h2>6. Contact Us</h2>
-        <p>For questions about this privacy policy, please contact us through the AgentConnect platform.</p>
+        <p>For questions about this privacy policy, please contact us through the HeyGenAlly platform.</p>
     </div>
 </body>
 </html>
@@ -83,7 +83,7 @@ async def terms_of_service():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Terms of Service - AgentConnect</title>
+    <title>Terms of Service - HeyGenAlly</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -106,19 +106,19 @@ async def terms_of_service():
         <p class="updated">Last updated: January 2026</p>
 
         <h2>1. Acceptance of Terms</h2>
-        <p>By using AgentConnect, you agree to these terms of service.</p>
+        <p>By using HeyGenAlly, you agree to these terms of service.</p>
 
         <h2>2. Use of Service</h2>
-        <p>AgentConnect provides AI-powered conversational tools for businesses. You agree to use the service in accordance with all applicable laws.</p>
+        <p>HeyGenAlly provides AI-powered conversational tools for businesses. You agree to use the service in accordance with all applicable laws.</p>
 
         <h2>3. User Responsibilities</h2>
         <p>You are responsible for maintaining the security of your account and for all activities under your account.</p>
 
         <h2>4. Limitation of Liability</h2>
-        <p>AgentConnect is provided "as is" without warranties of any kind.</p>
+        <p>HeyGenAlly is provided "as is" without warranties of any kind.</p>
 
         <h2>5. Contact</h2>
-        <p>For questions about these terms, please contact us through the AgentConnect platform.</p>
+        <p>For questions about these terms, please contact us through the HeyGenAlly platform.</p>
     </div>
 </body>
 </html>

@@ -20,6 +20,7 @@ class CompanySettingsBase(BaseModel):
     smtp_use_tls: Optional[bool] = True
     smtp_from_email: Optional[str] = None
     smtp_from_name: Optional[str] = None
+    email_signature: Optional[str] = None
     # Token Usage Settings
     token_tracking_mode: Optional[str] = "detailed"  # none, aggregated, detailed
     monthly_budget_cents: Optional[int] = None
@@ -49,6 +50,7 @@ class CompanySettingsUpdate(BaseModel):
     smtp_use_tls: Optional[bool] = None
     smtp_from_email: Optional[str] = None
     smtp_from_name: Optional[str] = None
+    email_signature: Optional[str] = None
     # Token Usage Settings
     token_tracking_mode: Optional[str] = None
     monthly_budget_cents: Optional[int] = None

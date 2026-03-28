@@ -5,6 +5,7 @@ from typing import List
 from app.core.dependencies import get_db
 from app.schemas import credential as schemas_credential
 from app.services import credential_service
+from app.services.system_config_service import is_managed_mode
 from app.core.auth import get_current_user
 from app.models.user import User
 
@@ -16,6 +17,13 @@ def create_credential(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Check if credentials are managed at system level
+    if is_managed_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credentials are managed at system level. Contact your administrator to update API credentials."
+        )
+
     # Optional: Check if a credential with the same name already exists for the company
     db_credential = credential_service.get_credential_by_service_name(
         db, service_name=credential.service, company_id=current_user.company_id
@@ -52,6 +60,13 @@ def update_credential(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Check if credentials are managed at system level
+    if is_managed_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credentials are read-only in managed mode. Contact your administrator to update API credentials."
+        )
+
     db_credential = credential_service.update_credential(db, credential_id=credential_id, credential=credential, company_id=current_user.company_id)
     if db_credential is None:
         raise HTTPException(status_code=404, detail="Credential not found")
@@ -63,6 +78,13 @@ def delete_credential(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Check if credentials are managed at system level
+    if is_managed_mode():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete system-managed credentials. Contact your administrator."
+        )
+
     success = credential_service.delete_credential(db, credential_id=credential_id, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Credential not found")

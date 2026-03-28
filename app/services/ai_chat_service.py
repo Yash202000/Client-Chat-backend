@@ -71,7 +71,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         llm_response = await groq_provider.generate_response(
             db=db, company_id=company_id, model_name='llama-3.1-8b-instant',
             system_prompt=system_prompt, chat_history=formatted_history,
-            tools=[], api_key=settings.GROQ_API_KEY
+            tools=[], api_key=settings.GROQ_API_KEY, stream=False
         )
 
         # Log token usage

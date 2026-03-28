@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AgentConnect"
+    PROJECT_NAME: str = "HeyGenAlly"
     API_V1_STR: str = "/api/v1"
     DATABASE_URL: str
     GOOGLE_API_KEY: str = ""
@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     LICENSE_KEY_SECRET: str = ""  # HMAC secret for signing/verifying license keys
     LICENSE_KEY: str = ""  # The license key for on-premise instances (optional, can also be in DB)
 
+    # Credential Management Mode: Controls if credentials are managed at system level or by users
+    # True = Managed/Cloud deployment (system-level credentials from .env, user vault disabled)
+    # False = Self-hosted deployment (users manage their own credentials via vault)
+    MANAGED_CREDENTIALS: bool = False
+
+    # System-level API Keys (only used when MANAGED_CREDENTIALS=True)
+    ANTHROPIC_API_KEY: str = ""
+    # Note: OPENAI_API_KEY already defined at line 88 for LiveKit
+    # GROQ_API_KEY already defined at line 11
+    # GOOGLE_API_KEY already defined at line 10 (used for Gemini)
+    GEMINI_API_KEY: str = ""  # Alternative name for Google API Key
+
     # Twilio SMS settings
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
@@ -46,7 +58,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_access_key: str
     minio_secret_key: str
-    minio_bucket: str = "agentconnect"
+    minio_bucket: str = "heygenally"
     minio_strict: bool = True
 
     FAISS_INDEX_DIR: str = "./faiss_indexes"

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide explains how to set up and use LiveKit AI agents for voice-only interactions in AgentConnect. The implementation allows AI agents to join LiveKit rooms and handle voice conversations autonomously.
+This guide explains how to set up and use LiveKit AI agents for voice-only interactions in HeyGenAlly. The implementation allows AI agents to join LiveKit rooms and handle voice conversations autonomously.
 
 ## Architecture
 
@@ -151,7 +151,7 @@ Agents are spawned via API calls when a voice session starts. This is handled au
 
 ## Agent Modes: 1:1 vs Conference
 
-AgentConnect provides two types of voice agents for different use cases:
+HeyGenAlly provides two types of voice agents for different use cases:
 
 ### 1:1 Voice Agent (`voice_agent.py`)
 
@@ -508,7 +508,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=agentconnect
+User=heygenally
 WorkingDirectory=/path/to/backend
 Environment="PATH=/path/to/venv/bin"
 ExecStart=/path/to/venv/bin/python app/agents/voice_agent.py start
@@ -530,7 +530,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=agentconnect
+User=heygenally
 WorkingDirectory=/path/to/backend
 Environment="PATH=/path/to/venv/bin"
 ExecStart=/path/to/venv/bin/python app/agents/conference_voice_agent.py start
@@ -680,4 +680,4 @@ For issues or questions:
 
 ## License
 
-Copyright © 2025 AgentConnect. All rights reserved.
+Copyright © 2025 HeyGenAlly. All rights reserved.

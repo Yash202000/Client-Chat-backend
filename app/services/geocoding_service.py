@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 NOMINATIM_BASE_URL = "https://nominatim.openstreetmap.org"
-USER_AGENT = "AgentConnect/1.0"
+USER_AGENT = "HeyGenAlly/1.0"
 
 
 async def forward_geocode(address: str) -> Optional[Dict[str, Any]]:

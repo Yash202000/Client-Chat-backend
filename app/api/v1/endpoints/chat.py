@@ -48,6 +48,23 @@ def create_channel(
             raise HTTPException(status_code=403, detail="You are not a member of this team")
     return crud_chat.create_channel(db=db, channel=channel, creator_id=current_user.id, company_id=current_user.company_id)
 
+class ChannelRename(chat_schema.BaseModel):
+    name: str
+
+@router.patch("/channels/{channel_id}", response_model=chat_schema.ChatChannel, dependencies=[Depends(require_permission("chat:update"))])
+def rename_channel(
+    channel_id: int,
+    body: ChannelRename,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not a member of this channel")
+    channel = crud_chat.rename_channel(db=db, channel_id=channel_id, name=body.name)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+    return channel
+
 @router.get("/channels/", response_model=List[chat_schema.ChatChannel], dependencies=[Depends(require_permission("chat:read"))])
 def read_user_channels(
     db: Session = Depends(get_db),

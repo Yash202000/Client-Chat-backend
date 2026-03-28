@@ -52,7 +52,7 @@ async def test_smtp_configuration(
     }
 
     from_email = request.smtp_from_email or (settings.smtp_from_email if settings else None)
-    from_name = request.smtp_from_name or (settings.smtp_from_name if settings else 'AgentConnect')
+    from_name = request.smtp_from_name or (settings.smtp_from_name if settings else 'HeyGenAlly')
 
     # Validate required fields
     if not all([smtp_config['host'], smtp_config['user'], smtp_config['password']]):
@@ -64,13 +64,13 @@ async def test_smtp_configuration(
     try:
         result = await email_service.send_email_smtp(
             to_email=request.to_email,
-            subject="Test Email from AgentConnect",
+            subject="Test Email from HeyGenAlly",
             html_content="""
             <html>
             <body style="font-family: Arial, sans-serif; padding: 20px;">
                 <h2 style="color: #0891b2;">SMTP Configuration Test</h2>
                 <p>Congratulations! Your SMTP settings are configured correctly.</p>
-                <p>This is a test email sent from AgentConnect to verify your email configuration.</p>
+                <p>This is a test email sent from HeyGenAlly to verify your email configuration.</p>
                 <hr style="border: 1px solid #e5e7eb; margin: 20px 0;">
                 <p style="color: #6b7280; font-size: 12px;">
                     This email was sent as part of the SMTP configuration test.
@@ -78,7 +78,7 @@ async def test_smtp_configuration(
             </body>
             </html>
             """,
-            text_content="SMTP Configuration Test\n\nCongratulations! Your SMTP settings are configured correctly.\n\nThis is a test email sent from AgentConnect to verify your email configuration.",
+            text_content="SMTP Configuration Test\n\nCongratulations! Your SMTP settings are configured correctly.\n\nThis is a test email sent from HeyGenAlly to verify your email configuration.",
             from_email=from_email,
             from_name=from_name,
             smtp_config=smtp_config

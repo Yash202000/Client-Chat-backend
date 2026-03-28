@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models import ChatChannel, ChannelMembership, InternalChatMessage, ChatAttachment, MessageReaction, MessageMention, User, Team
 from app.schemas import chat as chat_schema
 from typing import List, Optional
@@ -7,20 +7,67 @@ import re
 from app.crud import crud_notification
 
 # CRUD for ChatChannel
+def find_existing_dm(db: Session, user_id_1: int, user_id_2: int, company_id: int) -> Optional[ChatChannel]:
+    """Return existing DM channel between two users, or None."""
+    user1_channels = db.query(ChannelMembership.channel_id).filter(ChannelMembership.user_id == user_id_1)
+    user2_channels = db.query(ChannelMembership.channel_id).filter(ChannelMembership.user_id == user_id_2)
+    row = (
+        db.query(ChatChannel.id)
+        .filter(
+            ChatChannel.id.in_(user1_channels),
+            ChatChannel.id.in_(user2_channels),
+            ChatChannel.channel_type == 'DM',
+            ChatChannel.company_id == company_id,
+        )
+        .first()
+    )
+    if row:
+        return db.query(ChatChannel).filter(ChatChannel.id == row[0]).first()
+    return None
+
+
 def create_channel(db: Session, channel: chat_schema.ChatChannelCreate, creator_id: int, company_id: int) -> ChatChannel:
-    db_channel = ChatChannel(**channel.model_dump(), creator_id=creator_id, company_id=company_id)
+    # For DM channels with exactly one other member, return existing DM if found
+    if channel.channel_type and channel.channel_type.upper() == 'DM' and len(channel.member_ids or []) == 1:
+        other_id = channel.member_ids[0]
+        existing = find_existing_dm(db, creator_id, other_id, company_id)
+        if existing:
+            return existing
+
+    channel_data = channel.model_dump(exclude={"member_ids"})
+    db_channel = ChatChannel(**channel_data, creator_id=creator_id, company_id=company_id)
     db.add(db_channel)
     db.commit()
     db.refresh(db_channel)
     # Automatically add the creator as a member
     add_user_to_channel(db, user_id=creator_id, channel_id=db_channel.id)
+    # Add additional members
+    for user_id in (channel.member_ids or []):
+        if user_id != creator_id:
+            add_user_to_channel(db, user_id=user_id, channel_id=db_channel.id)
+    return db_channel
+
+
+def rename_channel(db: Session, channel_id: int, name: str) -> Optional[ChatChannel]:
+    db_channel = db.query(ChatChannel).filter(ChatChannel.id == channel_id).first()
+    if not db_channel:
+        return None
+    db_channel.name = name
+    db.commit()
+    db.refresh(db_channel)
     return db_channel
 
 def get_channel(db: Session, channel_id: int) -> Optional[ChatChannel]:
     return db.query(ChatChannel).filter(ChatChannel.id == channel_id).first()
 
 def get_user_channels(db: Session, user_id: int) -> List[ChatChannel]:
-    return db.query(ChatChannel).join(ChannelMembership).filter(ChannelMembership.user_id == user_id).all()
+    return (
+        db.query(ChatChannel)
+        .join(ChannelMembership)
+        .filter(ChannelMembership.user_id == user_id)
+        .options(joinedload(ChatChannel.participants).joinedload(ChannelMembership.user))
+        .all()
+    )
 
 # CRUD for ChannelMembership
 def add_user_to_channel(db: Session, user_id: int, channel_id: int) -> ChannelMembership:

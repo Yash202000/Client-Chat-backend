@@ -9,9 +9,27 @@ from app.core.dependencies import get_db, get_current_active_user, require_permi
 from app.schemas import workflow as schemas_workflow
 from app.services import workflow_service, tool_service
 from app.services.workflow_intent_service import WorkflowIntentService
+from app.services.workflow_ai_service import workflow_ai_chat
 from app.models import user as models_user
 
 router = APIRouter()
+
+
+# ── AI Chat request/response models ───────────────────────────────────────────
+
+class WorkflowAIChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+class WorkflowAIChatRequest(BaseModel):
+    message: str
+    current_visual_steps: Optional[Dict[str, Any]] = None
+    history: List[WorkflowAIChatMessage] = []
+
+class WorkflowAIChatResponse(BaseModel):
+    reply: str
+    visual_steps: Optional[Dict[str, Any]] = None
+    changed_node_ids: List[str] = []
 
 # Pydantic models for intent_config management
 class IntentConfigUpdate(BaseModel):
@@ -430,6 +448,37 @@ async def test_workflow_intent(
         intent_detected=False,
         should_auto_trigger=False
     )
+
+@router.post("/{workflow_id}/ai-chat", response_model=WorkflowAIChatResponse, dependencies=[Depends(require_permission("workflow:update"))])
+async def workflow_ai_chat_endpoint(
+    workflow_id: int,
+    body: WorkflowAIChatRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """
+    Natural language workflow editor.
+    Send a message describing what you want to change and AI will update the workflow JSON.
+    """
+    # Verify workflow belongs to company
+    wf = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    try:
+        result = await workflow_ai_chat(
+            db=db,
+            company_id=current_user.company_id,
+            message=body.message,
+            current_visual_steps=body.current_visual_steps,
+            history=[{"role": m.role, "content": m.content} for m in body.history],
+        )
+        return WorkflowAIChatResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+
 
 @router.delete("/{workflow_id}/intent-config", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
 def delete_workflow_intent_config(

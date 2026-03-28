@@ -70,7 +70,7 @@ def generate_license_key(
         features=features,
         expires_at=expires_at,
         issued_at=now,
-        iss="AgentConnect License Authority",
+        iss="HeyGenAlly License Authority",
     )
 
     # Create the payload JSON

@@ -32,7 +32,7 @@ class ChannelMembershipCreate(ChannelMembershipBase):
     pass
 
 class ChatChannelCreate(ChatChannelBase):
-    pass
+    member_ids: Optional[List[int]] = []
 
 class InternalChatMessageCreate(InternalChatMessageBase):
     pass
@@ -65,9 +65,19 @@ class UserInChat(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ChannelMembershipUser(BaseModel):
+    id: int
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    profile_picture_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class ChannelMembership(ChannelMembershipBase):
     id: int
     joined_at: datetime.datetime
+    user: Optional[ChannelMembershipUser] = None
 
     model_config = ConfigDict(from_attributes=True)
 

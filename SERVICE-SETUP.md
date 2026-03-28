@@ -1,16 +1,16 @@
-# AgentConnect Backend Systemd Service Setup
+# HeyGenAlly Backend Systemd Service Setup
 
-This guide explains how to set up and manage the AgentConnect backend as a systemd service.
+This guide explains how to set up and manage the HeyGenAlly backend as a systemd service.
 
 ## Service File
 
-The service file `agentconnect-backend.service` is configured to:
+The service file `heygenally-backend.service` is configured to:
 - Automatically start Docker Compose services (ChromaDB, PostgreSQL, MinIO) before starting the backend
 - Run the backend using uvicorn with the virtual environment
 - Load environment variables from the `.env` file
 - Start automatically on system boot
 - Restart automatically if it crashes (on-failure)
-- Log output to `/var/log/agentconnect-backend.log` and errors to `/var/log/agentconnect-backend-error.log`
+- Log output to `/var/log/heygenally-backend.log` and errors to `/var/log/heygenally-backend-error.log`
 
 ## Prerequisites
 
@@ -39,17 +39,17 @@ newgrp docker
 ### 2. Create Log Files (one-time setup)
 
 ```bash
-sudo touch /var/log/agentconnect-backend.log
-sudo touch /var/log/agentconnect-backend-error.log
-sudo chown developer:developer /var/log/agentconnect-backend.log
-sudo chown developer:developer /var/log/agentconnect-backend-error.log
+sudo touch /var/log/heygenally-backend.log
+sudo touch /var/log/heygenally-backend-error.log
+sudo chown developer:developer /var/log/heygenally-backend.log
+sudo chown developer:developer /var/log/heygenally-backend-error.log
 ```
 
 ### 3. Test Docker Compose Services
 
 Before setting up the service, ensure Docker Compose works:
 ```bash
-cd /home/developer/personal/AgentConnect/backend
+cd /home/developer/personal/HeyGenAlly/backend
 docker compose up -d
 docker compose ps  # Verify all services are running
 ```
@@ -57,7 +57,7 @@ docker compose ps  # Verify all services are running
 ### 4. Copy Service File to Systemd
 
 ```bash
-sudo cp agentconnect-backend.service /etc/systemd/system/
+sudo cp heygenally-backend.service /etc/systemd/system/
 ```
 
 ### 5. Reload Systemd Daemon
@@ -69,53 +69,53 @@ sudo systemctl daemon-reload
 ### 6. Enable Service (start on boot)
 
 ```bash
-sudo systemctl enable agentconnect-backend.service
+sudo systemctl enable heygenally-backend.service
 ```
 
 ### 7. Start the Service
 
 ```bash
-sudo systemctl start agentconnect-backend.service
+sudo systemctl start heygenally-backend.service
 ```
 
 ## Managing the Service
 
 ### Check Service Status
 ```bash
-sudo systemctl status agentconnect-backend.service
+sudo systemctl status heygenally-backend.service
 ```
 
 ### Stop the Service
 ```bash
-sudo systemctl stop agentconnect-backend.service
+sudo systemctl stop heygenally-backend.service
 ```
 
 ### Restart the Service
 ```bash
-sudo systemctl restart agentconnect-backend.service
+sudo systemctl restart heygenally-backend.service
 ```
 
 ### View Logs
 ```bash
 # View all logs
-sudo journalctl -u agentconnect-backend.service
+sudo journalctl -u heygenally-backend.service
 
 # View recent logs
-sudo journalctl -u agentconnect-backend.service -n 100
+sudo journalctl -u heygenally-backend.service -n 100
 
 # Follow logs in real-time
-sudo journalctl -u agentconnect-backend.service -f
+sudo journalctl -u heygenally-backend.service -f
 
 # View application logs
-tail -f /var/log/agentconnect-backend.log
+tail -f /var/log/heygenally-backend.log
 
 # View error logs
-tail -f /var/log/agentconnect-backend-error.log
+tail -f /var/log/heygenally-backend-error.log
 ```
 
 ### Disable Service (prevent start on boot)
 ```bash
-sudo systemctl disable agentconnect-backend.service
+sudo systemctl disable heygenally-backend.service
 ```
 
 ## Important Notes
@@ -124,7 +124,7 @@ sudo systemctl disable agentconnect-backend.service
 
 2. **No --reload flag**: The service runs without `--reload` for production stability. For development, continue using `uvicorn app.main:app --reload --port 8000` manually.
 
-3. **Environment Variables**: The service loads environment variables from `/home/developer/personal/AgentConnect/backend/.env`. Make sure this file exists and has the correct permissions.
+3. **Environment Variables**: The service loads environment variables from `/home/developer/personal/HeyGenAlly/backend/.env`. Make sure this file exists and has the correct permissions.
 
 4. **Port**: The service runs on port 8000 and binds to all interfaces (0.0.0.0). Make sure this port is available and not blocked by firewall.
 
@@ -133,18 +133,18 @@ sudo systemctl disable agentconnect-backend.service
 6. **Updates**: After modifying the service file, always run:
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl restart agentconnect-backend.service
+   sudo systemctl restart heygenally-backend.service
    ```
 
 ## Troubleshooting
 
 ### Service won't start
-1. Check the status: `sudo systemctl status agentconnect-backend.service`
-2. Check logs: `sudo journalctl -u agentconnect-backend.service -n 50`
-3. Check application error logs: `tail -n 100 /var/log/agentconnect-backend-error.log`
-4. Verify Docker services are running: `cd /home/developer/personal/AgentConnect/backend && docker compose ps`
-5. Verify virtual environment exists: `ls -la /home/developer/personal/AgentConnect/backend/venv/bin/uvicorn`
-6. Test manually: `cd /home/developer/personal/AgentConnect/backend && ./venv/bin/uvicorn app.main:app --port 8000`
+1. Check the status: `sudo systemctl status heygenally-backend.service`
+2. Check logs: `sudo journalctl -u heygenally-backend.service -n 50`
+3. Check application error logs: `tail -n 100 /var/log/heygenally-backend-error.log`
+4. Verify Docker services are running: `cd /home/developer/personal/HeyGenAlly/backend && docker compose ps`
+5. Verify virtual environment exists: `ls -la /home/developer/personal/HeyGenAlly/backend/venv/bin/uvicorn`
+6. Test manually: `cd /home/developer/personal/HeyGenAlly/backend && ./venv/bin/uvicorn app.main:app --port 8000`
 
 ### Docker permission issues
 If you see "permission denied" errors with Docker:
@@ -176,25 +176,25 @@ docker compose logs db
 ### Permission issues with logs
 Make sure the log files have correct permissions:
 ```bash
-sudo chown developer:developer /var/log/agentconnect-backend*.log
-sudo chmod 644 /var/log/agentconnect-backend*.log
+sudo chown developer:developer /var/log/heygenally-backend*.log
+sudo chmod 644 /var/log/heygenally-backend*.log
 ```
 
 ### Service keeps restarting
 Check error logs for application issues:
 ```bash
-tail -n 100 /var/log/agentconnect-backend-error.log
+tail -n 100 /var/log/heygenally-backend-error.log
 # Or use journalctl
-sudo journalctl -u agentconnect-backend.service -f
+sudo journalctl -u heygenally-backend.service -f
 ```
 
 ### Increase startup wait time
 If services need more time to start, edit the service file and increase the sleep time:
 ```bash
-sudo nano /etc/systemd/system/agentconnect-backend.service
+sudo nano /etc/systemd/system/heygenally-backend.service
 # Change: ExecStartPre=/bin/sleep 15
 # To: ExecStartPre=/bin/sleep 30
 
 sudo systemctl daemon-reload
-sudo systemctl restart agentconnect-backend.service
+sudo systemctl restart heygenally-backend.service
 ```

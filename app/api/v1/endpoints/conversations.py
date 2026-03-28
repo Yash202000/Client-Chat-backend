@@ -28,12 +28,19 @@ class PriorityUpdate(BaseModel):
     priority: int  # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
 
 @router.get("/sessions/counts", dependencies=[Depends(require_permission("conversation:read"))])
-def get_session_counts(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+def get_session_counts(
+    channel: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
     """
     Get counts of sessions by status for the company.
     Returns: { "open": count, "resolved": count, "all": count }
     """
     all_sessions = chat_service.get_sessions_with_details(db, company_id=current_user.company_id)
+
+    if channel:
+        all_sessions = [s for s in all_sessions if s.channel == channel]
 
     open_count = sum(1 for s in all_sessions if s.status not in ['resolved', 'archived'])
     resolved_count = sum(1 for s in all_sessions if s.status in ['resolved', 'archived'])
@@ -104,9 +111,72 @@ async def get_reopen_analytics(
     }
 
 
+@router.get("/search", dependencies=[Depends(require_permission("conversation:read"))])
+def search_conversations(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, le=50),
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """
+    Search across chat messages for the company.
+    Returns matching messages with their session context (contact name, channel, timestamp).
+    """
+    from app.models import contact as models_contact
+
+    results = (
+        db.query(models_chat_message.ChatMessage, models_conversation_session.ConversationSession)
+        .join(
+            models_conversation_session.ConversationSession,
+            models_chat_message.ChatMessage.session_id == models_conversation_session.ConversationSession.id,
+        )
+        .filter(
+            models_chat_message.ChatMessage.company_id == current_user.company_id,
+            models_chat_message.ChatMessage.message.ilike(f"%{q}%"),
+            models_chat_message.ChatMessage.message_type == "message",
+        )
+        .order_by(models_chat_message.ChatMessage.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+    out = []
+    for msg, session in results:
+        contact_name = None
+        if session.contact_id:
+            contact = db.query(models_contact.Contact).filter(models_contact.Contact.id == session.contact_id).first()
+            if contact:
+                contact_name = contact.name
+
+        # Build a small snippet around the match
+        text = msg.message or ""
+        idx = text.lower().find(q.lower())
+        start = max(0, idx - 60)
+        end = min(len(text), idx + len(q) + 60)
+        snippet = ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
+
+        out.append({
+            "message_id": msg.id,
+            "session_id": session.conversation_id,
+            "agent_id": session.agent_id,
+            "channel": session.channel,
+            "status": session.status,
+            "sender": msg.sender,
+            "snippet": snippet,
+            "query": q,
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+            "contact_name": contact_name or "Unknown",
+            "contact_id": session.contact_id,
+        })
+
+    return out
+
+
 @router.get("/sessions", response_model=List[schemas_session.Session], dependencies=[Depends(require_permission("conversation:read"))])
 def get_all_sessions(
     status_filter: Optional[str] = None,
+    channel: Optional[str] = None,
+    contact_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
@@ -128,6 +198,14 @@ def get_all_sessions(
         sessions_from_db = [s for s in sessions_from_db if s.status not in ['resolved', 'archived']]
     elif status_filter == 'resolved':
         sessions_from_db = [s for s in sessions_from_db if s.status in ['resolved', 'archived']]
+
+    # Apply channel filter
+    if channel:
+        sessions_from_db = [s for s in sessions_from_db if s.channel == channel]
+
+    # Apply contact_id filter
+    if contact_id:
+        sessions_from_db = [s for s in sessions_from_db if s.contact_id == contact_id]
 
     sessions = []
     for s in sessions_from_db:
@@ -152,10 +230,31 @@ def get_all_sessions(
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
             contact_phone=contact_info.phone_number if contact_info else None,
+            contact_id=s.contact_id,
             is_client_connected=real_time_connected,  # Use real-time status
             priority=s.priority
         ))
     return sessions
+
+
+@router.get("/sessions/{session_id}/messages", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])
+def get_session_messages(
+    session_id: str,
+    limit: int = 50,
+    before_id: int = None,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Get messages for a session by conversation_id (no agent_id required)."""
+    limit = min(limit, 100)
+    return chat_service.get_chat_messages(
+        db,
+        agent_id=None,
+        session_id=session_id,
+        company_id=current_user.company_id,
+        limit=limit,
+        before_id=before_id,
+    )
 
 
 # Summary endpoints - must be defined BEFORE /{agent_id}/{session_id} routes to avoid route conflicts
@@ -252,7 +351,9 @@ def get_session_detial_by_agent_id_session_id(agent_id: int, session_id: str, db
             first_message_content="",
             contact=contact_info,
             is_ai_enabled=sessions_from_db.is_ai_enabled,
-            priority=sessions_from_db.priority
+            priority=sessions_from_db.priority,
+            channel=sessions_from_db.channel,
+            is_client_connected=sessions_from_db.is_client_connected,
         )
 
 @router.get("/{agent_id}/{session_id}", response_model=List[schemas_chat_message.ChatMessage], dependencies=[Depends(require_permission("conversation:read"))])
@@ -331,6 +432,32 @@ async def update_assignee(
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found or assignee update failed")
     return {"message": "Assignee updated successfully"}
+
+class BulkActionRequest(BaseModel):
+    session_ids: List[str]
+    action: str  # 'resolve', 'assign', 'reopen'
+    assignee_id: Optional[int] = None
+
+@router.post("/bulk-action", dependencies=[Depends(require_permission("conversation:update"))])
+async def bulk_action(
+    body: BulkActionRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Apply an action to multiple conversations at once."""
+    updated = 0
+    for session_id in body.session_ids:
+        if body.action == 'resolve':
+            ok = await chat_service.update_conversation_status(db, session_id=session_id, status='resolved', company_id=current_user.company_id)
+        elif body.action == 'reopen':
+            ok = await chat_service.update_conversation_status(db, session_id=session_id, status='active', company_id=current_user.company_id)
+        elif body.action == 'assign' and body.assignee_id:
+            ok = await chat_service.update_conversation_assignee(db, session_id=session_id, user_id=body.assignee_id, company_id=current_user.company_id)
+        else:
+            ok = False
+        if ok:
+            updated += 1
+    return {"updated": updated, "total": len(body.session_ids)}
 
 class AIToggleUpdate(BaseModel):
     is_ai_enabled: bool

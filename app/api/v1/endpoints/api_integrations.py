@@ -231,7 +231,7 @@ async def test_webhook(
         "event_type": "test",
         "session_id": "test_session",
         "external_user_id": "test_user",
-        "message": "This is a test webhook payload from AgentConnect",
+        "message": "This is a test webhook payload from HeyGenAlly",
         "status": "test",
         "timestamp": datetime.utcnow().isoformat(),
         "metadata": {"test": True}

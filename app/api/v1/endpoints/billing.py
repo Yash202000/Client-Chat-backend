@@ -101,21 +101,57 @@ async def create_subscription(
     try:
         customer_id = None
 
-        # If customer already exists, use their Razorpay customer ID
+        # If customer already exists in our database, use their Razorpay customer ID
         if existing_subscription and existing_subscription.razorpay_customer_id:
             customer_id = existing_subscription.razorpay_customer_id
         else:
             # Create a new customer in Razorpay
+            # Build full name from first_name and last_name, fallback to email
+            full_name = None
+            if current_user.first_name and current_user.last_name:
+                full_name = f"{current_user.first_name} {current_user.last_name}"
+            elif current_user.first_name:
+                full_name = current_user.first_name
+            elif current_user.last_name:
+                full_name = current_user.last_name
+
             customer_data = {
-                "name": current_user.full_name or current_user.email,
+                "name": full_name or current_user.email,
                 "email": current_user.email,
                 "notes": {
                     "company_id": str(current_user.company_id),
                     "user_id": str(current_user.id),
                 }
             }
-            customer = razorpay_client.customer.create(data=customer_data)
-            customer_id = customer['id']
+
+            try:
+                customer = razorpay_client.customer.create(data=customer_data)
+                customer_id = customer['id']
+            except Exception as customer_error:
+                # If customer already exists, fetch by email
+                if "already exists" in str(customer_error).lower():
+                    # Fetch all customers and find by email
+                    customers = razorpay_client.customer.all()
+                    for cust in customers.get('items', []):
+                        if cust.get('email') == current_user.email:
+                            customer_id = cust['id']
+                            break
+
+                    if not customer_id:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Customer exists in Razorpay but couldn't be retrieved. Please contact support."
+                        )
+                else:
+                    raise customer_error
+
+            # Save customer_id to database immediately to prevent duplicate creation on retry
+            if existing_subscription and not existing_subscription.razorpay_customer_id:
+                company_subscription_service.update_subscription(
+                    db=db,
+                    subscription=existing_subscription,
+                    update_data={"razorpay_customer_id": customer_id}
+                )
 
         # Create subscription in Razorpay
         subscription_payload = {

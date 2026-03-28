@@ -1,0 +1,169 @@
+# Minimal Requirements - Only Actually Used Packages
+# Generated based on actual import analysis
+# Reduces from 335 packages to ~100 (including dependencies)
+
+# ============================================
+# WEB FRAMEWORK & SERVER (Most Used: 95+ files)
+# ============================================
+fastapi==0.115.14
+starlette==0.46.2
+uvicorn==0.29.0
+uvloop==0.21.0
+httptools==0.6.4
+python-multipart==0.0.20
+websockets==15.0.1
+sse-starlette==3.0.2
+
+# ============================================
+# DATABASE & ORM (Most Used: 244 files!)
+# ============================================
+SQLAlchemy==2.0.41
+psycopg2-binary==2.9.10
+alembic==1.16.5
+greenlet==3.2.3
+
+# ============================================
+# VECTOR DATABASES (Used in 4 files)
+# ============================================
+chromadb==1.0.20
+faiss-cpu==1.12.0
+
+# ============================================
+# LLM PROVIDERS (Only what's actually imported)
+# ============================================
+openai==1.107.2
+groq==0.30.0
+
+# ============================================
+# LANGCHAIN (Only core packages actually imported)
+# ============================================
+langchain==0.3.27
+langchain-community==0.3.29
+langchain-core==0.3.75
+langchain-text-splitters==0.3.10
+langsmith==0.4.21
+
+# ============================================
+# LIVEKIT - Real-time Voice/Video (6 files)
+# ============================================
+livekit==1.0.10
+livekit-agents==1.1.0
+livekit-api==1.0.2
+livekit-protocol==1.0.2
+aiortc==1.9.0
+aioice==0.10.1
+av==12.1.0
+pylibsrtp==0.12.0
+
+# ============================================
+# ML/AI LIBRARIES (Only if you need VAD/NVIDIA features)
+# Comment out if not using vad_service.py or nvidia_provider.py
+# ============================================
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0
+transformers==4.53.2
+sentence-transformers==5.0.0
+tokenizers==0.21.2
+huggingface-hub==0.33.4
+safetensors==0.5.3
+accelerate==1.10.1
+numpy==2.2.6
+
+# ============================================
+# HTTP CLIENTS (13 files use httpx, 4 use requests)
+# ============================================
+httpx==0.28.1
+httpx-sse==0.4.1
+aiohttp==3.13.2
+aiohttp-retry==2.8.3
+requests==2.32.5
+urllib3==2.5.0
+
+# ============================================
+# AUTHENTICATION & SECURITY (6 files)
+# ============================================
+python-jose==3.5.0
+PyJWT==2.10.1
+passlib==1.7.4
+bcrypt==4.3.0
+cryptography==45.0.7
+python-multipart==0.0.20
+
+# ============================================
+# DATA VALIDATION (79 files - heavily used!)
+# ============================================
+pydantic==2.11.7
+pydantic-settings==2.10.1
+pydantic_core==2.33.2
+email_validator==2.2.0
+
+# ============================================
+# CLOUD SERVICES & APIs (Actually used)
+# ============================================
+# AWS
+boto3==1.35.60
+botocore==1.35.99
+s3transfer==0.10.4
+
+# Google
+google-generativeai==0.8.5
+google-api-python-client==2.176.0
+google-auth==2.40.3
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.2
+googleapis-common-protos==1.70.0
+
+# Twilio
+twilio==9.3.8
+
+# Razorpay
+# razorpay (if needed)
+
+# ============================================
+# FILE PROCESSING (Actually used)
+# ============================================
+pypdf==6.0.0
+PyPDF2==3.0.1
+docx2txt==0.9
+python-docx==1.2.0
+pillow==11.3.0
+python-magic==0.4.27
+mutagen==1.47.0
+
+# ============================================
+# TASK SCHEDULING
+# ============================================
+APScheduler==3.11.0
+
+# ============================================
+# UTILITIES & HELPERS
+# ============================================
+python-dotenv==1.1.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+beautifulsoup4==4.13.4
+RestrictedPython==8.0
+fastmcp==2.11.1
+
+# ============================================
+# ASYNC & CONCURRENCY
+# ============================================
+anyio==4.9.0
+aiofiles==24.1.0
+nest-asyncio==1.6.0
+
+# ============================================
+# MONITORING (if needed)
+# ============================================
+prometheus-fastapi-instrumentator==6.0.0
+prometheus_client==0.22.1
+
+# ============================================
+# ESSENTIAL DEPENDENCIES
+# ============================================
+certifi==2025.7.9
+charset-normalizer==3.4.2
+idna==3.7
+sniffio==1.3.1
+typing_extensions==4.12.2
+click==8.1.8

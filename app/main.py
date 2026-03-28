@@ -61,7 +61,7 @@ if os.path.exists(widget_static_path):
 
 @app.get("/")
 async def read_root():
-    return {"message": "AgentConnect backend is running"}
+    return {"message": "HeyGenAlly backend is running"}
 
 
 from app.initial_data import create_initial_data

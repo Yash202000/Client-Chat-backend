@@ -366,6 +366,85 @@ def get_channel_distribution(
         for channel, count in channel_data
     ]
 
+@router.get("/summary")
+def get_reports_summary(
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Unified summary endpoint for the reports dashboard."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    company_id = current_user.company_id
+
+    CS = models_conversation_session.ConversationSession
+
+    # Total sessions in period
+    total_sessions = db.query(func.count(CS.id)).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff
+    ).scalar() or 0
+
+    # Resolved sessions
+    resolved_sessions = db.query(func.count(CS.id)).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff,
+        CS.status == 'resolved'
+    ).scalar() or 0
+
+    resolution_rate = round((resolved_sessions / total_sessions * 100), 1) if total_sessions > 0 else 0
+
+    # Sessions per channel
+    channel_rows = db.query(
+        CS.channel,
+        func.count(CS.id).label('count')
+    ).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff
+    ).group_by(CS.channel).all()
+    sessions_per_channel = [{"channel": ch or "unknown", "count": cnt} for ch, cnt in channel_rows]
+
+    # Sessions by status
+    status_rows = db.query(
+        CS.status,
+        func.count(CS.id).label('count')
+    ).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff
+    ).group_by(CS.status).all()
+    sessions_by_status = [{"status": st, "count": cnt} for st, cnt in status_rows]
+
+    # Daily volume (last N days)
+    daily_rows = db.query(
+        func.date(CS.created_at).label('date'),
+        func.count(CS.id).label('count')
+    ).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff
+    ).group_by(func.date(CS.created_at)).order_by('date').all()
+    daily_volume = [{"date": str(d), "count": cnt} for d, cnt in daily_rows]
+
+    # Sessions per agent (top agents)
+    agent_rows = db.query(
+        User.email,
+        func.count(CS.id).label('count')
+    ).join(CS, User.id == CS.assignee_id).filter(
+        CS.company_id == company_id,
+        CS.created_at >= cutoff,
+        CS.assignee_id.isnot(None)
+    ).group_by(User.id, User.email).order_by(desc('count')).limit(10).all()
+    sessions_per_agent = [{"agent": email, "count": cnt} for email, cnt in agent_rows]
+
+    return {
+        "total_sessions": total_sessions,
+        "resolved_sessions": resolved_sessions,
+        "resolution_rate": resolution_rate,
+        "sessions_per_channel": sessions_per_channel,
+        "sessions_by_status": sessions_by_status,
+        "daily_volume": daily_volume,
+        "sessions_per_agent": sessions_per_agent,
+        "days": days,
+    }
+
 @router.get("/alerts")
 def get_alerts(db: Session = Depends(get_db),current_user: User = Depends(get_current_user),) -> List[Dict[str, Any]]:
     # Placeholder - requires an alerting system

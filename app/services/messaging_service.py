@@ -468,3 +468,118 @@ async def send_telegram_message(
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
             raise e
+
+
+import base64
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+
+async def send_gmail_message(
+    to: "str | list[str]",
+    subject: str,
+    body: str,
+    thread_id: Optional[str],
+    db: Session,
+    company_id: int,
+    cc: Optional[list] = None,
+    bcc: Optional[list] = None,
+) -> Dict[str, Any]:
+    """
+    Send an outbound email.
+
+    Strategy (checked in order):
+    1. If SMTP is configured in company settings (Settings > Email), use SMTP.
+    2. Otherwise fall back to Gmail OAuth (Integration record with type='gmail').
+    """
+    from app.services import company_settings_service, email_service
+
+    # Normalise `to` to a list and derive a primary address string
+    if isinstance(to, str):
+        to_list = [to]
+    else:
+        to_list = list(to)
+    to_str = ', '.join(to_list)
+
+    # --- 1. Try SMTP first ---
+    company_settings = company_settings_service.get_company_settings(db, company_id)
+    if (
+        company_settings
+        and company_settings.smtp_host
+        and company_settings.smtp_user
+        and company_settings.smtp_password
+    ):
+        logger.info(f"Sending email to {to_str} via SMTP ({company_settings.smtp_host})")
+        smtp_config = {
+            "host": company_settings.smtp_host,
+            "port": company_settings.smtp_port or 587,
+            "user": company_settings.smtp_user,
+            "password": company_settings.smtp_password,
+            "use_tls": company_settings.smtp_use_tls if company_settings.smtp_use_tls is not None else True,
+        }
+        result = await email_service.send_email_smtp(
+            to_email=to_str,
+            subject=subject,
+            html_content=body,
+            from_email=company_settings.smtp_from_email or company_settings.smtp_user,
+            from_name=company_settings.smtp_from_name or "HeyGenAlly",
+            smtp_config=smtp_config,
+            cc=cc or [],
+            bcc=bcc or [],
+        )
+        # Return a shape compatible with the Gmail API response consumers expect
+        return {"id": result.get("message_id"), "threadId": thread_id, "status": result.get("status")}
+
+    # --- 2. Fall back to Gmail OAuth ---
+    logger.info(f"No SMTP configured for company {company_id}; falling back to Gmail OAuth")
+    integration = db.query(Integration).filter(
+        Integration.company_id == company_id,
+        Integration.type == "gmail",
+    ).first()
+
+    if not integration:
+        raise ValueError(
+            "No email provider configured. "
+            "Please set up SMTP in Settings > Email, or connect Gmail in integrations."
+        )
+
+    credentials = integration_service.get_decrypted_credentials(integration)
+    access_token = credentials.get("access_token") or credentials.get("token")
+
+    if not access_token:
+        raise ValueError("Gmail access token not found. Please reconnect your Gmail account.")
+
+    # Build RFC 2822 message
+    mime_msg = MIMEMultipart()
+    mime_msg["To"] = to_str
+    mime_msg["Subject"] = subject
+    if cc:
+        mime_msg["Cc"] = ', '.join(cc)
+    if bcc:
+        mime_msg["Bcc"] = ', '.join(bcc)
+    mime_msg.attach(MIMEText(body, "html"))
+
+    raw = base64.urlsafe_b64encode(mime_msg.as_bytes()).decode("utf-8")
+
+    payload: Dict[str, Any] = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id
+
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            logger.info(f"Gmail OAuth message sent to {to}")
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Error sending Gmail message: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sending Gmail message: {e}")
+            raise

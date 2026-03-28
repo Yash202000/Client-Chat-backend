@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 
 from app.schemas import agent as schemas_agent
 from app.services import agent_service
@@ -9,9 +10,81 @@ from app.models import user as models_user
 from app.crud import crud_published_widget_settings
 from app.services import widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
+from app.services.template_ai_service import TemplateAIService, LLM_PROVIDERS
+from app.services import credential_service
+from app.services.vault_service import vault_service
 
 
 router = APIRouter()
+
+
+class AgentGenerateRequest(BaseModel):
+    description: str
+    credential_id: int
+
+
+class AgentGenerateResponse(BaseModel):
+    name: str
+    prompt: str
+    welcome_message: str
+
+
+@router.post("/generate", response_model=AgentGenerateResponse)
+async def generate_agent_config(
+    request: AgentGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Generate agent name, prompt, and welcome message from a natural language description."""
+    credential = credential_service.get_credential(db, request.credential_id, current_user.company_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    api_key = vault_service.decrypt(credential.encrypted_credentials)
+    provider = credential.service.lower()
+
+    if provider not in LLM_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
+    svc = TemplateAIService()
+    client = svc._get_client(provider, api_key)
+    model_id = LLM_PROVIDERS[provider]["default_model"]
+
+    system_prompt = """You are an AI assistant that helps configure chat agents.
+Given a description of what the agent should do, generate a concise agent name, a detailed system prompt, and a friendly welcome message.
+
+Respond ONLY with valid JSON in this exact format:
+{
+  "name": "Short descriptive agent name (max 5 words)",
+  "prompt": "Detailed system prompt that defines the agent's role, behavior, tone, and capabilities",
+  "welcome_message": "A warm, friendly opening message the agent sends to users"
+}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Create an agent for: {request.description}"}
+            ],
+            temperature=0.7,
+            max_tokens=800
+        )
+        content = response.choices[0].message.content
+
+        import json, re
+        match = re.search(r'\{[\s\S]*\}', content)
+        if not match:
+            raise ValueError("No JSON found in response")
+        data = json.loads(match.group())
+
+        return AgentGenerateResponse(
+            name=data.get("name", "AI Agent"),
+            prompt=data.get("prompt", "You are a helpful AI assistant."),
+            welcome_message=data.get("welcome_message", "Hi! How can I help you today?")
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate agent config: {str(e)}")
 
 @router.get("/{agent_id}/widget-settings", response_model=schemas_widget_settings.WidgetSettings)
 def read_widget_settings(agent_id: int, db: Session = Depends(get_db)):

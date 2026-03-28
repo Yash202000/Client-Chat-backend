@@ -48,7 +48,7 @@ class Campaign(Base):
     campaign_type = Column(Enum(CampaignType), nullable=False, index=True)
     status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False, index=True)
 
-    # Integration with existing AgentConnect features
+    # Integration with existing HeyGenAlly features
     workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=True)  # Automated sequence workflow
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # AI agent for conversational campaigns
 

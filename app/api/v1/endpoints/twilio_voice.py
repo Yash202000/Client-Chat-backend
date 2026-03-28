@@ -10,11 +10,13 @@ import logging
 import base64
 from typing import Optional
 
+from pydantic import BaseModel
 from app.core.dependencies import get_db, get_current_user
 from app.core.config import settings
 from app.models.user import User
 from app.models.twilio_phone_number import TwilioPhoneNumber
-from app.models.voice_call import VoiceCall
+from app.models.voice_call import VoiceCall, CallStatus
+from app.models.contact import Contact
 from app.services.twilio_voice_service import TwilioVoiceService, get_voice_calls_by_company
 from app.services.audio_conversion_service import AudioConversionService
 from app.services.stt_service import OpenAISTTService
@@ -1036,14 +1038,16 @@ async def fetch_phone_numbers_from_twilio(
 async def list_voice_calls(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    contact_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """List voice calls for the company."""
-    calls = get_voice_calls_by_company(db, current_user.company_id, skip, limit)
-    total = db.query(VoiceCall).filter(
-        VoiceCall.company_id == current_user.company_id
-    ).count()
+    query = db.query(VoiceCall).filter(VoiceCall.company_id == current_user.company_id)
+    if contact_id:
+        query = query.filter(VoiceCall.contact_id == contact_id)
+    total = query.count()
+    calls = query.order_by(VoiceCall.started_at.desc()).offset(skip).limit(limit).all()
     return VoiceCallListResponse(
         calls=calls,
         total=total,
@@ -1068,3 +1072,207 @@ async def get_voice_call(
         raise HTTPException(status_code=404, detail="Voice call not found")
 
     return call
+
+
+# --- Outbound Calling (Browser SDK) ---
+
+class OutboundCallRequest(BaseModel):
+    to_number: str
+    contact_id: Optional[int] = None
+
+
+@router.get("/token")
+async def get_access_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate a Twilio Access Token with VoiceGrant for the browser-based Twilio Client SDK.
+    If no TwiML App SID is stored in credentials, one is auto-created via the Twilio API.
+    """
+    from twilio.jwt.access_token import AccessToken
+    from twilio.jwt.access_token.grants import VoiceGrant
+
+    integration = db.query(Integration).filter(
+        Integration.company_id == current_user.company_id,
+        Integration.type == "twilio_voice",
+        Integration.is_active == True
+    ).first()
+
+    if not integration:
+        raise HTTPException(status_code=404, detail="No active Twilio Voice integration found")
+
+    credentials = integration_service.get_decrypted_credentials(integration)
+    account_sid = credentials.get("account_sid")
+    auth_token = credentials.get("auth_token")
+    api_key_sid = credentials.get("api_key_sid")
+    api_key_secret = credentials.get("api_key_secret")
+    twiml_app_sid = credentials.get("twiml_app_sid")
+
+    if not account_sid or not auth_token:
+        raise HTTPException(status_code=400, detail="Twilio credentials are incomplete")
+
+    # Auto-create TwiML App if not already stored
+    if not twiml_app_sid:
+        try:
+            twilio_client = TwilioClient(account_sid, auth_token)
+            public_host = getattr(settings, "PUBLIC_HOST", None) or getattr(settings, "FRONTEND_URL", "")
+            voice_url = f"https://{public_host}/api/v1/twilio/webhook/twiml-app"
+            app = twilio_client.applications.create(
+                friendly_name="HeyGenAlly Outbound Calls",
+                voice_url=voice_url,
+                voice_method="POST"
+            )
+            twiml_app_sid = app.sid
+            # Persist SID back into integration credentials
+            from app.services.vault_service import vault_service
+            import json as _json
+            existing = dict(credentials)
+            existing["twiml_app_sid"] = twiml_app_sid
+            integration.credentials = vault_service.encrypt(_json.dumps(existing))
+            db.commit()
+            logger.info(f"Auto-created TwiML App: {twiml_app_sid}")
+        except Exception as e:
+            logger.error(f"Failed to auto-create TwiML App: {e}")
+            raise HTTPException(status_code=500, detail="Failed to create TwiML Application")
+
+    identity = f"agent_{current_user.id}"
+    signing_key = api_key_sid or account_sid
+    signing_secret = api_key_secret or auth_token
+
+    try:
+        token = AccessToken(account_sid, signing_key, signing_secret, identity=identity)
+        voice_grant = VoiceGrant(outgoing_application_sid=twiml_app_sid, incoming_allow=True)
+        token.add_grant(voice_grant)
+        return {"token": token.to_jwt(), "identity": identity}
+    except Exception as e:
+        logger.error(f"Error generating Twilio Access Token: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate access token")
+
+
+@router.post("/webhook/twiml-app")
+async def twiml_app_voice(request: Request, db: Session = Depends(get_db)):
+    """
+    TwiML webhook for outbound calls initiated via the Twilio Client SDK.
+    Twilio calls this URL when the browser device places a call.
+    Returns TwiML instructing Twilio to dial the destination number.
+    """
+    form_data = await request.form()
+    to_number = form_data.get("To", "")
+    call_sid = form_data.get("CallSid", "")
+    caller_identity = form_data.get("From", "")
+
+    logger.info(f"TwiML app outbound: CallSid={call_sid}, To={to_number}, From={caller_identity}")
+
+    if not to_number:
+        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response><Say>No destination number provided.</Say><Hangup/></Response>'''
+        return get_twiml_response(twiml)
+
+    # Determine caller ID: use the company's configured Twilio number if possible
+    # Extract agent user_id from identity (format: agent_{user_id})
+    caller_id = to_number  # fallback
+    try:
+        if caller_identity.startswith("agent_"):
+            agent_user_id = int(caller_identity.split("_")[1])
+            user = db.query(User).filter(User.id == agent_user_id).first()
+            if user:
+                phone_config = db.query(TwilioPhoneNumber).filter(
+                    TwilioPhoneNumber.company_id == user.company_id,
+                    TwilioPhoneNumber.is_active == True
+                ).first()
+                if phone_config:
+                    caller_id = phone_config.phone_number
+    except Exception as e:
+        logger.warning(f"Could not determine caller ID: {e}")
+
+    # Get status callback URL for tracking call lifecycle
+    public_host = getattr(settings, "PUBLIC_HOST", None) or ""
+    if public_host:
+        status_callback = f"https://{public_host}/api/v1/twilio/webhook/voice/status"
+        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial callerId="{caller_id}">
+    <Number statusCallbackEvent="initiated ringing answered completed"
+            statusCallback="{status_callback}"
+            statusCallbackMethod="POST">{to_number}</Number>
+  </Dial>
+</Response>'''
+    else:
+        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial callerId="{caller_id}">
+    <Number>{to_number}</Number>
+  </Dial>
+</Response>'''
+
+    return get_twiml_response(twiml)
+
+
+@router.post("/outbound-call")
+async def initiate_outbound_call(
+    call_request: OutboundCallRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Register an outbound call initiated via the browser SDK.
+    Creates (or re-uses) the conversation session and returns session info.
+    The actual call is placed client-side via the Twilio JS SDK after this.
+    """
+    from app.services import conversation_session_service, contact_service
+
+    company_id = current_user.company_id
+    to_number = call_request.to_number.strip()
+
+    if not to_number.startswith("+"):
+        raise HTTPException(status_code=400, detail="Phone number must be in E.164 format (+1234567890)")
+
+    phone_config = db.query(TwilioPhoneNumber).filter(
+        TwilioPhoneNumber.company_id == company_id,
+        TwilioPhoneNumber.is_active == True
+    ).first()
+
+    if not phone_config:
+        raise HTTPException(status_code=400, detail="No active Twilio phone number configured for your company")
+
+    # Resolve contact
+    if call_request.contact_id:
+        contact = db.query(Contact).filter(
+            Contact.id == call_request.contact_id,
+            Contact.company_id == company_id
+        ).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+    else:
+        contact = contact_service.get_or_create_contact_for_channel(
+            db, company_id=company_id, channel="twilio_voice",
+            channel_identifier=to_number, name=to_number
+        )
+
+    # Create/reuse conversation session keyed by outbound number + agent
+    conversation_id = f"twilio_outbound_{to_number}_{current_user.id}"
+    session = conversation_session_service.get_or_create_session(
+        db,
+        conversation_id=conversation_id,
+        workflow_id=None,
+        contact_id=contact.id,
+        channel="twilio_voice",
+        company_id=company_id,
+        agent_id=phone_config.default_agent_id
+    )
+    session.status = "active"
+    session.is_client_connected = True
+    session.context = {}
+    db.commit()
+
+    logger.info(f"Outbound call session ready: {conversation_id} -> {to_number}")
+
+    return {
+        "conversation_id": conversation_id,
+        "session_id": str(session.id),
+        "to_number": to_number,
+        "from_number": phone_config.phone_number,
+        "contact_id": contact.id,
+        "contact_name": contact.name or to_number,
+    }

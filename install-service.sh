@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# AgentConnect Backend Service Installation Script
+# HeyGenAlly Backend Service Installation Script
 # This script automates the installation of the systemd service
 
 set -e  # Exit on error
 
 echo "=================================="
-echo "AgentConnect Backend Service Setup"
+echo "HeyGenAlly Backend Service Setup"
 echo "=================================="
 echo ""
 
@@ -65,17 +65,17 @@ echo "✓ Virtual environment OK"
 
 # Create log files
 echo "[6/7] Creating log files..."
-sudo touch /var/log/agentconnect-backend.log
-sudo touch /var/log/agentconnect-backend-error.log
-sudo chown $USER:$USER /var/log/agentconnect-backend.log
-sudo chown $USER:$USER /var/log/agentconnect-backend-error.log
+sudo touch /var/log/heygenally-backend.log
+sudo touch /var/log/heygenally-backend-error.log
+sudo chown $USER:$USER /var/log/heygenally-backend.log
+sudo chown $USER:$USER /var/log/heygenally-backend-error.log
 echo "✓ Log files created"
 
 # Install service
 echo "[7/7] Installing systemd service..."
-sudo cp agentconnect-backend.service /etc/systemd/system/
+sudo cp heygenally-backend.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable agentconnect-backend.service
+sudo systemctl enable heygenally-backend.service
 echo "✓ Service installed and enabled"
 
 echo ""
@@ -91,12 +91,12 @@ echo "   docker compose up -d"
 echo "   docker compose ps"
 echo ""
 echo "2. Start the backend service:"
-echo "   sudo systemctl start agentconnect-backend.service"
+echo "   sudo systemctl start heygenally-backend.service"
 echo ""
 echo "3. Check service status:"
-echo "   sudo systemctl status agentconnect-backend.service"
+echo "   sudo systemctl status heygenally-backend.service"
 echo ""
 echo "4. View logs:"
-echo "   tail -f /var/log/agentconnect-backend.log"
+echo "   tail -f /var/log/heygenally-backend.log"
 echo ""
 echo "For more information, see SERVICE-SETUP.md"

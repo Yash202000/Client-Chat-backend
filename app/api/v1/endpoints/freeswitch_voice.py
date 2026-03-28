@@ -841,7 +841,7 @@ async def get_dialplan_example(
   <condition field="destination_number" expression="^(\\d+)$">
     <action application="answer"/>
     <action application="sleep" data="500"/>
-    <!-- Connect to AgentConnect WebSocket -->
+    <!-- Connect to HeyGenAlly WebSocket -->
     <action application="audio_stream" data="{ws_url} start both"/>
   </condition>
 </extension>
@@ -852,7 +852,7 @@ Notes:
 2. The WebSocket URL should use wss:// for production
 3. Audio format is L16 (16-bit signed PCM, little-endian)
 4. Default sample rate is 8000 Hz, can be configured in mod_audio_stream
-5. Configure your extensions/DIDs in the AgentConnect Voice settings
+5. Configure your extensions/DIDs in the HeyGenAlly Voice settings
 -->
 """
     return {"dialplan": example, "websocket_url": ws_url}

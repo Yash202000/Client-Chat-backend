@@ -2,7 +2,7 @@
 """
 Interactive Chat Script for API Channel
 
-This script allows you to chat with your AgentConnect agent via the API channel.
+This script allows you to chat with your HeyGenAlly agent via the API channel.
 It simulates a third-party integration using the REST API.
 
 Usage:
@@ -48,7 +48,7 @@ def print_colored(text: str, color: str = Colors.ENDC):
 def print_header():
     """Print the chat header."""
     print_colored("\n" + "=" * 60, Colors.CYAN)
-    print_colored("   AgentConnect API Channel - Interactive Chat", Colors.BOLD + Colors.CYAN)
+    print_colored("   HeyGenAlly API Channel - Interactive Chat", Colors.BOLD + Colors.CYAN)
     print_colored("=" * 60, Colors.CYAN)
     print_colored("Type /help for available commands\n", Colors.DIM)
 
@@ -376,7 +376,7 @@ def validate_connection(base_url: str, api_key: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Interactive chat with AgentConnect API Channel",
+        description="Interactive chat with HeyGenAlly API Channel",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -395,7 +395,7 @@ Examples:
     parser.add_argument(
         "--base-url", "-u",
         default="http://localhost:8000",
-        help="Base URL of the AgentConnect API (default: http://localhost:8000)"
+        help="Base URL of the HeyGenAlly API (default: http://localhost:8000)"
     )
 
     parser.add_argument(
