@@ -104,8 +104,9 @@ class ConnectionManager:
             # Clean up dead connections after iteration
             for failed_conn in failed_connections:
                 try:
-                    self.active_connections[channel_id].remove(failed_conn)
-                    print(f"[broadcast] 🗑️ Removed dead connection for {failed_conn['user_type']}")
+                    if channel_id in self.active_connections:
+                        self.active_connections[channel_id].remove(failed_conn)
+                        print(f"[broadcast] 🗑️ Removed dead connection for {failed_conn['user_type']}")
                 except ValueError:
                     pass  # Already removed
 

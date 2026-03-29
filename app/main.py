@@ -86,6 +86,22 @@ async def run_whatsapp_token_refresh():
     await run_whatsapp_token_refresh_scheduler()
 
 
+async def run_social_post_scheduler():
+    """Publish any social posts whose scheduled_at has passed."""
+    from app.services.social_publishing_service import SocialPublishingService
+    db = SessionLocal()
+    try:
+        service = SocialPublishingService()
+        due_posts = await service.get_posts_due_for_publishing(db)
+        for post in due_posts:
+            try:
+                await service.publish_post_to_platform(db, post)
+            except Exception as e:
+                print(f"[SocialScheduler] Failed to publish post {post.id}: {e}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def on_startup():
     create_initial_data()
@@ -132,6 +148,16 @@ async def on_startup():
         replace_existing=True
     )
     print("[Startup] WhatsApp token refresh scheduler started (interval: 1 hour)")
+
+    # Social post publishing scheduler — runs every minute to publish scheduled posts
+    scheduler.add_job(
+        run_social_post_scheduler,
+        'interval',
+        minutes=1,
+        id='social_post_scheduler',
+        replace_existing=True
+    )
+    print("[Startup] Social post scheduler started (interval: 1 min)")
 
     # Start the scheduler if not already started
     if not scheduler.running:

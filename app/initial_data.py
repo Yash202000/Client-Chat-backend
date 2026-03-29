@@ -13,8 +13,8 @@ def create_initial_data():
         # Check if a default company exists, if not, create one
         default_company = company_service.get_companies(db, limit=1)
         if not default_company:
-            print("Creating default company heygenally...")
-            company = company_service.create_company(db, schemas_company.CompanyCreate(name="heygenally"))
+            print("Creating default company HeyGenAlly...")
+            company = company_service.create_company(db, schemas_company.CompanyCreate(name="HeyGenAlly"))
         else:
             company = default_company[0]
 

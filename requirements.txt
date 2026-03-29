@@ -332,4 +332,4 @@ youtube-transcript-api==1.2.2
 zeep==4.3.1
 zipp==3.23.0
 zstandard==0.24.0
-zxing-cpp==2.2.0
+zxing-cpp==2.2.0pytrends>=4.9

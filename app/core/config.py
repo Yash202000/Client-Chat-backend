@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     LINKEDIN_CLIENT_SECRET: str = ""
     LINKEDIN_REDIRECT_URI: str = ""
     LINKEDIN_COMPANY_ID: str = ""
+
+    # Marketing Hub — Social Publishing
+    FACEBOOK_APP_ID: str = ""
+    FACEBOOK_APP_SECRET: str = ""
+    FACEBOOK_REDIRECT_URI: str = ""
+    INSTAGRAM_GRAPH_API_VERSION: str = "v19.0"
+    RAPIDAPI_KEY: str = ""
+    RAPIDAPI_LINKEDIN_TRENDS_HOST: str = "linkedin-data-api.p.rapidapi.com"
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""

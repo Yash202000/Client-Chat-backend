@@ -15,6 +15,7 @@ class MessageType(str, enum.Enum):
     TELEGRAM = "telegram"
     VOICE = "voice"  # Twilio voice call
     AI_CONVERSATION = "ai_conversation"  # AI agent initiates conversation
+    LINKEDIN_DM = "linkedin_dm"  # LinkedIn direct message outreach
 
 
 class DelayUnit(str, enum.Enum):

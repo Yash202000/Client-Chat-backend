@@ -13,6 +13,7 @@ class CampaignType(str, enum.Enum):
     WHATSAPP = "whatsapp"
     VOICE = "voice"  # Twilio voice calls
     MULTI_CHANNEL = "multi_channel"  # Combination of channels
+    LINKEDIN = "linkedin"  # LinkedIn DM outreach sequences
 
 
 class CampaignStatus(str, enum.Enum):

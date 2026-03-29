@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, JSON, ForeignKey, Boolean, DateTime, Enum
+from sqlalchemy import Column, Integer, String, JSON, ForeignKey, Boolean, DateTime, Enum, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -43,6 +43,19 @@ class Contact(Base):
     opt_in_status = Column(Enum(OptInStatus), default=OptInStatus.UNKNOWN, nullable=False)
     opt_in_date = Column(DateTime, nullable=True)
     opt_out_date = Column(DateTime, nullable=True)
+
+    # Social profile fields
+    linkedin_url = Column(String, nullable=True, index=True)
+    linkedin_urn = Column(String, nullable=True)          # LinkedIn member URN for API calls
+    instagram_handle = Column(String, nullable=True)
+    facebook_url = Column(String, nullable=True)
+    job_title = Column(String, nullable=True, index=True)
+    company_name = Column(String, nullable=True, index=True)  # denormalized for import
+    industry = Column(String, nullable=True, index=True)
+    location = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    enriched_at = Column(DateTime, nullable=True)             # when enrichment last ran
+    enrichment_source = Column(String, nullable=True)         # "linkedin_api" | "ai_knowledge" | "manual"
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=True)

@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound, social, linkedin_leads
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -119,6 +119,10 @@ api_router.include_router(api_integrations.router, prefix="/api-integrations", t
 # SMS & Email outbound
 api_router.include_router(sms.router, prefix="/sms", tags=["sms"])
 api_router.include_router(email_outbound.router, prefix="/email", tags=["email"])
+
+# Marketing Hub — Social Publishing & LinkedIn Leads
+api_router.include_router(social.router, prefix="/social", tags=["social"])
+api_router.include_router(linkedin_leads.router, prefix="/linkedin-leads", tags=["linkedin-leads"])
 
 # CMS (Content Management System)
 api_router.include_router(cms_content_types.router, prefix="/cms/types", tags=["cms"])

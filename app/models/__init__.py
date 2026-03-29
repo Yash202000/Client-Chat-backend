@@ -82,3 +82,7 @@ from app.models.content_publishing import ContentCopy, ContentApiToken, ContentE
 # Licensing Models
 from app.models.instance_license import InstanceLicense
 
+# Marketing Hub Models
+from app.models.social_account import SocialAccount, SocialPlatform, SocialAccountStatus
+from app.models.social_post import SocialPost, PostStatus
+
