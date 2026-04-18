@@ -66,6 +66,35 @@ services:
       POSTGRES_USER:     agentconnect
       POSTGRES_PASSWORD: agentconnect
 
+  # FastAPI Backend
+  # backend:
+  #   image: yashplg/agentconnect-backend:latest
+  #   # build:
+  #   #   context: .
+  #   #   dockerfile: Dockerfile
+  #   container_name: agentconnect-backend
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./generated_images:/app/generated_images
+  #     - backend_logs:/app/logs
+  #   ports:
+  #     - "${BACKEND_PORT:-8000}:8000"
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     chroma:
+  #       condition: service_started
+  #     minio1:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+
   # frontend:
   #   # IMPORTANT: Replace 'your-frontend-image:latest' with the actual name and tag of your built Docker image.
   #   image: yashplg/agentconnect-frontend:v1.7
@@ -111,3 +140,4 @@ services:
 volumes:
   chroma_data:
   agentconnect_db:
+  backend_logs:

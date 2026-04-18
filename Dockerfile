@@ -12,6 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
+    libmagic-dev \
     curl \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -39,6 +40,7 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder stage
