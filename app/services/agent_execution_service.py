@@ -321,7 +321,7 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
     print(f"Final tool definitions for LLM: {json.dumps(tool_definitions, indent=2)}")
     return tool_definitions
 
-async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str):
+async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str, _trace: dict = None):
     """
     Orchestrates the agent's response, handling tool use and broadcasting messages.
     - If a tool is called, it broadcasts a 'tool_use' message, executes the tool,
@@ -378,10 +378,15 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     # Get RAG context
     rag_context = _get_rag_context(agent, user_message, agent.knowledge_bases)
 
+    if _trace is not None:
+        _trace['kb_used'] = bool(rag_context and agent.knowledge_bases)
+
     generic_tools = await _get_tools_for_agent(agent, db=db, company_id=company_id)
     db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
-    formatted_history.append({"role": "user", "content": user_message})
+    # Only append if not already the last message (avoids duplicate when caller saves to DB before routing)
+    if not formatted_history or formatted_history[-1].get("role") != "user" or formatted_history[-1].get("content") != user_message:
+        formatted_history.append({"role": "user", "content": user_message})
 
     # Check if this is the first message in the conversation (no assistant messages yet)
     is_first_message = not any(msg.get("role") == "assistant" for msg in formatted_history)
@@ -574,11 +579,16 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         if tool_name and tool_name.startswith("start_workflow_"):
             workflow_id = int(tool_name.replace("start_workflow_", ""))
             print(f"[AGENT EXECUTION] LLM triggered workflow {workflow_id}")
+            if _trace is not None:
+                _trace['workflow_id'] = workflow_id
             return {
                 "type": "workflow_trigger",
                 "workflow_id": workflow_id,
                 "message": user_message
             }
+
+        if _trace is not None:
+            _trace['tool_name'] = tool_name
 
         tool_call_msg = {
             "message_type": "tool_use",
@@ -773,7 +783,9 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
     generic_tools = await _get_tools_for_agent(agent, db=db, company_id=company_id)
     db_chat_history = chat_service.get_chat_messages(db, agent_id, boradcast_session_id, company_id, limit=20)
     formatted_history = format_chat_history(db_chat_history)
-    formatted_history.append({"role": "user", "content": user_message})
+    # Only append if not already the last message (avoids duplicate when caller saves to DB before routing)
+    if not formatted_history or formatted_history[-1].get("role") != "user" or formatted_history[-1].get("content") != user_message:
+        formatted_history.append({"role": "user", "content": user_message})
 
     is_first_message = not any(msg.get("role") == "assistant" for msg in formatted_history)
 

@@ -1,12 +1,28 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import hashlib
 
 from app.core.dependencies import get_db, get_current_active_user, require_permission
-from app.services import contact_service
+from app.services import contact_service, integration_service, messaging_service
 from app.schemas import contact as schemas_contact
 from app.models import conversation_session as models_conversation_session
 from app.models import user as models_user
+from app.models import integration as models_integration
+
+
+def _gravatar_url(email: str) -> str:
+    digest = hashlib.md5(email.strip().lower().encode()).hexdigest()
+    return f"https://www.gravatar.com/avatar/{digest}?s=200&d=404"
+
+
+def _resolve_profile_picture(contact) -> Optional[str]:
+    """Returns the contact's stored picture, or a Gravatar URL if they have an email."""
+    if contact.profile_picture_url:
+        return contact.profile_picture_url
+    if contact.email:
+        return _gravatar_url(contact.email)
+    return None
 
 router = APIRouter()
 
@@ -38,7 +54,8 @@ def read_contacts(
             "created_at": contact.created_at,
             "updated_at": contact.updated_at,
             "last_contacted_at": contact.last_contacted_at,
-            "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in contact.tag_objects] if hasattr(contact, 'tag_objects') else []
+            "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in contact.tag_objects] if hasattr(contact, 'tag_objects') else [],
+            "profile_picture_url": _resolve_profile_picture(contact),
         }
         result.append(contact_dict)
     return result
@@ -63,6 +80,51 @@ def update_contact(
 ):
     return contact_service.update_contact(db=db, contact_id=contact_id, contact=contact, company_id=current_user.company_id)
 
+@router.post("/{contact_id}/refresh_profile_picture", dependencies=[Depends(require_permission("contact:update"))])
+async def refresh_contact_profile_picture(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """
+    Attempts to re-fetch a contact's profile picture from their channel (e.g. WhatsApp).
+    Safe to call multiple times; no-ops if the channel integration is missing.
+    """
+    contact = contact_service.get_contact(db, contact_id=contact_id, company_id=current_user.company_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    phone = contact.phone_number
+    wa_id = contact.custom_attributes.get("whatsapp_id") if contact.custom_attributes else None
+    lookup_phone = wa_id or phone
+
+    if not lookup_phone:
+        return {"profile_picture_url": None, "message": "No phone number on contact"}
+
+    # Find the company's WhatsApp integration
+    integration = db.query(models_integration.Integration).filter(
+        models_integration.Integration.company_id == current_user.company_id,
+        models_integration.Integration.type == "whatsapp",
+        models_integration.Integration.enabled == True
+    ).first()
+
+    if not integration:
+        return {"profile_picture_url": None, "message": "No active WhatsApp integration"}
+
+    pic_url = await messaging_service.fetch_whatsapp_profile_picture(
+        wa_id=lookup_phone,
+        integration=integration,
+        db=db
+    )
+
+    if pic_url:
+        contact.profile_picture_url = pic_url
+        db.commit()
+        db.refresh(contact)
+
+    return {"profile_picture_url": contact.profile_picture_url}
+
+
 @router.get("/by_session/{session_id}", response_model=Optional[schemas_contact.Contact], dependencies=[Depends(require_permission("contact:read"))])
 def get_contact_by_session(
     session_id: str,
@@ -85,7 +147,6 @@ def get_contact_by_session(
         return None
 
     contact = session.contact
-    # Map tag_objects relationship to tags for schema compatibility
     contact_dict = {
         "id": contact.id,
         "company_id": contact.company_id,
@@ -102,6 +163,17 @@ def get_contact_by_session(
         "created_at": contact.created_at,
         "updated_at": contact.updated_at,
         "last_contacted_at": contact.last_contacted_at,
-        "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in contact.tag_objects] if hasattr(contact, 'tag_objects') else []
+        "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in contact.tag_objects] if hasattr(contact, 'tag_objects') else [],
+        "profile_picture_url": _resolve_profile_picture(contact),
+        # Profile fields
+        "job_title": contact.job_title,
+        "company_name": contact.company_name,
+        "location": contact.location,
+        "website": contact.website,
+        "linkedin_url": contact.linkedin_url,
+        "instagram_handle": contact.instagram_handle,
+        "facebook_url": contact.facebook_url,
+        # Channel the conversation came through
+        "channel": session.channel,
     }
     return contact_dict

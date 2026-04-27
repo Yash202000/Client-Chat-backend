@@ -40,7 +40,7 @@ class SocialAccount(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     company = relationship("Company", back_populates="social_accounts")
-    posts = relationship("SocialPost", back_populates="social_account")
+    posts = relationship("SocialPost", back_populates="social_account", cascade="all, delete-orphan")
 
 
 # Back-populate on Company

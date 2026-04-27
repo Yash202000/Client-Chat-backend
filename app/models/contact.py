@@ -44,6 +44,9 @@ class Contact(Base):
     opt_in_date = Column(DateTime, nullable=True)
     opt_out_date = Column(DateTime, nullable=True)
 
+    # Profile picture (fetched from channel, e.g. WhatsApp)
+    profile_picture_url = Column(String, nullable=True)
+
     # Social profile fields
     linkedin_url = Column(String, nullable=True, index=True)
     linkedin_urn = Column(String, nullable=True)          # LinkedIn member URN for API calls

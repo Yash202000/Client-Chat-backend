@@ -262,11 +262,32 @@ async def linkedin_exchange(
             )
         profile = profile_resp.json()
 
+        # Download profile picture now while CDN access is fresh; store as data URL
+        raw_picture_url = profile.get("picture")
+        avatar_url = raw_picture_url
+        if raw_picture_url:
+            try:
+                pic_resp = await client.get(
+                    raw_picture_url,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Referer": "https://www.linkedin.com/",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    },
+                    timeout=10.0,
+                )
+                if pic_resp.status_code == 200:
+                    import base64
+                    content_type = pic_resp.headers.get("content-type", "image/jpeg").split(";")[0]
+                    b64 = base64.b64encode(pic_resp.content).decode()
+                    avatar_url = f"data:{content_type};base64,{b64}"
+            except Exception:
+                pass  # fall back to raw URL
+
     account_name = profile.get("name") or (
         f"{profile.get('given_name', '')} {profile.get('family_name', '')}".strip()
     ) or "LinkedIn Account"
     account_id = profile.get("sub") or "unknown"
-    avatar_url = profile.get("picture")
 
     credentials_json = json.dumps({
         "access_token": access_token,

@@ -22,6 +22,14 @@ class ContactBase(BaseModel):
     lifecycle_stage: Optional[str] = None
     do_not_contact: Optional[bool] = False
     opt_in_status: Optional[str] = "unknown"
+    # Profile fields
+    job_title: Optional[str] = None
+    company_name: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    instagram_handle: Optional[str] = None
+    facebook_url: Optional[str] = None
 
 
 class ContactCreate(ContactBase):
@@ -32,6 +40,7 @@ class ContactUpdate(ContactBase):
     opt_in_date: Optional[datetime] = None
     opt_out_date: Optional[datetime] = None
     last_contacted_at: Optional[datetime] = None
+    profile_picture_url: Optional[str] = None
 
 
 class Contact(ContactBase):
@@ -45,6 +54,9 @@ class Contact(ContactBase):
     updated_at: Optional[datetime] = None
     last_contacted_at: Optional[datetime] = None
     tags: Optional[List[ContactTagSchema]] = []
+    profile_picture_url: Optional[str] = None
+    # Session channel — populated by by_session endpoint
+    channel: Optional[str] = None
 
     class Config:
         from_attributes = True

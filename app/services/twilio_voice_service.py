@@ -132,7 +132,8 @@ class TwilioVoiceService:
             integration_id=phone_config.integration_id,
             conversation_id=conversation_id,
             contact_id=contact.id,
-            status=CallStatus.RINGING.value
+            status=CallStatus.RINGING.value,
+            started_at=datetime.utcnow(),
         )
         self.db.add(voice_call)
         self.db.commit()

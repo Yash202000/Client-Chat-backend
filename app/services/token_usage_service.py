@@ -29,11 +29,11 @@ PRICING_TABLE = {
         "default": {"input": 2.50, "output": 10.00}
     },
     "groq": {
+        "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
         "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
         "llama-3.1-70b-versatile": {"input": 0.59, "output": 0.79},
         "llama-3.2-90b-vision-preview": {"input": 0.90, "output": 0.90},
         "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
-        "gemma2-9b-it": {"input": 0.20, "output": 0.20},
         "default": {"input": 0.10, "output": 0.15}
     },
     "gemini": {

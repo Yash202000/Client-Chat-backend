@@ -28,6 +28,7 @@ from app.services.openai_realtime_service import (
     convert_pcm_24k_to_mulaw_8k,
 )
 from app.services import credential_service, integration_service, agent_service, chat_service, workflow_trigger_service
+from app.services.call_recording_service import upload_recording, mulaw_to_pcm16
 from app.services.agent_execution_service import _get_tools_for_agent
 from app.services.tool_execution_service import execute_tool
 from app.services.connection_manager import manager
@@ -170,10 +171,14 @@ async def handle_call_status(request: Request, db: Session = Depends(get_db)):
     """
     Twilio webhook for call status updates.
     """
+    from datetime import datetime as _dt
+    from app.services import sms_service as _sms_service
+
     form_data = await request.form()
 
     call_sid = form_data.get("CallSid")
     call_status = form_data.get("CallStatus")
+    call_duration_str = form_data.get("CallDuration", "0")
 
     logger.info(f"Call status update: {call_sid} -> {call_status}")
 
@@ -182,6 +187,27 @@ async def handle_call_status(request: Request, db: Session = Depends(get_db)):
     if call_status in ["completed", "failed", "busy", "no-answer", "canceled"]:
         voice_service.save_transcript(call_sid)
         await voice_service.handle_call_ended(call_sid)
+
+        # CSAT survey — send SMS when call completes with duration > 30s
+        if call_status == "completed":
+            try:
+                duration = int(call_duration_str or "0")
+                if duration > 30:
+                    call = db.query(VoiceCall).filter(VoiceCall.call_sid == call_sid).first()
+                    if call and call.contact_id:
+                        contact = db.query(Contact).filter(Contact.id == call.contact_id).first()
+                        if contact and contact.phone_number:
+                            _sms_service.send_sms(
+                                to=contact.phone_number,
+                                body="How would you rate your recent call? Reply with a number from 1 (poor) to 5 (excellent).",
+                                db=db,
+                                company_id=call.company_id,
+                            )
+                            call.csat_sent_at = _dt.utcnow()
+                            db.commit()
+                            logger.info(f"[CSAT] Sent survey SMS for call {call_sid}")
+            except Exception as csat_err:
+                logger.warning(f"[CSAT] Failed to send survey for {call_sid}: {csat_err}")
 
     return Response(status_code=200)
 
@@ -583,9 +609,12 @@ async def twilio_media_stream(
 
     # Audio buffering for VAD (Voice Activity Detection)
     audio_buffer = bytearray()
-    buffer_start_time = None  # When we started buffering (to enforce max buffer time)
+    buffer_start_time = None
     is_processing = False
-    is_speech_active = False  # Track if we're currently in a speech segment
+    is_speech_active = False
+
+    # Full-call recording buffer (mulaw bytes — converted to PCM on upload)
+    recording_buffer = bytearray()
 
     # Initialize Silero VAD
     vad_service = SileroVADService(
@@ -804,6 +833,9 @@ async def twilio_media_stream(
                     try:
                         audio_bytes = base64.b64decode(payload)
 
+                        # Tap into full-call recording buffer
+                        recording_buffer.extend(audio_bytes)
+
                         # Process through Silero VAD
                         vad_result = vad_service.process_mulaw(audio_bytes)
 
@@ -837,9 +869,11 @@ async def twilio_media_stream(
 
             elif event_type == "stop":
                 logger.info(f"Stream stopped: {stream_sid}")
-                # Process any remaining audio
                 if audio_buffer:
                     await process_audio_buffer()
+                if recording_buffer:
+                    pcm = mulaw_to_pcm16(bytes(recording_buffer))
+                    upload_recording(db, call_sid, pcm, sample_rate=8000)
                 break
 
             elif event_type == "mark":
@@ -848,8 +882,14 @@ async def twilio_media_stream(
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for call: {call_sid}")
+        if recording_buffer:
+            pcm = mulaw_to_pcm16(bytes(recording_buffer))
+            upload_recording(db, call_sid, pcm, sample_rate=8000)
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        if recording_buffer:
+            pcm = mulaw_to_pcm16(bytes(recording_buffer))
+            upload_recording(db, call_sid, pcm, sample_rate=8000)
     finally:
         timeout_task.cancel()
         try:
@@ -1039,6 +1079,9 @@ async def list_voice_calls(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     contact_id: Optional[int] = None,
+    conversation_id: Optional[str] = None,
+    direction: Optional[str] = None,
+    status: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1046,6 +1089,12 @@ async def list_voice_calls(
     query = db.query(VoiceCall).filter(VoiceCall.company_id == current_user.company_id)
     if contact_id:
         query = query.filter(VoiceCall.contact_id == contact_id)
+    if conversation_id:
+        query = query.filter(VoiceCall.conversation_id == conversation_id)
+    if direction:
+        query = query.filter(VoiceCall.direction == direction)
+    if status:
+        query = query.filter(VoiceCall.status == status)
     total = query.count()
     calls = query.order_by(VoiceCall.started_at.desc()).offset(skip).limit(limit).all()
     return VoiceCallListResponse(
@@ -1276,3 +1325,393 @@ async def initiate_outbound_call(
         "contact_id": contact.id,
         "contact_name": contact.name or to_number,
     }
+
+
+# ── Call Transfer ──────────────────────────────────────────────────────────────
+
+class TransferRequest(BaseModel):
+    destination: str          # E.164 phone number or "client:agent_42"
+    warm: bool = False        # True = warm (agent consults first), False = blind
+
+
+class SuperviseRequest(BaseModel):
+    mode: str = "listen"      # listen | barge | whisper
+
+
+def _get_twilio_client_for_company(db: Session, company_id: int):
+    """Return an authenticated TwilioClient + credentials dict for a company."""
+    integration = db.query(Integration).filter(
+        Integration.company_id == company_id,
+        Integration.type == "twilio_voice",
+        Integration.is_active == True,
+    ).first()
+    if not integration:
+        raise HTTPException(status_code=404, detail="No active Twilio Voice integration")
+    creds = integration_service.get_decrypted_credentials(integration)
+    account_sid = creds.get("account_sid")
+    auth_token = creds.get("auth_token")
+    if not account_sid or not auth_token:
+        raise HTTPException(status_code=400, detail="Twilio credentials incomplete")
+    return TwilioClient(account_sid, auth_token), creds
+
+
+@router.post("/calls/{call_sid}/transfer")
+async def transfer_call(
+    call_sid: str,
+    body: TransferRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Blind or warm-transfer an active call to a phone number or Twilio Client identity.
+    Blind: immediately redirect the caller.
+    Warm: put the caller on hold, let the agent consult the destination, then bridge.
+    """
+    call = db.query(VoiceCall).filter(
+        VoiceCall.call_sid == call_sid,
+        VoiceCall.company_id == current_user.company_id,
+    ).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    twilio_client, creds = _get_twilio_client_for_company(db, current_user.company_id)
+    public_host = getattr(settings, "PUBLIC_HOST", None) or creds.get("public_host", "")
+
+    destination = body.destination.strip()
+    # Determine TwiML dial target
+    if destination.startswith("client:"):
+        client_name = destination[len("client:"):]
+        dial_xml = f"<Client>{client_name}</Client>"
+    else:
+        dial_xml = f"<Number>{destination}</Number>"
+
+    if body.warm:
+        # Warm transfer: put caller on hold, return a conference TwiML so the
+        # agent and destination can consult, then complete via /warm-transfer-complete
+        conf_name = f"warm_{call_sid}"
+        hold_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Please hold while we connect you.</Say>
+  <Enqueue workflowSid="{conf_name}">conference</Enqueue>
+</Response>"""
+        # Simpler: move caller into a named conference on hold
+        hold_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Please hold while we connect you.</Say>
+  <Dial>
+    <Conference startConferenceOnEnter="false" endConferenceOnExit="false"
+                waitUrl="http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
+                beep="false">{conf_name}</Conference>
+  </Dial>
+</Response>"""
+        twilio_client.calls(call_sid).update(twiml=hold_twiml)
+        logger.info(f"[TRANSFER] Warm: put {call_sid} in conference {conf_name}")
+        return {"status": "warm_hold", "conference": conf_name, "destination": destination}
+    else:
+        # Blind transfer: immediately redirect call to destination
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>{dial_xml}</Dial>
+</Response>"""
+        twilio_client.calls(call_sid).update(twiml=twiml)
+
+        # Update VoiceCall record
+        from datetime import datetime as _dt
+        call.status = "completed"
+        call.ended_at = _dt.utcnow()
+        db.commit()
+        logger.info(f"[TRANSFER] Blind: redirected {call_sid} -> {destination}")
+        return {"status": "transferred", "destination": destination}
+
+
+@router.post("/calls/{call_sid}/warm-transfer-complete")
+async def warm_transfer_complete(
+    call_sid: str,
+    body: TransferRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    After warm consultation, bridge the held caller with the destination and drop the agent.
+    """
+    call = db.query(VoiceCall).filter(
+        VoiceCall.call_sid == call_sid,
+        VoiceCall.company_id == current_user.company_id,
+    ).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    twilio_client, _ = _get_twilio_client_for_company(db, current_user.company_id)
+    conf_name = f"warm_{call_sid}"
+    destination = body.destination.strip()
+
+    if destination.startswith("client:"):
+        dial_xml = f"<Client>{destination[len('client:'):]}</Client>"
+    else:
+        dial_xml = f"<Number>{destination}</Number>"
+
+    # Move caller out of hold conference and dial destination directly
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>{dial_xml}</Dial>
+</Response>"""
+    twilio_client.calls(call_sid).update(twiml=twiml)
+    logger.info(f"[TRANSFER] Warm complete: {call_sid} -> {destination}")
+    return {"status": "transferred", "destination": destination}
+
+
+@router.post("/calls/{call_sid}/supervise")
+async def supervise_call(
+    call_sid: str,
+    body: SuperviseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Supervisor monitoring: put the original call into a conference and return TwiML
+    for the supervisor's browser to join in listen / barge / whisper mode.
+
+    Mode:
+      listen  — supervisor hears everything, is muted, cannot be heard by anyone
+      barge   — supervisor can speak to both caller and agent
+      whisper — supervisor can speak to agent only (coaching), caller cannot hear
+    """
+    call = db.query(VoiceCall).filter(
+        VoiceCall.call_sid == call_sid,
+        VoiceCall.company_id == current_user.company_id,
+    ).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    if body.mode not in ("listen", "barge", "whisper"):
+        raise HTTPException(status_code=400, detail="mode must be listen, barge, or whisper")
+
+    twilio_client, _ = _get_twilio_client_for_company(db, current_user.company_id)
+    conf_name = f"supervise_{call_sid}"
+
+    # Move the original call leg into a named conference
+    caller_conf_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="true"
+                beep="false" record="false">{conf_name}</Conference>
+  </Dial>
+</Response>"""
+    try:
+        twilio_client.calls(call_sid).update(twiml=caller_conf_twiml)
+    except Exception as e:
+        logger.warning(f"[SUPERVISE] Could not redirect call {call_sid} to conference: {e}")
+
+    # Supervisor join params vary by mode
+    supervisor_muted = body.mode == "listen"
+    coaching = body.mode == "whisper"
+    # The call_sid_to_coach is the agent's call leg; for simplicity we coach the original SID
+    coach_sid = call_sid if coaching else None
+
+    supervisor_identity = f"agent_{current_user.id}"
+    supervisor_conf_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+                muted="{str(supervisor_muted).lower()}" beep="false"
+                {"coaching=\"true\" callSidToCoach=\"" + coach_sid + "\"" if coaching and coach_sid else ""}
+                >{conf_name}</Conference>
+  </Dial>
+</Response>"""
+
+    logger.info(f"[SUPERVISE] Supervisor {current_user.id} joining {conf_name} in {body.mode} mode")
+
+    return {
+        "status": "ok",
+        "conference": conf_name,
+        "mode": body.mode,
+        "supervisor_twiml": supervisor_conf_twiml,
+        "supervisor_identity": supervisor_identity,
+    }
+
+
+@router.post("/calls/queue/{entry_id}/accept-bridge")
+async def accept_queue_bridge(
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    After accepting a queued voice call, bridge the caller's Twilio call to the
+    accepting agent's browser (Twilio Client identity = agent_{user_id}).
+    """
+    from app.models.call_queue import CallQueueEntry
+    from datetime import datetime as dt
+
+    entry = db.query(CallQueueEntry).filter(
+        CallQueueEntry.id == entry_id,
+        CallQueueEntry.company_id == current_user.company_id,
+    ).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Queue entry not found")
+
+    twilio_client, _ = _get_twilio_client_for_company(db, current_user.company_id)
+    agent_identity = f"agent_{current_user.id}"
+
+    # Redirect the caller's call leg to dial the agent's Twilio Client
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Connecting you to an agent now.</Say>
+  <Dial>
+    <Client>{agent_identity}</Client>
+  </Dial>
+</Response>"""
+    try:
+        twilio_client.calls(entry.call_sid).update(twiml=twiml)
+        entry.status = "connected"
+        entry.connected_at = dt.utcnow()
+        entry.assigned_agent_id = current_user.id
+        db.commit()
+        logger.info(f"[QUEUE BRIDGE] Call {entry.call_sid} bridged to {agent_identity}")
+        return {"status": "connected", "agent_identity": agent_identity, "call_sid": entry.call_sid}
+    except Exception as e:
+        logger.error(f"[QUEUE BRIDGE] Failed to bridge {entry.call_sid}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to bridge call: {str(e)}")
+
+
+# ── Multi-party Conference (Item 4) ───────────────────────────────────────────
+
+class AddParticipantRequest(BaseModel):
+    participant: str            # E.164 phone number or "client:agent_N"
+    caller_id: Optional[str] = None  # Caller ID to use for outbound leg
+
+
+@router.post("/calls/{call_sid}/add-participant")
+async def add_participant(
+    call_sid: str,
+    body: AddParticipantRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Move original call into a named conference and dial a new participant in.
+    If the call is already in a conference (detected by our naming convention) we reuse it.
+    """
+    call = db.query(VoiceCall).filter(
+        VoiceCall.call_sid == call_sid,
+        VoiceCall.company_id == current_user.company_id,
+    ).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    twilio_client, creds = _get_twilio_client_for_company(db, current_user.company_id)
+    conf_name = f"conf_{call_sid}"
+
+    # Move the original call into the conference (idempotent — Twilio ignores if already there)
+    original_conf_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+                beep="false" record="false">{conf_name}</Conference>
+  </Dial>
+</Response>"""
+    try:
+        twilio_client.calls(call_sid).update(twiml=original_conf_twiml)
+    except Exception as e:
+        logger.warning(f"[CONFERENCE] Could not redirect original call {call_sid} to conf: {e}")
+
+    # Determine caller_id
+    caller_id_to_use = body.caller_id
+    if not caller_id_to_use:
+        from app.models.twilio_phone_number import TwilioPhoneNumber
+        phone_cfg = db.query(TwilioPhoneNumber).filter(
+            TwilioPhoneNumber.company_id == current_user.company_id,
+            TwilioPhoneNumber.is_active == True,
+        ).first()
+        caller_id_to_use = phone_cfg.phone_number if phone_cfg else creds.get("phone_number", "")
+
+    participant = body.participant.strip()
+
+    # Dial the new participant into the conference
+    public_host = getattr(settings, "PUBLIC_HOST", None) or creds.get("public_host", "")
+    status_cb = f"https://{public_host}/api/v1/twilio/webhook/voice/status" if public_host else None
+
+    if participant.startswith("client:"):
+        # Dial a Twilio Client (browser agent)
+        client_identity = participant[len("client:"):]
+        participant_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+                beep="true">{conf_name}</Conference>
+  </Dial>
+</Response>"""
+        try:
+            new_call = twilio_client.calls.create(
+                twiml=participant_twiml,
+                to=f"client:{client_identity}",
+                from_=caller_id_to_use,
+            )
+            logger.info(f"[CONFERENCE] Added client {client_identity} to conf {conf_name}: {new_call.sid}")
+            return {"status": "participant_added", "conference": conf_name, "participant_call_sid": new_call.sid}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to add participant: {e}")
+    else:
+        # Outbound PSTN call to the participant
+        participant_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="false"
+                beep="true">{conf_name}</Conference>
+  </Dial>
+</Response>"""
+        try:
+            kwargs = {
+                "twiml": participant_twiml,
+                "to": participant,
+                "from_": caller_id_to_use,
+            }
+            if status_cb:
+                kwargs["status_callback"] = status_cb
+                kwargs["status_callback_event"] = ["initiated", "ringing", "answered", "completed"]
+            new_call = twilio_client.calls.create(**kwargs)
+            logger.info(f"[CONFERENCE] Added PSTN {participant} to conf {conf_name}: {new_call.sid}")
+            return {"status": "participant_added", "conference": conf_name, "participant_call_sid": new_call.sid}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to add participant: {e}")
+
+
+# ── CSAT SMS webhook (Item 5) ─────────────────────────────────────────────────
+
+@router.post("/webhook/csat-response")
+async def handle_csat_response(request: Request, db: Session = Depends(get_db)):
+    """
+    Twilio SMS webhook. Receives CSAT replies (digits 1-5) from callers.
+    Finds the most recent VoiceCall for that phone number and records the score.
+    """
+    from datetime import datetime as _dt
+    form_data = await request.form()
+    from_number = form_data.get("From", "")
+    body_text = (form_data.get("Body") or "").strip()
+
+    twiml_ok = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>Thank you for your feedback!</Message></Response>'
+    twiml_invalid = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>Please reply with a number from 1 to 5.</Message></Response>'
+
+    if not body_text.isdigit() or int(body_text) not in range(1, 6):
+        return Response(content=twiml_invalid, media_type="application/xml")
+
+    score = int(body_text)
+
+    # Find the most recent call from this number with csat_sent_at set and no score yet
+    call = (
+        db.query(VoiceCall)
+        .filter(
+            VoiceCall.from_number == from_number,
+            VoiceCall.csat_sent_at != None,
+            VoiceCall.csat_score == None,
+        )
+        .order_by(VoiceCall.csat_sent_at.desc())
+        .first()
+    )
+
+    if call:
+        call.csat_score = score
+        db.commit()
+        logger.info(f"[CSAT] Recorded score {score} for call {call.call_sid} from {from_number}")
+
+    return Response(content=twiml_ok, media_type="application/xml")

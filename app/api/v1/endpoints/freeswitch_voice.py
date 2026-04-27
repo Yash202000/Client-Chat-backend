@@ -29,6 +29,7 @@ from app.services.openai_realtime_service import (
     convert_pcm_24k_to_l16_8k,
 )
 from app.services import credential_service, agent_service, chat_service, workflow_trigger_service
+from app.services.call_recording_service import upload_recording
 from app.services.agent_execution_service import _get_tools_for_agent
 from app.services.tool_execution_service import execute_tool
 from app.services.connection_manager import manager
@@ -440,7 +441,10 @@ async def freeswitch_audio_stream(
     audio_buffer = bytearray()
     buffer_start_time = None
     is_processing = False
-    is_speech_active = False  # Track if we're currently in a speech segment
+    is_speech_active = False
+
+    # Full-call recording buffer (separate from VAD buffer which gets cleared)
+    recording_buffer = bytearray()
 
     # Initialize Silero VAD (will be re-initialized with correct sample rate after connect)
     vad_service = SileroVADService(
@@ -648,6 +652,9 @@ async def freeswitch_audio_stream(
                     try:
                         audio_bytes = base64.b64decode(audio_data)
 
+                        # Tap into full-call recording buffer
+                        recording_buffer.extend(audio_bytes)
+
                         # Process through Silero VAD
                         vad_result = vad_service.process_l16(audio_bytes)
 
@@ -683,23 +690,27 @@ async def freeswitch_audio_stream(
                 hangup_cause = data.get("hangup_cause", "NORMAL_CLEARING")
                 logger.info(f"FreeSWITCH call disconnected: {call_uuid}, cause: {hangup_cause}")
 
-                # Process any remaining audio
                 if audio_buffer:
                     await process_audio_buffer()
 
-                # Handle call ended
                 if call_uuid:
                     await voice_service.handle_call_ended(call_uuid, hangup_cause)
+                    if recording_buffer:
+                        upload_recording(db, call_uuid, bytes(recording_buffer), sample_rate)
                 break
 
     except WebSocketDisconnect:
         logger.info(f"FreeSWITCH WebSocket disconnected: {call_uuid}")
         if call_uuid:
             await voice_service.handle_call_ended(call_uuid, "WEBSOCKET_DISCONNECT")
+            if recording_buffer:
+                upload_recording(db, call_uuid, bytes(recording_buffer), sample_rate)
     except Exception as e:
         logger.error(f"FreeSWITCH WebSocket error: {e}")
         if call_uuid:
             await voice_service.handle_call_ended(call_uuid, "ERROR")
+            if recording_buffer:
+                upload_recording(db, call_uuid, bytes(recording_buffer), sample_rate)
     finally:
         timeout_task.cancel()
         try:

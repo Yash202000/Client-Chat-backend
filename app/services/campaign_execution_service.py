@@ -511,33 +511,91 @@ async def initiate_voice_call(
     contact: Contact,
     enrollment: CampaignContact
 ) -> bool:
-    """
-    Initiate a voice call campaign message
-    This will be implemented in voice_campaign_service.py
-    """
+    """Initiate a voice call campaign message via Twilio."""
     try:
+        from app.services import voice_campaign_service
         print(f"[CAMPAIGN EXECUTION] Initiating voice call to {contact.phone_number}")
+        result = await voice_campaign_service.initiate_outbound_campaign_call(
+            db=db,
+            campaign=campaign,
+            message=message,
+            contact=contact,
+            enrollment=enrollment
+        )
+        if result.get('success'):
+            enrollment.calls_initiated += 1
+            db.commit()
+        return result.get('success', False)
 
-        # Record activity
+    except Exception as e:
+        print(f"[CAMPAIGN EXECUTION] Voice call initiation failed: {e}")
         activity = CampaignActivity(
             campaign_id=campaign.id,
             contact_id=contact.id,
             lead_id=enrollment.lead_id,
             message_id=message.id,
-            activity_type=ActivityType.CALL_INITIATED,
-            activity_data={
-                'to': contact.phone_number
-            }
+            activity_type=ActivityType.CALL_FAILED,
+            error_message=str(e)
         )
         db.add(activity)
+        db.commit()
+        return False
 
-        # Update campaign contact voice metrics
-        enrollment.calls_initiated += 1
 
+async def send_linkedin_dm_message(
+    db: Session,
+    campaign: Campaign,
+    message: CampaignMessage,
+    contact: Contact,
+    enrollment: CampaignContact
+) -> bool:
+    """Send a LinkedIn DM to a contact via their stored LinkedIn URN."""
+    try:
+        linkedin_urn = contact.linkedin_urn if hasattr(contact, 'linkedin_urn') else None
+        if not linkedin_urn:
+            print(f"[CAMPAIGN EXECUTION] No LinkedIn URN for contact {contact.id}, skipping")
+            return False
+
+        integration = integration_service.get_integration_by_type_and_company(db, "linkedin", campaign.company_id)
+        if not integration:
+            raise Exception("LinkedIn integration not configured")
+
+        body = message.body or ""
+        if contact.first_name:
+            body = body.replace("{first_name}", contact.first_name)
+        if contact.email:
+            body = body.replace("{email}", contact.email)
+
+        await messaging_service.send_linkedin_message(
+            recipient_urn=linkedin_urn,
+            message_text=body,
+            integration=integration,
+        )
+
+        activity = CampaignActivity(
+            campaign_id=campaign.id,
+            contact_id=contact.id,
+            lead_id=enrollment.lead_id,
+            message_id=message.id,
+            activity_type=ActivityType.MESSAGE_SENT,
+            activity_data={"channel": "linkedin_dm", "recipient_urn": linkedin_urn},
+        )
+        db.add(activity)
+        db.commit()
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Voice call initiation failed: {e}")
+        print(f"[CAMPAIGN EXECUTION] LinkedIn DM failed: {e}")
+        activity = CampaignActivity(
+            campaign_id=campaign.id,
+            contact_id=contact.id,
+            lead_id=enrollment.lead_id,
+            message_id=message.id,
+            activity_type=ActivityType.ERROR,
+            error_message=str(e),
+        )
+        db.add(activity)
+        db.commit()
         return False
 
 
@@ -617,6 +675,8 @@ async def send_campaign_message(
         success = await send_telegram_message(db, campaign, next_message, contact, enrollment)
     elif msg_type == "voice":
         success = await initiate_voice_call(db, campaign, next_message, contact, enrollment)
+    elif msg_type == "linkedin_dm":
+        success = await send_linkedin_dm_message(db, campaign, next_message, contact, enrollment)
     else:
         print(f"[CAMPAIGN EXECUTION] Unknown message type: {msg_type}")
 

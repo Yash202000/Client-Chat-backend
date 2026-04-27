@@ -126,7 +126,8 @@ class FreeSwitchVoiceService:
             conversation_id=conversation_id,
             contact_id=contact.id,
             status=CallStatus.RINGING.value,
-            direction="inbound"
+            direction="inbound",
+            started_at=datetime.utcnow(),
         )
         self.db.add(voice_call)
         self.db.commit()

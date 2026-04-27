@@ -21,6 +21,7 @@ from app.services import (
     agent_execution_service
 )
 from app.services.workflow_execution_service import WorkflowExecutionService
+from app.services.intent_service import IntentService
 from app.models.workflow_trigger import TriggerChannel
 from app.services.connection_manager import manager
 from app.schemas.chat_message import ChatMessageCreate
@@ -167,12 +168,13 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         if not message_text:
                             message_text = f"[Media attachment - {pending_media['media_type']}]"
 
+                wa_profile_name = change.get("value", {}).get("contacts", [{}])[0].get("profile", {}).get("name")
                 contact = contact_service.get_or_create_contact_for_channel(
-                    db, 
-                    company_id=company_id, 
-                    channel='whatsapp', 
+                    db,
+                    company_id=company_id,
+                    channel='whatsapp',
                     channel_identifier=sender_phone,
-                    name=change.get("value", {}).get("contacts", [{}])[0].get("profile", {}).get("name")
+                    name=wa_profile_name
                 )
 
                 session = conversation_session_service.get_or_create_session(
@@ -295,9 +297,92 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                         return Response(status_code=200)
 
-                # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
+                # Priority: 1) Intent detection, 2) Triggers, 3) LLM decision, 4) Similarity search
 
-                # 1. Try trigger-based workflow finding first
+                # 1. Try intent detection first
+                intent_service = IntentService(db)
+                intent_match = await intent_service.detect_intent(
+                    message=message_text,
+                    company_id=company_id,
+                    conversation_id=session.conversation_id
+                )
+
+                if intent_match:
+                    intent, confidence, entities, matched_method = intent_match
+                    print(f"✓ Intent detected: {intent.name} (confidence: {confidence:.2f}, method: {matched_method})")
+
+                    if entities:
+                        current_context = session.context or {}
+                        current_context.update(entities)
+                        current_context['last_detected_intent'] = intent.name
+                        current_context['intent_confidence'] = confidence
+                        current_context['intent_matched_method'] = matched_method
+                        conversation_session_service.update_session_context(db, session.conversation_id, current_context)
+
+                    try:
+                        await session_ws_manager.broadcast_intent_detected(
+                            session.conversation_id,
+                            {
+                                "intent_name": intent.name,
+                                "confidence": confidence,
+                                "matched_method": matched_method,
+                                "entities": entities,
+                                "will_trigger_workflow": bool(intent.trigger_workflow_id and intent.auto_trigger_enabled)
+                            }
+                        )
+                    except Exception as e:
+                        print(f"Warning: Could not broadcast intent detection: {e}")
+
+                    if intent.trigger_workflow_id and intent.auto_trigger_enabled:
+                        if confidence >= intent.min_confidence_auto_trigger:
+                            intent_workflow = workflow_service.get_workflow(db, intent.trigger_workflow_id, company_id)
+
+                            if intent_workflow and intent_workflow.is_active:
+                                print(f"✓ Auto-triggering workflow: {intent_workflow.name}")
+                                workflow_exec_service = WorkflowExecutionService(db)
+                                execution_result = await workflow_exec_service.execute_workflow(
+                                    workflow_id=intent_workflow.id,
+                                    user_message=message_text,
+                                    conversation_id=session.conversation_id,
+                                    company_id=company_id,
+                                    attachments=attachments if attachments else None,
+                                    agent_id=session.agent_id or (intent_workflow.agents[0].id if intent_workflow.agents else None)
+                                )
+
+                                intent_service.update_intent_match_execution_status(
+                                    conversation_id=session.conversation_id,
+                                    intent_id=intent.id,
+                                    workflow_executed=True,
+                                    execution_status=execution_result.get("status", "unknown")
+                                )
+
+                                if execution_result.get("status") == "completed":
+                                    response_text = execution_result.get("response", "Workflow completed.")
+                                    workflow_agent_id = session.agent_id or (intent_workflow.agents[0].id if intent_workflow.agents else None)
+                                    agent_message_schema = ChatMessageCreate(message=response_text, message_type="text")
+                                    db_agent_message = chat_service.create_chat_message(db, agent_message_schema, workflow_agent_id, session.conversation_id, company_id, "agent")
+                                    await messaging_service.send_whatsapp_message(recipient_phone_number=sender_phone, message_text=response_text, integration=integration, db=db)
+                                    await session_ws_manager.broadcast_to_session(session.conversation_id, schemas_chat_message.ChatMessage.from_orm(db_agent_message).json(), "agent")
+                                    return Response(status_code=200)
+
+                                elif execution_result.get("status") == "paused_for_prompt":
+                                    prompt_data = execution_result.get("prompt", {})
+                                    await messaging_service.send_whatsapp_interactive_message(recipient_phone_number=sender_phone, message_text=prompt_data.get("text", "Please choose an option:"), options=prompt_data.get("options", []), integration=integration, db=db)
+                                    return Response(status_code=200)
+
+                                elif execution_result.get("status") == "paused_for_input":
+                                    print(f"✓ Workflow paused, waiting for user input")
+                                    return Response(status_code=200)
+
+                                elif execution_result.get("status") == "error":
+                                    print(f"✗ Intent workflow execution failed, falling through to trigger routing")
+                            else:
+                                print(f"✗ Workflow {intent.trigger_workflow_id} not found or inactive")
+                        else:
+                            print(f"ℹ Confidence {confidence:.2f} below threshold {intent.min_confidence_auto_trigger}, skipping auto-trigger")
+                    else:
+                        print(f"ℹ Intent '{intent.name}' has no workflow or auto-trigger disabled")
+
                 workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                     db=db,
                     channel=TriggerChannel.WHATSAPP,

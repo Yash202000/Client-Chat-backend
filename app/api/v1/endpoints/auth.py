@@ -8,7 +8,7 @@ from app.core import security
 from app.core.config import settings
 from app.core.dependencies import get_db, get_current_active_user
 from app.schemas import user as schemas_user, token as schemas_token, company as schemas_company
-from app.services import user_service, company_service, company_subscription_service
+from app.services import user_service, company_service, company_subscription_service, role_service
 from app.models import user as models_user
 
 router = APIRouter()
@@ -31,7 +31,10 @@ def signup(user: schemas_user.UserCreate, db: Session = Depends(get_db)):
         user_limit=5
     )
 
-    return user_service.create_user(db=db, user=user, company_id=company.id)
+    # Roles are already created inside create_company — just fetch Admin role
+    admin_role = role_service.get_role_by_name(db, "Admin", company_id=company.id)
+
+    return user_service.create_user(db=db, user=user, company_id=company.id, role_id=admin_role.id if admin_role else None)
 
 
 @router.post("/login", response_model=schemas_token.Token)
@@ -63,6 +66,19 @@ def login_for_access_token(
     return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
 
 
+@router.post("/refresh", response_model=schemas_token.Token)
+def refresh_access_token(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Issue a new access token for the currently authenticated user."""
+    access_token_expires = timedelta(minutes=60 * 24 * 7)  # 7 days
+    access_token = security.create_access_token(
+        data={"sub": current_user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer", "company_id": current_user.company_id}
+
+
 @router.post("/logout")
 def logout(
     db: Session = Depends(get_db),
@@ -81,9 +97,9 @@ def update_presence(
 ):
     """
     Update current user's presence status.
-    Valid values: online, offline, busy, away, do_not_disturb, in_call
+    Valid values: online, offline, busy, away, do_not_disturb, in_call, inactive
     """
-    valid_statuses = ["online", "offline", "busy", "away", "do_not_disturb", "in_call"]
+    valid_statuses = ["online", "offline", "busy", "away", "do_not_disturb", "in_call", "inactive"]
     if presence_status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

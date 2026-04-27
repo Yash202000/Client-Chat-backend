@@ -13,15 +13,24 @@ logger = logging.getLogger(__name__)
 
 
 def send_sms(to: str, body: str, db: Session, company_id: int) -> dict:
-    """Send an SMS via Twilio."""
+    """Send an SMS via Twilio. Uses company's own Twilio integration if configured, else falls back to global credentials."""
     try:
         from twilio.rest import Client as TwilioClient
-        client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        message = client.messages.create(
-            body=body,
-            from_=settings.TWILIO_PHONE_NUMBER,
-            to=to,
-        )
+        from app.services import integration_service
+
+        account_sid = settings.TWILIO_ACCOUNT_SID
+        auth_token = settings.TWILIO_AUTH_TOKEN
+        from_number = settings.TWILIO_PHONE_NUMBER
+
+        integration = integration_service.get_integration_by_type_and_company(db, "twilio_voice", company_id)
+        if integration:
+            creds = integration_service.get_decrypted_credentials(integration)
+            account_sid = creds.get("account_sid") or account_sid
+            auth_token = creds.get("auth_token") or auth_token
+            from_number = creds.get("phone_number") or from_number
+
+        client = TwilioClient(account_sid, auth_token)
+        message = client.messages.create(body=body, from_=from_number, to=to)
         logger.info(f"SMS sent to {to}, SID: {message.sid}")
         return {"sid": message.sid, "status": message.status}
     except Exception as e:

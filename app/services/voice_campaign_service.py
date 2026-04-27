@@ -25,19 +25,21 @@ async def initiate_outbound_campaign_call(
     """
     try:
         from twilio.rest import Client
-        from app.services.integration_service import get_integration_by_type
+        from app.services.integration_service import get_integration_by_type_and_company, get_decrypted_credentials
+        from app.core.config import settings as app_settings
 
-        # Get Twilio credentials
-        twilio_integration = get_integration_by_type(db, campaign.company_id, "twilio")
-        if not twilio_integration:
-            raise Exception("Twilio integration not configured")
-
-        twilio_config = twilio_integration.config or {}
-        account_sid = twilio_config.get('account_sid')
-        auth_token = twilio_config.get('auth_token')
+        # Get Twilio credentials — company integration first, fall back to global
+        twilio_integration = get_integration_by_type_and_company(db, "twilio_voice", campaign.company_id)
+        if twilio_integration:
+            creds = get_decrypted_credentials(twilio_integration)
+            account_sid = creds.get('account_sid') or app_settings.TWILIO_ACCOUNT_SID
+            auth_token = creds.get('auth_token') or app_settings.TWILIO_AUTH_TOKEN
+        else:
+            account_sid = app_settings.TWILIO_ACCOUNT_SID
+            auth_token = app_settings.TWILIO_AUTH_TOKEN
 
         if not account_sid or not auth_token:
-            raise Exception("Twilio credentials not found")
+            raise Exception("Twilio credentials not configured")
 
         client = Client(account_sid, auth_token)
 
@@ -375,6 +377,9 @@ def handle_gather_input(
 
 
 def get_base_url() -> str:
-    """Get the base URL for callbacks"""
-    # This should come from settings/config
-    return "https://your-domain.com"  # Replace with actual domain
+    """Get the backend public URL for Twilio callbacks."""
+    from app.core.config import settings
+    if settings.PUBLIC_HOST:
+        return f"https://{settings.PUBLIC_HOST}"
+    host = settings.HOST if settings.HOST != "0.0.0.0" else "localhost"
+    return f"http://{host}:{settings.PORT}"

@@ -213,6 +213,12 @@ async def end_handoff(
         )
         logger.info(f"[HANDOFF END] Released agent {current_user.id} from pool {session.assigned_pool}")
 
+    # Re-enable AI so the bot can handle the customer again
+    from app.schemas.conversation_session import ConversationSessionUpdate
+    conversation_session_service.update_session(
+        db, request.session_id, ConversationSessionUpdate(is_ai_enabled=True)
+    )
+
     # Notify widget that call ended
     await manager.broadcast_to_session(
         request.session_id,

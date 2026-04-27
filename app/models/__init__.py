@@ -61,6 +61,7 @@ from app.models.entity_note import EntityNote, NoteType
 
 # Voice Models
 from app.models.voice_call import VoiceCall, CallStatus
+from app.models.call_queue import CallQueueEntry
 from app.models.twilio_phone_number import TwilioPhoneNumber
 from app.models.freeswitch_phone_number import FreeSwitchPhoneNumber
 

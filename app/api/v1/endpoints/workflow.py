@@ -10,9 +10,41 @@ from app.schemas import workflow as schemas_workflow
 from app.services import workflow_service, tool_service
 from app.services.workflow_intent_service import WorkflowIntentService
 from app.services.workflow_ai_service import workflow_ai_chat
+from app.services.workflow_simulation_service import simulate_workflow
 from app.models import user as models_user
 
 router = APIRouter()
+
+
+# ── Simulation request/response models ───────────────────────────────────────
+
+class WorkflowSimulateRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+    visual_steps: Optional[Dict[str, Any]] = None  # canvas state (nodes/edges)
+    test_session_id: Optional[str] = None          # continue a paused test session
+    option_key: Optional[str] = None               # which option the user clicked
+    attachments: Optional[List[Dict[str, Any]]] = None  # [{file_name, file_type, file_data?, location?}]
+
+class WorkflowSimulateStep(BaseModel):
+    node_id: str
+    node_type: str
+    label: str
+    status: str  # success | error | warning | skipped
+    output: str
+    duration_ms: int
+
+class WorkflowSimulateResponse(BaseModel):
+    steps: List[WorkflowSimulateStep]
+    total_duration_ms: int
+    test_session_id: str
+    # What the workflow produced this turn
+    status: str                              # completed | paused_for_input | paused_for_prompt | paused_for_form | error
+    response: Optional[str] = None          # bot text to display
+    options: Optional[List[Dict[str, Any]]] = None   # [{key, value}] for prompt nodes
+    allow_text_input: bool = True
+    form_title: Optional[str] = None
+    form_fields: Optional[List[Dict[str, Any]]] = None
 
 
 # ── AI Chat request/response models ───────────────────────────────────────────
@@ -472,12 +504,152 @@ async def workflow_ai_chat_endpoint(
             message=body.message,
             current_visual_steps=body.current_visual_steps,
             history=[{"role": m.role, "content": m.content} for m in body.history],
+            workflow=wf,
         )
         return WorkflowAIChatResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+
+
+@router.post("/{workflow_id}/simulate", response_model=WorkflowSimulateResponse, dependencies=[Depends(require_permission("workflow:read"))])
+async def simulate_workflow_endpoint(
+    workflow_id: int,
+    body: WorkflowSimulateRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """
+    Multi-turn workflow test using the real execution engine.
+    - First call: omit test_session_id to start a fresh conversation.
+    - Subsequent calls: pass the returned test_session_id to continue a paused workflow.
+    - For option selections: pass option_key with the chosen key.
+    The test session is preserved while paused and cleaned up on completion.
+    """
+    import time as _time
+    import uuid as _uuid
+    from app.services.workflow_execution_service import WorkflowExecutionService
+    from app.services import conversation_session_service
+    from app.schemas.conversation_session import ConversationSessionUpdate
+    from app.models.conversation_session import ConversationSession
+
+    wf = workflow_service.get_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    canvas_visual_steps = body.visual_steps or getattr(wf, "visual_steps", None)
+    if not canvas_visual_steps:
+        raise HTTPException(status_code=400, detail="No workflow steps to simulate. Save the workflow first or pass visual_steps.")
+
+    # Reuse existing test session (paused workflow) or create a new one
+    is_new_session = not body.test_session_id
+    test_conversation_id = body.test_session_id or f"__test__{_uuid.uuid4().hex}"
+
+    # Temporarily point the workflow at the canvas visual_steps (not persisted to DB)
+    original_visual_steps = wf.visual_steps
+    wf.visual_steps = canvas_visual_steps
+
+    execution_trace: List[Dict[str, Any]] = []
+    exec_result: Dict[str, Any] = {}
+    t0 = _time.monotonic()
+
+    try:
+        svc = WorkflowExecutionService(db)
+
+        # On first turn, pre-seed any user-supplied context vars
+        if is_new_session and body.context:
+            conversation_session_service.get_or_create_session(
+                db, test_conversation_id, wf.id,
+                contact_id=1, channel="test", company_id=wf.company_id
+            )
+            conversation_session_service.update_session(
+                db, test_conversation_id,
+                ConversationSessionUpdate(context=body.context)
+            )
+
+        exec_result = await svc.execute_workflow(
+            user_message=body.message,
+            company_id=current_user.company_id,
+            workflow=wf,
+            conversation_id=test_conversation_id,
+            option_key=body.option_key,
+            attachments=body.attachments or [],
+            execution_trace=execution_trace,
+        ) or {}
+
+    except Exception as exc:
+        exec_result = {"status": "error", "response": str(exc)}
+        execution_trace.append({
+            "node_id": "__error__", "node_type": "error", "label": "Execution Error",
+            "status": "error", "output": str(exc), "duration_ms": 0,
+        })
+    finally:
+        wf.visual_steps = original_visual_steps
+
+    total_ms = int((_time.monotonic() - t0) * 1000)
+
+    # Determine what the workflow produced this turn
+    raw_status = exec_result.get("status", "completed")
+
+    # Build the bot response text
+    bot_response: Optional[str] = None
+    raw_resp = exec_result.get("response")
+    if isinstance(raw_resp, dict):
+        bot_response = raw_resp.get("text") or str(raw_resp)
+    elif raw_resp:
+        bot_response = str(raw_resp)
+
+    # Options for paused_for_prompt
+    options: Optional[List[Dict[str, Any]]] = None
+    allow_text_input = True
+    if raw_status == "paused_for_prompt":
+        prompt_data = exec_result.get("prompt", {}) or {}
+        if not bot_response:
+            bot_response = prompt_data.get("text", "")
+        raw_options = prompt_data.get("options", [])
+        options = [
+            opt if isinstance(opt, dict) else {"key": str(opt), "value": str(opt)}
+            for opt in raw_options
+        ]
+        allow_text_input = prompt_data.get("allow_text_input", True)
+
+    # Question text for paused_for_input (listen node)
+    if raw_status == "paused_for_input" and not bot_response:
+        bot_response = exec_result.get("question_text") or "Waiting for your reply…"
+
+    # Form fields for paused_for_form
+    form_title: Optional[str] = None
+    form_fields: Optional[List[Dict[str, Any]]] = None
+    if raw_status == "paused_for_form":
+        form_data = exec_result.get("form", {}) or {}
+        form_title = form_data.get("title", "Please fill out this form")
+        form_fields = form_data.get("fields", [])
+        if not bot_response:
+            bot_response = form_title
+
+    # Clean up the test session only when the workflow has finished
+    is_terminal = raw_status in ("completed", "error", "workflow_transferred")
+    if is_terminal:
+        try:
+            db.query(ConversationSession).filter(
+                ConversationSession.conversation_id == test_conversation_id
+            ).delete()
+            db.commit()
+        except Exception:
+            pass
+
+    return WorkflowSimulateResponse(
+        steps=[WorkflowSimulateStep(**s) for s in execution_trace],
+        total_duration_ms=total_ms,
+        test_session_id=test_conversation_id,
+        status=raw_status,
+        response=bot_response,
+        options=options,
+        allow_text_input=allow_text_input,
+        form_title=form_title,
+        form_fields=form_fields,
+    )
 
 
 @router.delete("/{workflow_id}/intent-config", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])

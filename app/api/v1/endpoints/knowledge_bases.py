@@ -22,6 +22,10 @@ router = APIRouter()
 # Temporary in-memory cache for document processing
 document_processing_cache = {}
 
+class KbSearchRequest(BaseModel):
+    query: str
+    top_k: int = 3
+
 class DocumentUploadResponse(BaseModel):
     document_id: str
     raw_text: str
@@ -286,6 +290,23 @@ def get_knowledge_base_content(
 
 class KnowledgeBaseDownloadUrl(BaseModel):
     download_url: str
+
+@router.post("/{knowledge_base_id}/search", dependencies=[Depends(require_permission("knowledgebase:read"))])
+def search_knowledge_base(
+    knowledge_base_id: int,
+    request: KbSearchRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    results = knowledge_base_service.find_relevant_chunks(
+        db=db,
+        knowledge_base_id=knowledge_base_id,
+        company_id=current_user.company_id,
+        query=request.query,
+        top_k=request.top_k,
+        include_metadata=True,
+    )
+    return {"results": results, "query": request.query, "count": len(results)}
 
 @router.get("/{knowledge_base_id}/download-url", response_model=KnowledgeBaseDownloadUrl, dependencies=[Depends(require_permission("knowledgebase:read"))])
 def get_knowledge_base_download_url(

@@ -22,25 +22,6 @@ def create_company(db: Session, company: schemas_company.CompanyCreate):
     print("Creating default roles for the company...")
     role_service.create_initial_roles_for_company(db, company.id)
     
-    # Get the Super Admin role
-    super_admin_role = role_service.get_role_by_name(db, "Super Admin")
-
-    # Check if a default user exists, if not, create one
-    user_email = f'admin@{company.name}.com'
-    default_user = user_service.get_user_by_email(db, user_email)
-    if not default_user:
-        print("Creating default admin user... ", user_email, "password")
-        user_service.create_user(db, schemas_user.UserCreate(email=user_email, password="password"), company_id=company.id, role_id=super_admin_role.id, is_super_admin=True)
-    else:
-        # If user exists but has no role, assign super admin role
-        # TODO: This should ideally not happen, change role to Admin with all CRUD permissions.
-        user = default_user
-        if not user.role_id:
-            user.role_id = super_admin_role.id
-        if not user.is_super_admin:
-            user.is_super_admin = True
-        db.commit()
-        
     # Check if a default agent exists, if not, create one
     default_agent_list = agent_service.get_agents(db, company.id, limit=1)
     if not default_agent_list:

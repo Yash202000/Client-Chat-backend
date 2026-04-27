@@ -2017,7 +2017,7 @@ Return only valid JSON, nothing else:"""
             "depth": current_depth + 1
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None, agent_id: int = None):
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None, agent_id: int = None, execution_trace: list = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -2033,7 +2033,7 @@ Return only valid JSON, nothing else:"""
         executing_agent_id = agent_id
         if agent_id:
             from app.services import agent_service
-            executing_agent = agent_service.get_agent(self.db, agent_id)
+            executing_agent = agent_service.get_agent(self.db, agent_id, workflow_obj.company_id)
         elif hasattr(workflow_obj, 'agents') and workflow_obj.agents:
             executing_agent = workflow_obj.agents[0]
             executing_agent_id = executing_agent.id
@@ -2408,10 +2408,12 @@ Return only valid JSON, nothing else:"""
 
         last_executed_node_id = None
         response_messages = []  # Collect all response node outputs
+        _trace_t0 = datetime.now()
         while current_node_id:
             node = graph_engine.nodes[current_node_id]
             node_type = node.get("type")
             node_data = node.get("data", {})
+            _node_t0 = datetime.now()
 
             result = None
             if node_type == "start":
@@ -2767,6 +2769,34 @@ Return only valid JSON, nothing else:"""
 
             results[current_node_id] = result
             last_executed_node_id = current_node_id
+
+            # Collect trace entry when running in test mode
+            if execution_trace is not None:
+                _duration_ms = int((datetime.now() - _node_t0).total_seconds() * 1000)
+                _status = "error" if (result and "error" in result) else (
+                    "paused" if (result and isinstance(result.get("status"), str) and result["status"].startswith("paused")) else "success"
+                )
+                _raw_output = ""
+                if result:
+                    _out = result.get("output", result.get("response", ""))
+                    if isinstance(_out, dict):
+                        _raw_output = _out.get("text", str(_out))
+                    else:
+                        _raw_output = str(_out) if _out else ""
+                    if "error" in result:
+                        _raw_output = str(result["error"])
+                    elif _status == "paused":
+                        _ptype = result.get("status", "").replace("paused_for_", "")
+                        _prompt_text = (result.get("prompt", {}) or {}).get("text", "") if isinstance(result.get("prompt"), dict) else ""
+                        _raw_output = f"Paused for {_ptype}" + (f": \"{_prompt_text}\"" if _prompt_text else "")
+                execution_trace.append({
+                    "node_id": current_node_id,
+                    "node_type": node_type,
+                    "label": node_data.get("label", node_type),
+                    "status": _status,
+                    "output": _raw_output[:800],
+                    "duration_ms": _duration_ms,
+                })
 
             if result and result.get("status") in ["paused_for_input", "paused_for_prompt", "paused_for_form"]:
                 # Check if this node wants to re-execute itself (for multi-step collection)

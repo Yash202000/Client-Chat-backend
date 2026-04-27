@@ -36,7 +36,7 @@ class MessageOut(BaseModel):
         from_attributes = True
 
 
-@router.post("/", response_model=schemas_chat_message.ChatMessage)
+@router.post("/", response_model=schemas_ai_chat.AIChatResponse)
 async def post_ai_chat(
     chat_request: schemas_ai_chat.AIChatRequest,
     db: Session = Depends(get_db),

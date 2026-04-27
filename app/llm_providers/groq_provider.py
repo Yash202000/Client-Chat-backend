@@ -1,10 +1,42 @@
 from groq import AsyncGroq
 import json
+import re
 from sqlalchemy.orm import Session
 from app.services import credential_service
 from app.services.vault_service import vault_service
 from app.core.config import settings
 from typing import AsyncGenerator, Union, Dict, List
+
+
+def _parse_failed_generation(failed_gen: str, available_tools: list) -> dict | None:
+    """
+    Parse the <function=name,{...}</function> format that some Groq models
+    emit instead of proper JSON tool calls, and return a normalized tool call dict.
+    Returns None if parsing fails or the tool isn't in the available list.
+    """
+    # Handles all formats Groq emits:
+    #   <function=name,{"arg": val}</function>
+    #   <function=name({"arg": val})</function>
+    #   <function=name({"arg": val})></function>
+    match = re.search(r'<function=([^,(]+)[,(]\s*({.*})\s*[)>]*</function>', failed_gen, re.DOTALL)
+    if not match:
+        return None
+    func_name = match.group(1).strip()
+    func_args_str = match.group(2).strip()
+    available_tool_names = [t["function"]["name"] for t in (available_tools or [])]
+    if func_name not in available_tool_names:
+        return None
+    try:
+        parameters = json.loads(func_args_str)
+    except json.JSONDecodeError:
+        return None
+    return {
+        "type": "tool_call",
+        "tool_call_id": f"recovered_{func_name}",
+        "tool_name": func_name,
+        "parameters": parameters,
+        "usage": None
+    }
 
 async def generate_response(
     db: Session,
@@ -131,8 +163,13 @@ async def generate_response(
             content = response_message.content or ""
             if content and ("<function=" in content or "</function>" in content):
                 print(f"⚠️ Groq model generated malformed function syntax in text. Model: {model_name}")
+                if tools:
+                    recovered = _parse_failed_generation(content, tools)
+                    if recovered:
+                        recovered["usage"] = usage_data
+                        print(f"✅ Recovered tool call '{recovered['tool_name']}' from text content.")
+                        return recovered
                 print(f"⚠️ Consider switching to llama-3.3-70b-versatile for proper function calling support.")
-                # Return a generic message instead of the malformed syntax
                 return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?", "usage": usage_data}
 
             return {"type": "text", "content": content, "usage": usage_data}
@@ -141,9 +178,28 @@ async def generate_response(
             error_str = str(e)
             print(f"Groq API Error: {e}")
 
-            # Check if it's a tool use failure with Groq
+            # Tool use failed — try to recover by parsing the failed_generation field
             if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
-                print(f"⚠️ Tool calling failed with current Groq model. Consider using llama-3.3-70b-versatile or llama-3.1-70b-versatile for better function calling support.")
+                print(f"⚠️ Tool calling failed with current Groq model. Attempting to recover from failed_generation...")
+                try:
+                    body = getattr(e, 'body', None)
+                    if isinstance(body, dict):
+                        failed_gen = body.get('error', {}).get('failed_generation', '')
+                    elif hasattr(e, 'response'):
+                        body = e.response.json()
+                        failed_gen = body.get('error', {}).get('failed_generation', '')
+                    else:
+                        failed_gen = ''
+
+                    if failed_gen and tools:
+                        recovered = _parse_failed_generation(failed_gen, tools)
+                        if recovered:
+                            print(f"✅ Recovered tool call '{recovered['tool_name']}' from failed_generation.")
+                            return recovered
+                except Exception as parse_err:
+                    print(f"Failed to recover from failed_generation: {parse_err}")
+
+                print(f"⚠️ Could not recover. Consider using llama-3.3-70b-versatile or llama-3.1-70b-versatile for better function calling support.")
 
             return {"type": "text", "content": f"LLM provider error: {e}"}
 

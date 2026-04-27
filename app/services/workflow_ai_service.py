@@ -2,21 +2,21 @@
 Workflow AI Chat Service
 
 Allows users to modify workflows via natural language.
-Maintains a chat history for context-aware edits.
-Uses any available Groq or OpenAI credential from the company vault.
+Uses the LLM configured on the workflow's attached agent.
+Falls back to any available Groq or OpenAI credential if no agent is linked.
 """
 
 import json
 import logging
-import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from groq import AsyncGroq
-from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from app.services import credential_service
 from app.services.vault_service import vault_service
+from app.llm_providers.groq_provider import generate_response as groq_generate
+from app.llm_providers.openai_provider import generate_response as openai_generate
+from app.llm_providers.gemini_provider import generate_response as gemini_generate
 
 logger = logging.getLogger(__name__)
 
@@ -122,28 +122,45 @@ Example: "Hello {{context.name}}, how can I help?"
 }"""
 
 
-# ── Provider helpers ───────────────────────────────────────────────────────────
+# ── Provider resolution ───────────────────────────────────────────────────────
 
-PROVIDER_PRIORITY = ["openai", "groq"]
+_PROVIDER_MODULES = {
+    "groq": groq_generate,
+    "openai": openai_generate,
+    "gemini": gemini_generate,
+}
+_FALLBACK_PROVIDER_PRIORITY = ["openai", "groq", "gemini"]
+_DEFAULT_MODELS = {
+    "groq": "llama-3.3-70b-versatile",
+    "openai": "gpt-4o-mini",
+    "gemini": "gemini-1.5-flash",
+}
 
-def _find_credential(db: Session, company_id: int) -> Tuple[str, str]:
-    """Find first available Groq or OpenAI credential for the company."""
-    for provider in PROVIDER_PRIORITY:
+
+def _resolve_provider_and_model(db: Session, company_id: int, workflow=None):
+    """
+    Priority:
+    1. The LLM configured on the workflow's first attached agent
+    2. First available credential in the company vault (groq → gemini → openai)
+    Returns (provider, model_name).
+    """
+    # 1. Agent-configured LLM
+    if workflow is not None:
+        agents = getattr(workflow, "agents", None) or []
+        if agents:
+            agent = agents[0]
+            provider = getattr(agent, "llm_provider", None)
+            model = getattr(agent, "model_name", None)
+            if provider and model:
+                return provider, model
+
+    # 2. Vault fallback
+    for provider in _FALLBACK_PROVIDER_PRIORITY:
         cred = credential_service.get_credential_by_service_name(db, provider, company_id)
         if cred:
-            api_key = vault_service.decrypt(cred.encrypted_credentials)
-            return api_key, provider
-    raise ValueError("No LLM credential found. Please add a Groq or OpenAI API key in the Vault.")
+            return provider, _DEFAULT_MODELS[provider]
 
-
-def _get_client(api_key: str, provider: str):
-    if provider == "groq":
-        return AsyncGroq(api_key=api_key, timeout=60.0)
-    return AsyncOpenAI(api_key=api_key, timeout=60.0)
-
-
-def _default_model(provider: str) -> str:
-    return "llama-3.3-70b-versatile" if provider == "groq" else "gpt-4o-mini"
+    raise ValueError("No LLM credential found. Add an OpenAI key in the Vault, or attach an agent to this workflow.")
 
 
 # ── Main service function ──────────────────────────────────────────────────────
@@ -154,47 +171,45 @@ async def workflow_ai_chat(
     message: str,
     current_visual_steps: Optional[Dict[str, Any]],
     history: List[Dict[str, str]],
+    workflow=None,
 ) -> Dict[str, Any]:
     """
     Process a natural-language message about a workflow.
-
-    Returns:
-        {
-            "reply": str,
-            "visual_steps": dict | None,
-            "changed_node_ids": list[str]
-        }
+    Uses the agent's configured LLM when available.
+    Returns: { "reply", "visual_steps", "changed_node_ids" }
     """
-    api_key, provider = _find_credential(db, company_id)
-    client = _get_client(api_key, provider)
-    model = _default_model(provider)
+    provider, model_name = _resolve_provider_and_model(db, company_id, workflow)
+    generate = _PROVIDER_MODULES.get(provider, groq_generate)
 
-    # Build the current-state context block
-    steps_json = json.dumps(current_visual_steps or {"nodes": [], "edges": []}, indent=2)
-    state_block = f"\n\nCURRENT WORKFLOW STATE:\n```json\n{steps_json}\n```\n"
-
-    # Build message history (last 8 turns for context)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Build history for the provider (last 8 turns)
+    chat_history = []
     for h in history[-8:]:
-        messages.append({"role": h["role"], "content": h["content"]})
+        chat_history.append({"role": h["role"], "content": h["content"]})
 
-    # Inject current state into the latest user message
-    messages.append({
-        "role": "user",
-        "content": state_block + "\nUser instruction: " + message
-    })
+    steps_json = json.dumps(current_visual_steps or {"nodes": [], "edges": []}, indent=2)
+    user_content = (
+        f"\n\nCURRENT WORKFLOW STATE:\n```json\n{steps_json}\n```\n"
+        f"\nUser instruction: {message}"
+    )
 
+    raw = ""
     try:
-        kwargs = dict(model=model, messages=messages, temperature=0.2, max_tokens=4096)
-        # Both OpenAI and Groq support json_object response format
-        kwargs["response_format"] = {"type": "json_object"}
-        response = await client.chat.completions.create(**kwargs)
-        raw = response.choices[0].message.content.strip()
+        response = await generate(
+            db=db,
+            company_id=company_id,
+            model_name=model_name,
+            system_prompt=SYSTEM_PROMPT,
+            chat_history=chat_history + [{"role": "user", "content": user_content}],
+            tools=[],
+            stream=False,
+        )
+
+        # All providers return {"content": str, ...}
+        raw = (response.get("content") or "").strip()
 
         # Strip markdown code fences if present
         if "```" in raw:
-            parts = raw.split("```")
-            for part in parts:
+            for part in raw.split("```"):
                 candidate = part.lstrip("json").strip()
                 if candidate.startswith("{"):
                     raw = candidate
@@ -202,13 +217,11 @@ async def workflow_ai_chat(
 
         # Last-resort: extract first {...} block
         if not raw.startswith("{"):
-            start = raw.find("{")
-            end = raw.rfind("}")
+            start, end = raw.find("{"), raw.rfind("}")
             if start != -1 and end != -1:
                 raw = raw[start:end + 1]
 
-        raw = raw.strip()
-        data = json.loads(raw)
+        data = json.loads(raw.strip())
         return {
             "reply": data.get("reply", "Done."),
             "visual_steps": data.get("visual_steps"),
@@ -217,11 +230,7 @@ async def workflow_ai_chat(
 
     except json.JSONDecodeError as e:
         logger.error(f"[WorkflowAI] JSON parse error: {e}\nRaw: {raw[:500]}")
-        return {
-            "reply": "I couldn't parse the AI response. Please try again.",
-            "visual_steps": None,
-            "changed_node_ids": [],
-        }
+        return {"reply": "I couldn't parse the AI response. Please try again.", "visual_steps": None, "changed_node_ids": []}
     except Exception as e:
         logger.error(f"[WorkflowAI] LLM error: {e}")
         raise

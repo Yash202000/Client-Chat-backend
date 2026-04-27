@@ -5,6 +5,8 @@ from app.models import conversation_session as models_conversation_session, chat
 from app.schemas import ai_chat as schemas_ai_chat
 from app.services import agent_execution_service
 from app.services import token_usage_service
+from app.services import chat_service
+from app.schemas import chat_message as schemas_chat_message
 from app.llm_providers import groq_provider, gemini_provider
 
 async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatRequest, company_id: int, user_id: int):
@@ -41,21 +43,89 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
 
     # 3. Generate response
     if chat_request.agent_id:
-        # Use the selected agent to generate a response
-        # Note: generate_agent_response expects conversation_id (UUID string) for session_id and boradcast_session_id
-        await agent_execution_service.generate_agent_response(
+        # If option_key is provided (user selected a prompt option), use it as the effective message
+        effective_message = chat_request.option_key if chat_request.option_key else chat_request.message
+        # generate_agent_response returns the text; saving to DB is the caller's responsibility
+        _trace: dict = {}
+        response = await agent_execution_service.generate_agent_response(
             db=db,
             agent_id=chat_request.agent_id,
             session_id=session.conversation_id,
             boradcast_session_id=session.conversation_id,
             company_id=company_id,
-            user_message=chat_request.message
+            user_message=effective_message,
+            _trace=_trace,
         )
-        last_agent_message = db.query(models_chat_message.ChatMessage).filter(
-            models_chat_message.ChatMessage.session_id == session.id,  # ChatMessage.session_id is integer FK
-            models_chat_message.ChatMessage.sender == 'agent'
-        ).order_by(models_chat_message.ChatMessage.timestamp.desc()).first()
-        return last_agent_message
+        # Extract plain text from response (may be str or dict with "text" key)
+        if isinstance(response, dict):
+            response_text = response.get("text") or ""
+        else:
+            response_text = str(response) if response else ""
+
+        # Determine message_type and options from response
+        options = None
+        message_type = "message"
+        if isinstance(response, dict) and response.get("options"):
+            options = response["options"]
+            message_type = "prompt"
+
+        # Build ordered cascade execution steps for frontend animation
+        final_status = "success" if response_text else "error"
+        from app.services import agent_service
+        agent_obj = agent_service.get_agent(db, chat_request.agent_id, company_id)
+
+        tool_name_used = _trace.get('tool_name')
+        workflow_id_used = _trace.get('workflow_id')
+        if isinstance(response, dict) and response.get('type') == 'workflow_trigger':
+            workflow_id_used = response.get('workflow_id')
+        kb_used = _trace.get('kb_used', False)
+
+        middle_steps = []
+        if agent_obj:
+            if kb_used:
+                for kb in (agent_obj.knowledge_bases or []):
+                    middle_steps.append({"node_id": f"knowledge-{kb.id}", "status": final_status})
+            if tool_name_used:
+                for tool in (agent_obj.tools or []):
+                    if tool.name == tool_name_used:
+                        middle_steps.append({"node_id": f"tools-{tool.id}", "status": final_status})
+                        break
+            if workflow_id_used:
+                middle_steps.append({"node_id": f"workflow-{workflow_id_used}", "status": final_status})
+
+        # Cascade order: chat-message → agent → [kb/tool/wf] → agent → chat-message
+        if middle_steps:
+            execution_steps = [
+                {"node_id": "chat-message-node", "status": "success"},
+                {"node_id": "agent-node", "status": "success"},
+                *middle_steps,
+                {"node_id": "agent-node", "status": final_status},
+                {"node_id": "chat-message-node", "status": final_status},
+            ]
+        else:
+            execution_steps = [
+                {"node_id": "chat-message-node", "status": "success"},
+                {"node_id": "agent-node", "status": final_status},
+                {"node_id": "chat-message-node", "status": final_status},
+            ]
+
+        # Save the agent response to DB
+        msg_create = schemas_chat_message.ChatMessageCreate(
+            message=response_text,
+            message_type=message_type,
+        )
+        db_message = chat_service.create_chat_message(
+            db=db,
+            message=msg_create,
+            agent_id=chat_request.agent_id,
+            session_id=session.conversation_id,
+            company_id=company_id,
+            sender="agent",
+            options=options,
+        )
+        db_message.conversation_id = session.conversation_id
+        db_message.execution_steps = execution_steps
+        return db_message
 
     else:
         # Use default provider (Groq)
@@ -101,4 +171,5 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         db.commit()
         db.refresh(model_message)
 
+        model_message.conversation_id = session.conversation_id
         return model_message

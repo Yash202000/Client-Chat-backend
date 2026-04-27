@@ -103,16 +103,23 @@ async def websocket_endpoint(
         print(f"[ws_updates] 🔌 Client disconnected from channel '{channel_id}'")
         manager.disconnect(websocket, channel_id)
 
+        # Mark user as inactive in DB so schedule_offline_update won't skip the "online" check
+        db = SessionLocal()
+        try:
+            user_service.update_user_presence(db, user_id=current_user.id, status="inactive")
+        finally:
+            db.close()
+
         # Schedule delayed offline update (allows reconnection within grace period)
         await user_service.schedule_offline_update(SessionLocal, current_user.id)
         print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (5s grace period)")
 
-        # Broadcast presence update (will be corrected if user reconnects)
+        # Broadcast inactive (not offline/red) — corrected to online if user reconnects
         presence_update = json.dumps({
             "type": "presence_update",
             "payload": {
                 "user_id": current_user.id,
-                "status": "offline"
+                "status": "inactive"
             }
         })
         await manager.broadcast(presence_update, channel_id)
@@ -125,15 +132,20 @@ async def websocket_endpoint(
 
         # Schedule delayed offline update on error (allows reconnection within grace period)
         try:
+            db = SessionLocal()
+            try:
+                user_service.update_user_presence(db, user_id=current_user.id, status="inactive")
+            finally:
+                db.close()
+
             await user_service.schedule_offline_update(SessionLocal, current_user.id)
             print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (due to error, 5s grace period)")
 
-            # Broadcast presence update to all company users
             presence_update = json.dumps({
                 "type": "presence_update",
                 "payload": {
                     "user_id": current_user.id,
-                    "status": "offline"
+                    "status": "inactive"
                 }
             })
             await manager.broadcast(presence_update, channel_id)

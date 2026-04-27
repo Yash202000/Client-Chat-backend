@@ -5,7 +5,7 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound, social, linkedin_leads
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound, social, linkedin_leads, call_queue, agent_skills, voice_supervisor, dialer
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -105,6 +105,10 @@ api_router.include_router(workflow_templates.router, prefix="/workflow-templates
 # Voice integrations
 api_router.include_router(twilio_voice.router, prefix="/twilio", tags=["twilio-voice"])
 api_router.include_router(freeswitch_voice.router, prefix="/freeswitch", tags=["freeswitch-voice"])
+api_router.include_router(call_queue.router, prefix="/voice/queue", tags=["call-queue"])
+api_router.include_router(voice_supervisor.router, prefix="/voice/supervisor", tags=["voice-supervisor"])
+api_router.include_router(agent_skills.router, prefix="/agent-skills", tags=["agent-skills"])
+api_router.include_router(dialer.router, prefix="/dialer", tags=["dialer"])
 
 # Security
 api_router.include_router(security_logs.router, prefix="/security-logs", tags=["security"])

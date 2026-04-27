@@ -66,6 +66,8 @@ class VoiceCallResponse(VoiceCallBase):
     ended_at: Optional[datetime] = None
     duration_seconds: Optional[float] = None
     full_transcript: Optional[str] = None
+    csat_score: Optional[int] = None
+    csat_sent_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

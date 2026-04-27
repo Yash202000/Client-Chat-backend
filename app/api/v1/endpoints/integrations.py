@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
 
-from app.core.dependencies import get_db, get_current_active_user, get_current_company
+from app.core.dependencies import get_db, get_current_active_user, get_current_company, require_permission
 from app.models import user as models_user
 from app.schemas import integration as schemas_integration
 from app.services import integration_service
@@ -12,7 +12,7 @@ from app.services.whatsapp_token_refresh_service import get_token_status_for_int
 
 router = APIRouter()
 
-@router.post("/", response_model=schemas_integration.Integration)
+@router.post("/", response_model=schemas_integration.Integration, dependencies=[Depends(require_permission("company_settings:update"))])
 def create_integration(
     integration: schemas_integration.IntegrationCreate,
     db: Session = Depends(get_db),
@@ -21,7 +21,6 @@ def create_integration(
     """
     Create a new integration for the current user's company.
     """
-    # TODO: Add permission check to ensure user is a company admin
     return integration_service.create_integration(db=db, integration=integration, company_id=current_user.company_id)
 
 @router.get("/", response_model=List[schemas_integration.Integration])
@@ -48,7 +47,7 @@ def read_integration(
         raise HTTPException(status_code=404, detail="Integration not found")
     return db_integration
 
-@router.put("/{integration_id}", response_model=schemas_integration.Integration)
+@router.put("/{integration_id}", response_model=schemas_integration.Integration, dependencies=[Depends(require_permission("company_settings:update"))])
 def update_integration(
     integration_id: int,
     integration_in: schemas_integration.IntegrationUpdate,
@@ -61,10 +60,9 @@ def update_integration(
     db_integration = integration_service.get_integration(db, integration_id=integration_id, company_id=current_user.company_id)
     if db_integration is None:
         raise HTTPException(status_code=404, detail="Integration not found")
-    # TODO: Add permission check
     return integration_service.update_integration(db=db, db_integration=db_integration, integration_in=integration_in)
 
-@router.delete("/{integration_id}", response_model=schemas_integration.Integration)
+@router.delete("/{integration_id}", response_model=schemas_integration.Integration, dependencies=[Depends(require_permission("company_settings:update"))])
 def delete_integration(
     integration_id: int,
     db: Session = Depends(get_db),
@@ -76,7 +74,6 @@ def delete_integration(
     db_integration = integration_service.delete_integration(db, integration_id=integration_id, company_id=current_user.company_id)
     if db_integration is None:
         raise HTTPException(status_code=404, detail="Integration not found")
-    # TODO: Add permission check
     return db_integration
 
 

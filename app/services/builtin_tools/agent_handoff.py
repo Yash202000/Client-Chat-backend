@@ -19,6 +19,75 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _enqueue_voice_call(db: Session, session, reason: str, summary: str) -> bool:
+    """
+    When a voice session needs human escalation, create a CallQueueEntry and
+    broadcast to agents. Returns True if a queue entry was created.
+    """
+    if not session or session.channel not in ("twilio_voice", "freeswitch"):
+        return False
+    try:
+        from app.models.voice_call import VoiceCall
+        from app.models.call_queue import CallQueueEntry
+
+        voice_call = db.query(VoiceCall).filter(
+            VoiceCall.conversation_id == session.conversation_id
+        ).order_by(VoiceCall.started_at.desc()).first()
+
+        if not voice_call:
+            logger.warning(f"[VOICE QUEUE] No voice call found for session {session.conversation_id}")
+            return False
+
+        # Don't duplicate — skip if already waiting
+        existing = db.query(CallQueueEntry).filter(
+            CallQueueEntry.call_sid == voice_call.call_sid,
+            CallQueueEntry.status == "waiting",
+        ).first()
+        if existing:
+            return True
+
+        entry = CallQueueEntry(
+            company_id=session.company_id,
+            call_sid=voice_call.call_sid,
+            source=session.channel,
+            caller_number=voice_call.from_number,
+            caller_name=None,
+            session_id=session.conversation_id,
+            contact_id=session.contact_id,
+            priority=session.priority or 0,
+        )
+        db.add(entry)
+        session.waiting_for_agent = True
+        session.handoff_requested_at = datetime.now(timezone.utc)
+        session.handoff_reason = reason
+        db.commit()
+        db.refresh(entry)
+        logger.info(f"[VOICE QUEUE] Enqueued call {voice_call.call_sid} for human agent")
+
+        # Broadcast to agents so the queue panel updates in real time
+        try:
+            import asyncio
+            from app.services.connection_manager import manager
+            msg = json.dumps({
+                "type": "call_queued",
+                "entry_id": entry.id,
+                "call_sid": voice_call.call_sid,
+                "caller_number": voice_call.from_number,
+                "session_id": session.conversation_id,
+                "reason": reason,
+            })
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(manager.broadcast_to_company(session.company_id, msg))
+        except Exception as ws_err:
+            logger.warning(f"[VOICE QUEUE] WebSocket broadcast failed: {ws_err}")
+
+        return True
+    except Exception as e:
+        logger.error(f"[VOICE QUEUE] Failed to enqueue voice call: {e}\n{traceback.format_exc()}")
+        return False
+
+
 def _prepare_history_for_handoff(
     db: Session,
     session_id: str,
@@ -162,6 +231,17 @@ async def execute_transfer_to_agent_tool(
         )
 
         conversation_session_service.update_session(db, session_id, session_update)
+
+        # For voice sessions, enqueue for human agent instead of AI-to-AI transfer
+        if _enqueue_voice_call(db, session, reason=reason, summary=summary):
+            return {
+                "result": {
+                    "status": "queued_for_human",
+                    "session_id": session_id,
+                    "message": "I'm connecting you with a human agent now. Please hold for a moment.",
+                },
+                "formatted_response": "I'm connecting you with a human agent now. Please hold for a moment.",
+            }
 
         # Broadcast agent transfer to frontend via WebSocket
         try:

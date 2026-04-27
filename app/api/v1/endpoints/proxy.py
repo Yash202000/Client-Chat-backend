@@ -19,9 +19,10 @@ async def image_proxy(url: str):
     """
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
         try:
-            response = await client.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            if 'media.licdn.com' in url:
+                headers['Referer'] = 'https://www.linkedin.com/'
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
 
             # Stream the response back to the client

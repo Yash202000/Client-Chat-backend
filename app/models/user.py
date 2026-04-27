@@ -1,6 +1,7 @@
 
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSONB
 import datetime
 
 from app.core.database import Base
@@ -42,3 +43,6 @@ class User(Base):
     # Presence status for chat
     presence_status = Column(String, default="offline") # online, offline, busy
     last_seen = Column(DateTime, nullable=True)
+
+    # Skills-based routing (Phase 2)
+    skills = Column(JSONB, nullable=True)  # e.g. ["billing", "technical", "spanish"]

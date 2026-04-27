@@ -159,6 +159,17 @@ async def on_startup():
     )
     print("[Startup] Social post scheduler started (interval: 1 min)")
 
+    # Queue overflow / SLA checker — runs every 30s
+    from app.services.queue_overflow_service import run_queue_overflow_check
+    scheduler.add_job(
+        run_queue_overflow_check,
+        'interval',
+        seconds=30,
+        id='queue_overflow_check',
+        replace_existing=True,
+    )
+    print("[Startup] Queue overflow/SLA checker started (interval: 30s)")
+
     # Start the scheduler if not already started
     if not scheduler.running:
         scheduler.start()

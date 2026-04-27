@@ -174,7 +174,11 @@ def add_channel_member(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # TODO: Add validation to ensure only admins or channel creators can add members
+    channel = crud_chat.get_channel(db, channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if channel.creator_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(status_code=403, detail="Only the channel creator or an admin can add members")
     return crud_chat.add_user_to_channel(db=db, user_id=member.user_id, channel_id=channel_id)
 
 @router.delete("/channels/{channel_id}/members/{user_id}", dependencies=[Depends(require_permission("chat:delete"))])
@@ -184,7 +188,11 @@ def remove_channel_member(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # TODO: Add validation to ensure only admins or channel creators can remove members
+    channel = crud_chat.get_channel(db, channel_id=channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if channel.creator_id != current_user.id and not current_user.is_super_admin:
+        raise HTTPException(status_code=403, detail="Only the channel creator or an admin can remove members")
     crud_chat.remove_user_from_channel(db=db, user_id=user_id, channel_id=channel_id)
     return {"ok": True}
 

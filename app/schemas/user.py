@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 import datetime
 from app.schemas.role import Role
 
@@ -51,6 +51,7 @@ class User(BaseModel):
     last_login_at: Optional[datetime.datetime] = None
     presence_status: Optional[str] = "offline"
     last_seen: Optional[datetime.datetime] = None
+    skills: Optional[List[str]] = None
     subscription_plan_id: Optional[int] = None
     subscription_status: Optional[str] = None
     subscription_start_date: Optional[datetime.datetime] = None

@@ -109,13 +109,14 @@ async def assign_session_to_agent(
     """
     logger.info(f"Assigning session {session_id} to agent {agent_user_id}")
 
-    # Update the session (AI stays enabled - can be toggled manually by agent)
+    # Disable AI so the agent handles the conversation without bot interference
     session_update = ConversationSessionUpdate(
         assignee_id=agent_user_id,
         status='assigned',
         waiting_for_agent=False,
+        is_ai_enabled=False,
         handoff_accepted_at=datetime.utcnow(),
-        assigned_pool=team_name  # Store team name in assigned_pool field
+        assigned_pool=team_name
     )
 
     updated_session = conversation_session_service.update_session(db, session_id, session_update)
@@ -242,6 +243,7 @@ async def request_handoff(
                 "livekit_url": call_room["livekit_url"],
                 "agent_token": call_room["agent_token"],
                 "user_token": call_room["user_token"],
+                "bot_agent_id": session.agent_id,  # AI agent ID, needed for conversation WebSocket
                 "timestamp": datetime.utcnow().isoformat()
             }
 

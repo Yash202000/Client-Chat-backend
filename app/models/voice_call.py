@@ -53,10 +53,18 @@ class VoiceCall(Base):
     duration_seconds = Column(Float, nullable=True)
 
     # Transcription
-    full_transcript = Column(Text, nullable=True)  # Full conversation transcript
+    full_transcript = Column(Text, nullable=True)
+
+    # Recording
+    recording_url = Column(String, nullable=True)
+    recording_duration_secs = Column(Float, nullable=True)
+
+    # CSAT (Phase 2)
+    csat_score = Column(Integer, nullable=True)      # 1-5
+    csat_sent_at = Column(DateTime, nullable=True)
 
     # Additional data
-    call_metadata = Column(JSONB, nullable=True)  # Additional call data
+    call_metadata = Column(JSONB, nullable=True)
 
     # Relationships
     company = relationship("Company")

@@ -39,7 +39,9 @@ async def get_current_company_from_api_key(
 
 
 async def get_current_user(
-    db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+    x_company_id: Optional[int] = Header(default=None),
 ) -> models_user.User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -64,7 +66,14 @@ async def get_current_user(
 
     if user is None:
         raise credentials_exception
-    return schemas_user.User.model_validate(user)
+
+    validated = schemas_user.User.model_validate(user)
+
+    # Allow super admins to switch company context via X-Company-ID header
+    if validated.is_super_admin and x_company_id and x_company_id != validated.company_id:
+        validated = validated.model_copy(update={'company_id': x_company_id})
+
+    return validated
 
 async def get_current_user_from_ws(websocket: WebSocket, db: Session = Depends(get_db), token: Optional[str] = Query(None)) -> models_user.User:
     if token is None:

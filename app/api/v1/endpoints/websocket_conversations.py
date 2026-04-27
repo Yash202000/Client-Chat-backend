@@ -172,10 +172,14 @@ async def internal_chat_websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(websocket, channel_id_str)
 
+        # Mark user as inactive in DB so schedule_offline_update won't skip the "online" check
+        with get_db_session() as db:
+            user_service.update_user_presence(db, user_id=current_user.id, status="inactive")
+
         # Schedule delayed offline update (allows reconnection within grace period)
         await user_service.schedule_offline_update(SessionLocal, current_user.id)
 
-        presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "offline"})
+        presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "inactive"})
         await manager.broadcast(presence_message.model_dump_json(), channel_id_str)
 
 @router.websocket("/voice/{company_id}/{agent_id}/{session_id}")

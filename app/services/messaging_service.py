@@ -583,3 +583,109 @@ async def send_gmail_message(
         except Exception as e:
             logger.error(f"Unexpected error sending Gmail message: {e}")
             raise
+
+
+async def send_linkedin_message(
+    recipient_urn: str,
+    message_text: str,
+    integration: Integration,
+) -> Dict[str, Any]:
+    """
+    Send a LinkedIn direct message to a member via the LinkedIn Messaging API.
+    Requires an integration with a valid access_token and w_member_social scope.
+    """
+    creds = integration_service.get_decrypted_credentials(integration)
+    access_token = creds.get('access_token')
+    if not access_token:
+        raise ValueError("LinkedIn integration is missing access_token")
+
+    # Ensure URN is in correct format
+    if not recipient_urn.startswith('urn:li:'):
+        recipient_urn = f"urn:li:person:{recipient_urn}"
+
+    payload = {
+        "recipients": [{"person": {"$URN": recipient_urn}}],
+        "subject": "Message",
+        "body": message_text,
+        "messageType": "MEMBER_TO_MEMBER",
+    }
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                "https://api.linkedin.com/v2/messages",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            logger.info(f"LinkedIn message sent to {recipient_urn}")
+            return {"success": True, "status_code": response.status_code}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"LinkedIn API error sending to {recipient_urn}: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sending LinkedIn message: {e}")
+            raise
+
+
+async def fetch_whatsapp_profile_picture(
+    wa_id: str,
+    integration: Integration,
+    db: Optional[Session] = None,
+) -> Optional[str]:
+    """
+    Fetches a WhatsApp contact's profile picture and returns it as a base64 data URL.
+    The Cloud API returns the image directly (not a URL) from the whatsapp_profile_photo endpoint.
+    Returns None silently on any failure.
+    """
+    try:
+        credentials = integration_service.get_decrypted_credentials(integration)
+        phone_number_id = credentials.get("phone_number_id")
+
+        if db:
+            api_token = await whatsapp_token_service.ensure_valid_token(db, integration)
+        else:
+            api_token = credentials.get("api_token") or credentials.get("access_token")
+
+        if not api_token or not phone_number_id:
+            return None
+
+        headers = {"Authorization": f"Bearer {api_token}"}
+
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            # Primary: Cloud API profile photo endpoint
+            url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{phone_number_id}/whatsapp_profile_photo"
+            resp = await client.get(url, headers=headers, params={"contact_wa_id": wa_id})
+            logger.info(f"[WhatsApp] Profile photo endpoint returned {resp.status_code} for {wa_id}")
+
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                if content_type.startswith("image/"):
+                    import base64
+                    b64 = base64.b64encode(resp.content).decode()
+                    data_url = f"data:{content_type};base64,{b64}"
+                    logger.info(f"[WhatsApp] Got profile picture for {wa_id} ({len(resp.content)} bytes)")
+                    return data_url
+                # Maybe JSON with a URL field
+                try:
+                    body = resp.json()
+                    pic_url = body.get("url") or body.get("profile_picture_url")
+                    if pic_url:
+                        img_resp = await client.get(pic_url, headers=headers)
+                        if img_resp.status_code == 200:
+                            import base64
+                            ct = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                            b64 = base64.b64encode(img_resp.content).decode()
+                            return f"data:{ct};base64,{b64}"
+                except Exception:
+                    pass
+
+    except Exception as e:
+        logger.debug(f"[WhatsApp] Could not fetch profile picture for {wa_id}: {e}")
+    return None
