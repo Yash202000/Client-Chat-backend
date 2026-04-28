@@ -150,6 +150,19 @@ class ConnectionManager:
         else:
             print(f"[broadcast_bytes_to_session] No active connections for session {session_id}")
 
+    def register(self, websocket: WebSocket, session_id: str, user_type: str, connection_type: str = "notifications"):
+        """Register an already-accepted WebSocket without calling accept() again."""
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = []
+            self.last_activity[session_id] = {}
+        self.active_connections[session_id].append({
+            "websocket": websocket,
+            "user_type": user_type,
+            "connection_type": connection_type,
+        })
+        self.last_activity[session_id][id(websocket)] = time.time()
+        print(f"[register] {user_type} ({connection_type}) registered to session '{session_id}'")
+
     async def broadcast_to_company(self, company_id: int, message: str):
         """
         Broadcast a message to all users connected to a company channel.

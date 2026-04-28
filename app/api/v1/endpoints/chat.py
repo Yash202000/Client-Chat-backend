@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from typing import List
 import uuid
 import os
+import datetime
 from pathlib import Path
 
 from app.core.dependencies import get_db, require_permission
@@ -406,3 +407,167 @@ def search_channel_messages(
         message.reply_count = crud_chat.get_reply_count(db=db, message_id=message.id)
 
     return messages
+
+
+# ── Pinned Messages ────────────────────────────────────────────────────────────
+
+@router.post("/channels/{channel_id}/pins", response_model=chat_schema.PinnedMessageOut, dependencies=[Depends(require_permission("chat:create"))])
+async def pin_message(
+    channel_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    message = crud_chat.get_message_by_id(db, message_id)
+    if not message or message.channel_id != channel_id:
+        raise HTTPException(status_code=404, detail="Message not found in this channel")
+    pin = crud_chat.pin_message(db, channel_id=channel_id, message_id=message_id, user_id=current_user.id)
+    ws_msg = WebSocketMessage(type="message_pinned", payload={"channel_id": channel_id, "message_id": message_id, "pinned_by": current_user.id})
+    await manager.broadcast(ws_msg.model_dump_json(), str(channel_id))
+    return pin
+
+
+@router.delete("/channels/{channel_id}/pins/{message_id}", dependencies=[Depends(require_permission("chat:delete"))])
+async def unpin_message(
+    channel_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    deleted = crud_chat.unpin_message(db, channel_id=channel_id, message_id=message_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    ws_msg = WebSocketMessage(type="message_unpinned", payload={"channel_id": channel_id, "message_id": message_id})
+    await manager.broadcast(ws_msg.model_dump_json(), str(channel_id))
+    return {"ok": True}
+
+
+@router.get("/channels/{channel_id}/pins", response_model=List[chat_schema.PinnedMessageOut], dependencies=[Depends(require_permission("chat:read"))])
+def get_pinned_messages(
+    channel_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    pins = crud_chat.get_pinned_messages(db, channel_id=channel_id)
+    for pin in pins:
+        if pin.message:
+            pin.message.reply_count = crud_chat.get_reply_count(db, message_id=pin.message_id)
+    return pins
+
+
+# ── Read Receipts ──────────────────────────────────────────────────────────────
+
+@router.post("/channels/{channel_id}/read", dependencies=[Depends(require_permission("chat:create"))])
+async def mark_channel_read(
+    channel_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    crud_chat.mark_channel_read(db, channel_id=channel_id, user_id=current_user.id)
+    # Broadcast so the sender's UI updates the double tick immediately
+    ws_msg = WebSocketMessage(
+        type="channel_read",
+        payload={"channel_id": channel_id, "user_id": current_user.id}
+    )
+    await manager.broadcast(ws_msg.model_dump_json(), str(channel_id))
+    return {"ok": True}
+
+
+@router.get("/channels/{channel_id}/read-summary", dependencies=[Depends(require_permission("chat:read"))])
+def get_channel_read_summary(
+    channel_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Returns {message_id: [{id, first_name, last_name, email, profile_picture_url}]} for all read messages in channel."""
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    read_map = crud_chat.get_channel_read_map(db, channel_id=channel_id)
+    result = {}
+    for message_id, reads in read_map.items():
+        result[str(message_id)] = [
+            {
+                "id": r.user.id,
+                "first_name": r.user.first_name,
+                "last_name": r.user.last_name,
+                "email": r.user.email,
+                "profile_picture_url": r.user.profile_picture_url,
+            }
+            for r in reads
+            if r.user_id != current_user.id  # Don't show yourself as a reader
+        ]
+    return result
+
+
+@router.post("/messages/{message_id}/read", dependencies=[Depends(require_permission("chat:create"))])
+def mark_message_read(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    message = crud_chat.get_message_by_id(db, message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if not is_channel_member(db, user_id=current_user.id, channel_id=message.channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+    crud_chat.mark_message_read(db, message_id=message_id, user_id=current_user.id)
+    return {"ok": True}
+
+
+# ── Scheduled Messages ─────────────────────────────────────────────────────────
+
+@router.get("/scheduled", response_model=List[chat_schema.InternalChatMessage], dependencies=[Depends(require_permission("chat:read"))])
+def get_my_scheduled_messages(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    messages = crud_chat.get_scheduled_messages(db, user_id=current_user.id)
+    for m in messages:
+        m.reply_count = 0
+    return messages
+
+
+@router.delete("/scheduled/{message_id}", dependencies=[Depends(require_permission("chat:delete"))])
+def cancel_scheduled_message(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    message = crud_chat.get_message_by_id(db, message_id)
+    if not message or message.sender_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Scheduled message not found")
+    if not message.scheduled_at:
+        raise HTTPException(status_code=400, detail="Message is not scheduled")
+    db.delete(message)
+    db.commit()
+    return {"ok": True}
+
+
+# ── User Status / DND ──────────────────────────────────────────────────────────
+
+@router.patch("/status", response_model=chat_schema.UserStatusOut, dependencies=[Depends(require_permission("chat:update"))])
+def update_user_status(
+    body: chat_schema.UserStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if body.presence_status:
+        current_user.presence_status = body.presence_status
+    if body.status_message is not None:
+        current_user.status_message = body.status_message
+    if body.dnd_minutes is not None and body.dnd_minutes > 0:
+        current_user.dnd_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=body.dnd_minutes)
+        current_user.presence_status = "dnd"
+    elif body.dnd_minutes == 0:
+        current_user.dnd_until = None
+    db.commit()
+    db.refresh(current_user)
+    return current_user

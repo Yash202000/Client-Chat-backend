@@ -182,6 +182,51 @@ async def internal_chat_websocket_endpoint(
         presence_message = WebSocketMessage(type="presence_update", payload={"user_id": current_user.id, "status": "inactive"})
         await manager.broadcast(presence_message.model_dump_json(), channel_id_str)
 
+@router.websocket("/user")
+async def user_personal_websocket(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None),
+):
+    """Personal WebSocket for the authenticated user.
+
+    Registers the connection as ``user_{user_id}`` so that the backend can push
+    targeted events (calendar reminders, notifications, etc.) via
+    ``manager.broadcast_to_user(user_id, ...)``.
+    """
+    # Accept first — authenticate_ws_user needs the socket to be open
+    await websocket.accept()
+
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token missing")
+        return
+
+    try:
+        with get_db_session() as db:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            email: str = payload.get("sub")
+            if not email:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+                return
+            current_user = user_service.get_user_by_email(db, email=email)
+            if not current_user:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
+                return
+            user_id = current_user.id
+    except Exception:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication failed")
+        return
+
+    user_channel = f"user_{user_id}"
+    # Register without re-accepting (socket is already accepted)
+    manager.register(websocket, user_channel, "user", "notifications")
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_channel)
+
+
 @router.websocket("/voice/{company_id}/{agent_id}/{session_id}")
 async def voice_websocket_endpoint(
     websocket: WebSocket,

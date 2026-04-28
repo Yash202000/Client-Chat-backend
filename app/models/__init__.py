@@ -90,3 +90,10 @@ from app.models.social_post import SocialPost, PostStatus
 # Calendar Models
 from app.models.calendar_event import CalendarEvent
 
+# Chat Feature Models
+from app.models.pinned_message import PinnedMessage
+from app.models.message_read import MessageRead
+
+# Drive Models
+from app.models.drive_item import DriveItem
+

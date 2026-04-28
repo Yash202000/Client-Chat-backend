@@ -1,9 +1,12 @@
 
 from sqlalchemy.orm import Session, joinedload
 from app.models import ChatChannel, ChannelMembership, InternalChatMessage, ChatAttachment, MessageReaction, MessageMention, User, Team
+from app.models.pinned_message import PinnedMessage
+from app.models.message_read import MessageRead
 from app.schemas import chat as chat_schema
 from typing import List, Optional
 import re
+import datetime
 from app.crud import crud_notification
 
 # CRUD for ChatChannel
@@ -93,11 +96,14 @@ def parse_mentions(content: str) -> List[int]:
 
 # CRUD for InternalChatMessage
 def create_message(db: Session, message: chat_schema.InternalChatMessageCreate, sender_id: int) -> InternalChatMessage:
+    extra = {"is_activity": True} if message.is_activity else None
     db_message = InternalChatMessage(
         content=message.content,
         channel_id=message.channel_id,
         sender_id=sender_id,
-        parent_message_id=message.parent_message_id
+        parent_message_id=message.parent_message_id,
+        scheduled_at=message.scheduled_at,
+        extra_data=extra,
     )
     db.add(db_message)
     db.commit()
@@ -245,3 +251,123 @@ def search_messages(db: Session, channel_id: int, query: str, skip: int = 0, lim
         InternalChatMessage.channel_id == channel_id,
         InternalChatMessage.content.ilike(f'%{query}%')
     ).order_by(InternalChatMessage.created_at.desc()).offset(skip).limit(limit).all()
+
+
+# ── Pinned Messages ────────────────────────────────────────────────────────────
+
+def pin_message(db: Session, channel_id: int, message_id: int, user_id: int) -> Optional[PinnedMessage]:
+    existing = db.query(PinnedMessage).filter(
+        PinnedMessage.channel_id == channel_id,
+        PinnedMessage.message_id == message_id,
+    ).first()
+    if existing:
+        return existing
+    pin = PinnedMessage(channel_id=channel_id, message_id=message_id, pinned_by_user_id=user_id)
+    db.add(pin)
+    db.commit()
+    db.refresh(pin)
+    return pin
+
+
+def unpin_message(db: Session, channel_id: int, message_id: int) -> bool:
+    result = db.query(PinnedMessage).filter(
+        PinnedMessage.channel_id == channel_id,
+        PinnedMessage.message_id == message_id,
+    ).delete()
+    db.commit()
+    return result > 0
+
+
+def get_pinned_messages(db: Session, channel_id: int) -> List[PinnedMessage]:
+    return (
+        db.query(PinnedMessage)
+        .filter(PinnedMessage.channel_id == channel_id)
+        .options(joinedload(PinnedMessage.message), joinedload(PinnedMessage.pinned_by))
+        .order_by(PinnedMessage.pinned_at.desc())
+        .all()
+    )
+
+
+# ── Read Receipts ──────────────────────────────────────────────────────────────
+
+def mark_message_read(db: Session, message_id: int, user_id: int) -> MessageRead:
+    existing = db.query(MessageRead).filter(
+        MessageRead.message_id == message_id,
+        MessageRead.user_id == user_id,
+    ).first()
+    if existing:
+        return existing
+    read = MessageRead(message_id=message_id, user_id=user_id)
+    db.add(read)
+    db.commit()
+    db.refresh(read)
+    return read
+
+
+def mark_channel_read(db: Session, channel_id: int, user_id: int):
+    """Mark all unread messages in a channel as read for a user."""
+    messages = db.query(InternalChatMessage).filter(
+        InternalChatMessage.channel_id == channel_id,
+        ~InternalChatMessage.id.in_(
+            db.query(MessageRead.message_id).filter(MessageRead.user_id == user_id)
+        )
+    ).all()
+    for msg in messages:
+        read = MessageRead(message_id=msg.id, user_id=user_id)
+        db.add(read)
+    if messages:
+        db.commit()
+
+
+def get_message_reads(db: Session, message_id: int) -> List[MessageRead]:
+    return (
+        db.query(MessageRead)
+        .filter(MessageRead.message_id == message_id)
+        .options(joinedload(MessageRead.user))
+        .order_by(MessageRead.read_at.asc())
+        .all()
+    )
+
+
+def get_channel_read_map(db: Session, channel_id: int) -> dict:
+    """Returns {message_id: [MessageRead, ...]} for the channel's latest messages."""
+    reads = (
+        db.query(MessageRead)
+        .join(InternalChatMessage, MessageRead.message_id == InternalChatMessage.id)
+        .filter(InternalChatMessage.channel_id == channel_id)
+        .options(joinedload(MessageRead.user))
+        .all()
+    )
+    result: dict = {}
+    for r in reads:
+        result.setdefault(r.message_id, []).append(r)
+    return result
+
+
+# ── Scheduled Messages ─────────────────────────────────────────────────────────
+
+def get_scheduled_messages(db: Session, user_id: int) -> List[InternalChatMessage]:
+    return (
+        db.query(InternalChatMessage)
+        .filter(
+            InternalChatMessage.sender_id == user_id,
+            InternalChatMessage.scheduled_at != None,
+            InternalChatMessage.scheduled_at > datetime.datetime.utcnow(),
+        )
+        .order_by(InternalChatMessage.scheduled_at.asc())
+        .all()
+    )
+
+
+def dispatch_due_scheduled_messages(db: Session):
+    """Send all scheduled messages whose time has come. Returns dispatched messages."""
+    now = datetime.datetime.utcnow()
+    due = db.query(InternalChatMessage).filter(
+        InternalChatMessage.scheduled_at != None,
+        InternalChatMessage.scheduled_at <= now,
+    ).all()
+    for msg in due:
+        msg.scheduled_at = None  # Clear to mark as sent
+    if due:
+        db.commit()
+    return due

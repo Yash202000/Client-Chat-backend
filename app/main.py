@@ -159,6 +159,17 @@ async def on_startup():
     )
     print("[Startup] Social post scheduler started (interval: 1 min)")
 
+    # Calendar reminders — runs every minute to push WS notifications to users
+    from app.services.calendar_reminder_service import run_calendar_reminder_scheduler
+    scheduler.add_job(
+        run_calendar_reminder_scheduler,
+        'interval',
+        minutes=1,
+        id='calendar_reminder_scheduler',
+        replace_existing=True,
+    )
+    print("[Startup] Calendar reminder scheduler started (interval: 1 min)")
+
     # Queue overflow / SLA checker — runs every 30s
     from app.services.queue_overflow_service import run_queue_overflow_check
     scheduler.add_job(

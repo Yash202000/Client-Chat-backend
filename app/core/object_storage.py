@@ -18,6 +18,16 @@ s3_client = boto3.client(
 
 BUCKET_NAME = settings.minio_bucket
 
+# Ensure the bucket exists — create it if MinIO doesn't have it yet
+try:
+    s3_client.head_bucket(Bucket=BUCKET_NAME)
+except Exception:
+    try:
+        s3_client.create_bucket(Bucket=BUCKET_NAME)
+        print(f"Created MinIO bucket: {BUCKET_NAME}")
+    except Exception as e:
+        print(f"Warning: could not create bucket '{BUCKET_NAME}': {e}")
+
 # Default ChromaDB client (for backwards compatibility during migration)
 if settings.CHROMA_DB_HOST:
     print(f"Connecting to ChromaDB at {settings.CHROMA_DB_HOST}:{settings.CHROMA_DB_PORT}")

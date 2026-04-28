@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, func, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, func, JSON, Boolean
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -15,6 +15,7 @@ class InternalChatMessage(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
 
     # To store reactions, read receipts, etc.
     extra_data = Column(JSON, nullable=True)
