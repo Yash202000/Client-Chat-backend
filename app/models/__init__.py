@@ -87,3 +87,6 @@ from app.models.instance_license import InstanceLicense
 from app.models.social_account import SocialAccount, SocialPlatform, SocialAccountStatus
 from app.models.social_post import SocialPost, PostStatus
 
+# Calendar Models
+from app.models.calendar_event import CalendarEvent
+
