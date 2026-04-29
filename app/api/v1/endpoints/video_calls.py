@@ -111,10 +111,34 @@ def get_active_video_call(
     channel_id: int,
     db: Session = Depends(get_db),
 ):
+    # First check for a direct channel video call
     video_call = crud_video_call.get_active_video_call_by_channel(db, channel_id=channel_id)
-    if not video_call:
-        raise HTTPException(status_code=404, detail="No active video call found for this channel.")
-    return {"room_name": video_call.room_name, "livekit_url": settings.LIVEKIT_URL}
+    if video_call:
+        return {"room_name": video_call.room_name, "livekit_url": settings.LIVEKIT_URL, "source": "channel"}
+
+    # Fall back to an active calendar meeting linked to this channel
+    from app.models.calendar_event import CalendarEvent
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    cal_event = (
+        db.query(CalendarEvent)
+        .filter(
+            CalendarEvent.channel_id == channel_id,
+            CalendarEvent.livekit_room_name.isnot(None),
+            CalendarEvent.start_time <= now,
+            CalendarEvent.end_time >= now,
+        )
+        .first()
+    )
+    if cal_event:
+        return {
+            "room_name": cal_event.livekit_room_name,
+            "livekit_url": settings.LIVEKIT_URL,
+            "source": "calendar",
+            "event_id": cal_event.id,
+        }
+
+    raise HTTPException(status_code=404, detail="No active video call found for this channel.")
 
 @router.post("/{call_id}/reject")
 async def reject_video_call(

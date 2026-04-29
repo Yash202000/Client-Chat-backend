@@ -40,7 +40,8 @@ async def run_calendar_reminder_scheduler():
             mins_until = (start - now).total_seconds() / 60
 
             for threshold in THRESHOLDS:
-                key = f"{event.id}_{threshold}"
+                # Include start_time (minute precision) so rescheduled events fire again
+                key = f"{event.id}_{threshold}_{start.strftime('%Y%m%d%H%M')}"
                 # Fire when we enter the [threshold-1, threshold+1] window
                 if abs(mins_until - threshold) <= 1 and key not in _fired:
                     _fired.add(key)

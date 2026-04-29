@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
@@ -407,6 +408,120 @@ def search_channel_messages(
         message.reply_count = crud_chat.get_reply_count(db=db, message_id=message.id)
 
     return messages
+
+
+# ── Global cross-channel search ───────────────────────────────────────────────
+
+@router.get("/search", dependencies=[Depends(require_permission("chat:read"))])
+def search_all_channels(
+    query: str,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Search messages across all channels the current user is a member of."""
+    from app.models.chat_channel import ChatChannel as ChatChannelModel
+    from app.models.channel_membership import ChannelMembership
+
+    if not query or len(query.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Query must be at least 2 characters")
+
+    member_channel_ids = (
+        db.query(ChannelMembership.channel_id)
+        .filter(ChannelMembership.user_id == current_user.id)
+        .subquery()
+    )
+
+    from app.models.internal_chat_message import InternalChatMessage as MsgModel
+    rows = (
+        db.query(MsgModel)
+        .filter(
+            MsgModel.channel_id.in_(member_channel_ids),
+            MsgModel.content.ilike(f"%{query.strip()}%"),
+        )
+        .order_by(MsgModel.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    channel_ids = list({r.channel_id for r in rows})
+    channels = {
+        c.id: c
+        for c in db.query(ChatChannelModel).filter(ChatChannelModel.id.in_(channel_ids)).all()
+    }
+
+    results = []
+    for msg in rows:
+        ch = channels.get(msg.channel_id)
+        msg.reply_count = crud_chat.get_reply_count(db=db, message_id=msg.id)
+        d = chat_schema.InternalChatMessage.from_orm(msg).model_dump()
+        d["channel_name"] = ch.name if ch else None
+        d["channel_type"] = ch.channel_type if ch else None
+        results.append(d)
+
+    return results
+
+
+# ── Drive file sharing ─────────────────────────────────────────────────────────
+
+class ShareDriveFileBody(BaseModel):
+    drive_item_id: int
+    content: str = ""
+
+@router.post("/channels/{channel_id}/share-drive-file", dependencies=[Depends(require_permission("chat:create"))])
+async def share_drive_file(
+    channel_id: int,
+    body: ShareDriveFileBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Attach a Drive file to a new message without re-uploading it."""
+    from app.models.drive_item import DriveItem
+
+    if not is_channel_member(db, user_id=current_user.id, channel_id=channel_id):
+        raise HTTPException(status_code=403, detail="Not a channel member")
+
+    item = db.query(DriveItem).filter(
+        DriveItem.id == body.drive_item_id,
+        DriveItem.company_id == current_user.company_id,
+        DriveItem.is_folder == False,
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Drive file not found")
+
+    # Generate a 1-hour presigned URL
+    download_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": BUCKET_NAME, "Key": item.s3_key},
+        ExpiresIn=3600,
+    )
+
+    # Create the message
+    from app.schemas.chat import InternalChatMessageCreate
+    msg = crud_chat.create_message(
+        db=db,
+        message=InternalChatMessageCreate(channel_id=channel_id, content=body.content or ""),
+        sender_id=current_user.id,
+    )
+
+    # Create the attachment record
+    attachment = crud_chat.create_attachment(db=db, attachment=chat_schema.ChatAttachmentCreate(
+        file_name=item.name,
+        file_url=download_url,
+        file_type=item.mime_type or "application/octet-stream",
+        file_size=item.file_size or 0,
+        message_id=msg.id,
+        uploaded_by=current_user.id,
+    ))
+
+    # Reload message so attachments are included
+    db.refresh(msg)
+    message_data = chat_schema.InternalChatMessage.from_orm(msg)
+    await manager.broadcast(
+        WebSocketMessage(type="new_message", payload=message_data.model_dump()).model_dump_json(),
+        str(channel_id),
+    )
+    return message_data
 
 
 # ── Pinned Messages ────────────────────────────────────────────────────────────

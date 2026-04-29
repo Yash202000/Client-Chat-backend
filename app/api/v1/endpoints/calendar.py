@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
+from pydantic import BaseModel
 
 from app.core.dependencies import get_db, get_current_active_user
 from app.models.user import User as UserModel
@@ -246,3 +247,45 @@ def get_availability(
         if key in result:
             result[key].append(ev)
     return result
+
+
+class MeetingInviteBody(BaseModel):
+    user_ids: List[int]
+
+
+@router.post("/events/{event_id}/invite")
+async def invite_to_meeting(
+    event_id: int,
+    body: MeetingInviteBody,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user),
+):
+    from app.models.user import User as U
+    from app.services.connection_manager import manager
+    from app.schemas.websockets import WebSocketMessage
+
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not event or event.company_id != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if not event.livekit_room_name:
+        raise HTTPException(status_code=400, detail="Event has no meeting room")
+
+    inviter_name = current_user.first_name or current_user.email
+    payload = {
+        "event_id": event.id,
+        "title": event.title,
+        "start_time": event.start_time.isoformat(),
+        "livekit_room_name": event.livekit_room_name,
+        "inviter_name": inviter_name,
+        "label": f"Invited by {inviter_name}",
+    }
+    msg = WebSocketMessage(type="meeting_invite", payload=payload).model_dump_json()
+
+    notified = 0
+    for uid in body.user_ids:
+        user = db.query(U).filter(U.id == uid, U.company_id == current_user.company_id).first()
+        if user:
+            await manager.broadcast_to_user(uid, msg)
+            notified += 1
+
+    return {"notified": notified}

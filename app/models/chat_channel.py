@@ -7,6 +7,7 @@ import enum
 class ChannelType(enum.Enum):
     TEAM = "team"
     DM = "dm"
+    MEETING = "meeting"
 
 class ChatChannel(Base):
     __tablename__ = "chat_channels"
