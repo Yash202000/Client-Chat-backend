@@ -154,8 +154,12 @@ def join_meeting(
         raise HTTPException(status_code=404, detail="Calendar event not found")
     if event.company_id != current_user.company_id:
         raise HTTPException(status_code=403, detail="Not authorised")
+    # Lazily create the LiveKit room on first join — subsequent joiners reuse it
     if not event.livekit_room_name:
-        raise HTTPException(status_code=400, detail="This event has no video meeting room")
+        import uuid
+        event.livekit_room_name = f"meeting-{event_id}-{uuid.uuid4().hex[:8]}"
+        db.commit()
+        db.refresh(event)
 
     # Create or reuse the meeting chat channel
     if not event.channel_id:

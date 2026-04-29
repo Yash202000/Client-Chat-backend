@@ -116,18 +116,21 @@ def get_active_video_call(
     if video_call:
         return {"room_name": video_call.room_name, "livekit_url": settings.LIVEKIT_URL, "source": "channel"}
 
-    # Fall back to an active calendar meeting linked to this channel
+    # Fall back to an active calendar meeting linked to this channel.
+    # Allow joining up to 15 min early and any time after start (no end_time cap —
+    # meetings that run over schedule should still be joinable).
     from app.models.calendar_event import CalendarEvent
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     cal_event = (
         db.query(CalendarEvent)
         .filter(
             CalendarEvent.channel_id == channel_id,
             CalendarEvent.livekit_room_name.isnot(None),
-            CalendarEvent.start_time <= now,
-            CalendarEvent.end_time >= now,
+            CalendarEvent.start_time <= now + timedelta(minutes=15),
+            CalendarEvent.end_time >= now - timedelta(hours=4),
         )
+        .order_by(CalendarEvent.start_time.desc())
         .first()
     )
     if cal_event:
