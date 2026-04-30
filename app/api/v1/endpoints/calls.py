@@ -151,12 +151,16 @@ async def reject_call(
 
 # ─── Unified Call Log ─────────────────────────────────────────────────────────
 
+MISSED_VOICE_STATUSES = {"no_answer", "failed", "busy", "missed"}
+MISSED_VIDEO_STATUSES = {"missed", "rejected"}
+
 @router.get("/log")
 def get_unified_call_log(
     call_type: Optional[str] = Query(None, description="voice | video | meeting"),
     direction: Optional[str] = Query(None, description="inbound | outbound | internal"),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    show_missed: bool = Query(False),
     limit: int = Query(100, le=500),
     skip: int = Query(0),
     db: Session = Depends(get_db),
@@ -175,7 +179,9 @@ def get_unified_call_log(
             q = q.filter(VoiceCall.direction == direction)
         elif direction == "internal":
             q = q.filter(False)  # voice calls are never "internal"
-        if status:
+        if show_missed:
+            q = q.filter(VoiceCall.status.in_(list(MISSED_VOICE_STATUSES)))
+        elif status:
             q = q.filter(VoiceCall.status == status)
         if search:
             s = f"%{search}%"
@@ -213,7 +219,9 @@ def get_unified_call_log(
                 .join(ChatChannel, VideoCall.channel_id == ChatChannel.id)
                 .filter(ChatChannel.company_id == current_user.company_id)
             )
-            if status:
+            if show_missed:
+                q = q.filter(VideoCall.status.in_(list(MISSED_VIDEO_STATUSES)))
+            elif status:
                 q = q.filter(VideoCall.status == status)
             for vc in q.order_by(VideoCall.started_at.desc()).all():
                 duration_seconds = None
@@ -260,7 +268,7 @@ def get_unified_call_log(
                 })
 
     # ── 3. Calendar meetings with video ───────────────────────────────────────
-    if not call_type or call_type == "meeting":
+    if (not call_type or call_type == "meeting") and not show_missed:
         if not direction or direction == "internal":
             q = db.query(CalendarEvent).filter(
                 CalendarEvent.company_id == current_user.company_id,

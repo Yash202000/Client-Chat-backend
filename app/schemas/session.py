@@ -25,6 +25,9 @@ class Session(BaseModel):
     is_client_connected: Optional[bool] = False
     is_ai_enabled: Optional[bool] = True
     priority: Optional[int] = 0  # 0=None, 1=Low, 2=Medium, 3=High, 4=Urgent
+    last_message_content: Optional[str] = None
+    last_message_sender: Optional[str] = None  # 'user' or 'agent'
+    unread_count: Optional[int] = 0
 
     class Config:
         populate_by_name = True

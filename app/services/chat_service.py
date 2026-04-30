@@ -67,6 +67,38 @@ def get_first_message_for_session(db: Session, session_id: str, company_id: int)
         models_chat_message.ChatMessage.company_id == company_id
     ).order_by(models_chat_message.ChatMessage.timestamp).first()
 
+def get_last_message_with_unread(db: Session, session_id: str, company_id: int):
+    """Returns (last_message, unread_count). unread_count = user messages since last agent reply."""
+    conv_session = db.query(models_conversation_session.ConversationSession).filter(
+        models_conversation_session.ConversationSession.conversation_id == session_id,
+        models_conversation_session.ConversationSession.company_id == company_id
+    ).first()
+    if not conv_session:
+        return None, 0
+
+    last_msg = db.query(models_chat_message.ChatMessage).filter(
+        models_chat_message.ChatMessage.session_id == conv_session.id,
+        models_chat_message.ChatMessage.company_id == company_id,
+        models_chat_message.ChatMessage.message_type == 'message',
+    ).order_by(models_chat_message.ChatMessage.timestamp.desc()).first()
+
+    last_agent = db.query(models_chat_message.ChatMessage).filter(
+        models_chat_message.ChatMessage.session_id == conv_session.id,
+        models_chat_message.ChatMessage.company_id == company_id,
+        models_chat_message.ChatMessage.sender == 'agent',
+    ).order_by(models_chat_message.ChatMessage.timestamp.desc()).first()
+
+    q = db.query(func.count(models_chat_message.ChatMessage.id)).filter(
+        models_chat_message.ChatMessage.session_id == conv_session.id,
+        models_chat_message.ChatMessage.company_id == company_id,
+        models_chat_message.ChatMessage.sender == 'user',
+    )
+    if last_agent:
+        q = q.filter(models_chat_message.ChatMessage.timestamp > last_agent.timestamp)
+    unread = q.scalar() or 0
+    return last_msg, unread
+
+
 def create_chat_message(db: Session, message: schemas_chat_message.ChatMessageCreate, agent_id: int, session_id: str, company_id: int, sender: str, assignee_id: int = None, attachments: list = None, options: list = None):
 
     # Get the session to retrieve the contact_id (if available)

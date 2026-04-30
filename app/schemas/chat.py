@@ -123,6 +123,31 @@ class ChatChannel(ChatChannelBase):
 
 # ── New feature schemas ────────────────────────────────────────────────────────
 
+class LastMessagePreview(BaseModel):
+    id: int
+    content: str
+    sender_id: int
+    sender_name: str
+    created_at: datetime.datetime
+    is_activity: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChatChannelWithSummary(BaseModel):
+    id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    channel_type: str
+    team_id: Optional[int] = None
+    creator_id: Optional[int] = None
+    created_at: datetime.datetime
+    participants: List[ChannelMembership] = []
+    last_message: Optional[LastMessagePreview] = None
+    unread_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
 class MessageReadUser(BaseModel):
     id: int
     first_name: Optional[str] = None

@@ -1,5 +1,6 @@
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from app.models import ChatChannel, ChannelMembership, InternalChatMessage, ChatAttachment, MessageReaction, MessageMention, User, Team
 from app.models.pinned_message import PinnedMessage
 from app.models.message_read import MessageRead
@@ -71,6 +72,82 @@ def get_user_channels(db: Session, user_id: int) -> List[ChatChannel]:
         .options(joinedload(ChatChannel.participants).joinedload(ChannelMembership.user))
         .all()
     )
+
+
+def get_user_channels_with_summary(db: Session, user_id: int) -> list:
+    """Returns channels enriched with last_message preview and unread_count."""
+    channels = (
+        db.query(ChatChannel)
+        .join(ChannelMembership)
+        .filter(ChannelMembership.user_id == user_id)
+        .options(joinedload(ChatChannel.participants).joinedload(ChannelMembership.user))
+        .all()
+    )
+
+    result = []
+    for channel in channels:
+        # Last non-scheduled message
+        last_msg = (
+            db.query(InternalChatMessage)
+            .options(joinedload(InternalChatMessage.sender))
+            .filter(
+                InternalChatMessage.channel_id == channel.id,
+                InternalChatMessage.scheduled_at.is_(None),
+            )
+            .order_by(InternalChatMessage.created_at.desc())
+            .first()
+        )
+
+        # Unread count: messages NOT read by this user and NOT sent by this user
+        unread_count = (
+            db.query(func.count(InternalChatMessage.id))
+            .filter(
+                InternalChatMessage.channel_id == channel.id,
+                InternalChatMessage.sender_id != user_id,
+                InternalChatMessage.scheduled_at.is_(None),
+                ~db.query(MessageRead).filter(
+                    MessageRead.message_id == InternalChatMessage.id,
+                    MessageRead.user_id == user_id,
+                ).exists()
+            )
+            .scalar() or 0
+        )
+
+        last_message_data = None
+        if last_msg:
+            sender = last_msg.sender
+            sender_name = (
+                f"{sender.first_name or ''} {sender.last_name or ''}".strip()
+                or sender.email
+            )
+            is_activity = bool(
+                last_msg.extra_data and last_msg.extra_data.get('is_activity')
+            )
+            last_message_data = {
+                "id": last_msg.id,
+                "content": last_msg.content,
+                "sender_id": last_msg.sender_id,
+                "sender_name": sender_name,
+                "created_at": last_msg.created_at,
+                "is_activity": is_activity,
+            }
+
+        result.append({
+            "channel": channel,
+            "last_message": last_message_data,
+            "unread_count": unread_count,
+        })
+
+    # Sort by last message time descending, fall back to channel creation time
+    result.sort(
+        key=lambda x: (
+            x["last_message"]["created_at"]
+            if x["last_message"]
+            else x["channel"].created_at
+        ),
+        reverse=True,
+    )
+    return result
 
 # CRUD for ChannelMembership
 def add_user_to_channel(db: Session, user_id: int, channel_id: int) -> ChannelMembership:

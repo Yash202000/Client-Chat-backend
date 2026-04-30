@@ -74,6 +74,46 @@ def read_user_channels(
 ):
     return crud_chat.get_user_channels(db=db, user_id=current_user.id)
 
+
+@router.get("/channels/summary", dependencies=[Depends(require_permission("chat:read"))])
+def get_channels_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Returns channels with last_message preview and unread_count, sorted by activity."""
+    rows = crud_chat.get_user_channels_with_summary(db=db, user_id=current_user.id)
+    result = []
+    for row in rows:
+        ch = row["channel"]
+        result.append({
+            "id": ch.id,
+            "name": ch.name,
+            "description": ch.description,
+            "channel_type": ch.channel_type,
+            "team_id": ch.team_id,
+            "creator_id": ch.creator_id,
+            "created_at": ch.created_at.isoformat(),
+            "participants": [
+                {
+                    "id": m.id,
+                    "user_id": m.user_id,
+                    "channel_id": m.channel_id,
+                    "joined_at": m.joined_at.isoformat() if m.joined_at else None,
+                    "user": {
+                        "id": m.user.id,
+                        "email": m.user.email,
+                        "first_name": m.user.first_name,
+                        "last_name": m.user.last_name,
+                        "profile_picture_url": m.user.profile_picture_url,
+                    } if m.user else None,
+                }
+                for m in ch.participants
+            ],
+            "last_message": row["last_message"],
+            "unread_count": row["unread_count"],
+        })
+    return result
+
 @router.get("/channels/{channel_id}/messages", response_model=List[chat_schema.InternalChatMessage], dependencies=[Depends(require_permission("chat:read"))])
 def read_channel_messages(
     channel_id: int,

@@ -210,6 +210,7 @@ def get_all_sessions(
     sessions = []
     for s in sessions_from_db:
         first_message = chat_service.get_first_message_for_session(db, s.conversation_id, current_user.company_id)
+        last_message, unread_count = chat_service.get_last_message_with_unread(db, s.conversation_id, current_user.company_id)
         contact_info = chat_service.get_contact_for_session(db, s.conversation_id, current_user.company_id)
 
         # Get real-time connection status from ConnectionManager
@@ -224,15 +225,18 @@ def get_all_sessions(
         sessions.append(schemas_session.Session(
             session_id=s.conversation_id,
             status=s.status,
-            assignee_id=s.assignee_id,  # Use assignee_id instead of agent_id
+            assignee_id=s.assignee_id,
             last_message_timestamp=s.updated_at.isoformat(),
             first_message_content=first_message.message if first_message else "",
             channel=s.channel,
             contact_name=contact_info.name if contact_info else "Unknown",
             contact_phone=contact_info.phone_number if contact_info else None,
             contact_id=s.contact_id,
-            is_client_connected=real_time_connected,  # Use real-time status
-            priority=s.priority
+            is_client_connected=real_time_connected,
+            priority=s.priority,
+            last_message_content=last_message.message if last_message else None,
+            last_message_sender=last_message.sender if last_message else None,
+            unread_count=unread_count,
         ))
     return sessions
 
