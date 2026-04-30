@@ -95,6 +95,8 @@ def create_event(
         user_id=current_user.id,
         company_id=current_user.company_id,
     )
+    if event.livekit_room_name:
+        event.video_enabled = True
     db.add(event)
     db.flush()  # assign event.id before expanding instances
 
@@ -158,8 +160,12 @@ def join_meeting(
     if not event.livekit_room_name:
         import uuid
         event.livekit_room_name = f"meeting-{event_id}-{uuid.uuid4().hex[:8]}"
+        event.video_enabled = True
         db.commit()
         db.refresh(event)
+    elif not event.video_enabled:
+        event.video_enabled = True
+        db.commit()
 
     # Create or reuse the meeting chat channel
     if not event.channel_id:
@@ -251,6 +257,23 @@ def get_availability(
         if key in result:
             result[key].append(ev)
     return result
+
+
+@router.post("/events/{event_id}/end-meeting", status_code=200)
+def end_meeting(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user),
+):
+    event = db.query(CalendarEvent).filter(
+        CalendarEvent.id == event_id,
+        CalendarEvent.company_id == current_user.company_id,
+    ).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    event.livekit_room_name = None
+    db.commit()
+    return {"ok": True}
 
 
 class MeetingInviteBody(BaseModel):

@@ -13,6 +13,7 @@ class CalendarEventBase(BaseModel):
     description: Optional[str] = None
     attendees: Optional[List[str]] = []
     livekit_room_name: Optional[str] = None
+    video_enabled: Optional[bool] = None
     recurrence_rule: Optional[str] = None       # daily|weekly|monthly
     recurrence_interval: Optional[int] = 1
     recurrence_end_date: Optional[datetime] = None

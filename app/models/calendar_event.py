@@ -17,7 +17,8 @@ class CalendarEvent(Base):
     location            = Column(String(500), nullable=True)
     description         = Column(Text, nullable=True)
     attendees           = Column(JSON, default=list)              # list of email strings
-    livekit_room_name   = Column(String(255), nullable=True)      # set when event has a video meeting
+    livekit_room_name   = Column(String(255), nullable=True)      # active session room name (cleared after session ends)
+    video_enabled       = Column(Boolean, default=False, nullable=True)  # True once video has been enabled for this event
     recurrence_rule     = Column(String(50), nullable=True)       # daily|weekly|monthly
     recurrence_interval = Column(Integer, default=1, nullable=True)
     recurrence_end_date = Column(DateTime(timezone=True), nullable=True)
