@@ -27,6 +27,8 @@ class EntityNoteCreate(EntityNoteBase):
     """Schema for creating a new entity note"""
     contact_id: Optional[int] = None
     lead_id: Optional[int] = None
+    deal_id: Optional[int] = None
+    account_id: Optional[int] = None
 
     @field_validator('content')
     @classmethod
@@ -60,6 +62,8 @@ class EntityNoteResponse(EntityNoteBase):
     company_id: int
     contact_id: Optional[int] = None
     lead_id: Optional[int] = None
+    deal_id: Optional[int] = None
+    account_id: Optional[int] = None
     created_by: int
     creator_email: Optional[str] = None
     created_at: datetime

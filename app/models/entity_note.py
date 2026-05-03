@@ -25,9 +25,11 @@ class EntityNote(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
 
-    # Polymorphic: attach to contact OR lead (one must be set)
+    # Polymorphic: attach to contact, lead, deal, or account (one must be set)
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)
 
     # Note content
     note_type = Column(Enum(NoteType), nullable=False, default=NoteType.NOTE, index=True)
@@ -48,6 +50,8 @@ class EntityNote(Base):
     # Relationships
     contact = relationship("Contact", back_populates="notes")
     lead = relationship("Lead", back_populates="notes_list")
+    deal = relationship("Deal", back_populates="notes_list")
+    account = relationship("Account", back_populates="notes_list")
     creator = relationship("User", back_populates="created_notes")
     company = relationship("Company", back_populates="entity_notes")
 
@@ -55,10 +59,14 @@ class EntityNote(Base):
 # Add back-population to related models
 from app.models.contact import Contact
 from app.models.lead import Lead
+from app.models.deal import Deal
+from app.models.account import Account
 from app.models.user import User
 from app.models.company import Company
 
 Contact.notes = relationship("EntityNote", back_populates="contact", cascade="all, delete-orphan", order_by=EntityNote.created_at.desc())
 Lead.notes_list = relationship("EntityNote", back_populates="lead", cascade="all, delete-orphan", order_by=EntityNote.created_at.desc())
+Deal.notes_list = relationship("EntityNote", back_populates="deal", cascade="all, delete-orphan", order_by=EntityNote.created_at.desc())
+Account.notes_list = relationship("EntityNote", back_populates="account", cascade="all, delete-orphan", order_by=EntityNote.created_at.desc())
 User.created_notes = relationship("EntityNote", back_populates="creator")
 Company.entity_notes = relationship("EntityNote", back_populates="company", cascade="all, delete-orphan")

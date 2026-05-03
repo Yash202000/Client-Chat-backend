@@ -22,6 +22,7 @@ class ContactBase(BaseModel):
     lifecycle_stage: Optional[str] = None
     do_not_contact: Optional[bool] = False
     opt_in_status: Optional[str] = "unknown"
+    account_id: Optional[int] = None
     # Profile fields
     job_title: Optional[str] = None
     company_name: Optional[str] = None
@@ -46,6 +47,7 @@ class ContactUpdate(ContactBase):
 class Contact(ContactBase):
     id: int
     company_id: int
+    account_id: Optional[int] = None
     do_not_contact: bool
     opt_in_status: str
     opt_in_date: Optional[datetime] = None

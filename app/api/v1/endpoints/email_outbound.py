@@ -14,7 +14,7 @@ from app.models.user import User
 from app.models.contact import Contact
 from app.models.conversation_session import ConversationSession
 from app.models.chat_message import ChatMessage
-from app.services import messaging_service
+from app.services import messaging_service, email_tracking_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,8 +25,10 @@ class ComposeEmailRequest(BaseModel):
     subject: str
     body: str
     contact_id: Optional[int] = None    # primary contact for session linking
+    deal_id: Optional[int] = None       # link email to a deal for tracking
     cc: Optional[List[str]] = None
     bcc: Optional[List[str]] = None
+    track: bool = True                  # inject open/click tracking
 
 
 class ReplyEmailRequest(BaseModel):
@@ -57,11 +59,33 @@ async def compose_email(
             Contact.company_id == current_user.company_id,
         ).first()
 
+    # Inject open pixel + click-tracking links when track=True
+    send_body = payload.body
+    open_token_id = None
+    if payload.track:
+        try:
+            # Wrap plain text in minimal HTML if not already HTML
+            html_body = send_body if send_body.strip().startswith('<') else f"<p>{send_body}</p>"
+            html_body, _, open_token = email_tracking_service.inject_tracking(
+                db=db,
+                html_body=html_body,
+                plain_body=send_body,
+                subject=payload.subject,
+                company_id=current_user.company_id,
+                sent_by=current_user.id,
+                contact_id=contact.id if contact else None,
+                deal_id=payload.deal_id,
+            )
+            send_body = html_body
+            open_token_id = open_token.token
+        except Exception as exc:
+            logger.warning(f"Tracking injection failed (continuing without tracking): {exc}")
+
     try:
         result = await messaging_service.send_gmail_message(
             to=payload.to,
             subject=payload.subject,
-            body=payload.body,
+            body=send_body,
             thread_id=None,
             db=db,
             company_id=current_user.company_id,
@@ -103,7 +127,7 @@ async def compose_email(
     db.add(msg)
     db.commit()
 
-    return {"success": True, "session_id": session.conversation_id, "thread_id": gmail_thread_id}
+    return {"success": True, "session_id": session.conversation_id, "thread_id": gmail_thread_id, "tracking_token": open_token_id}
 
 
 @router.post("/reply/{session_id}")

@@ -5,7 +5,14 @@ from app.services import tool_service, tool_execution_service
 from app.schemas.tool import Tool, ToolCreate, ToolUpdate
 from typing import List, Dict, Any
 
-from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound, social, linkedin_leads, call_queue, agent_skills, voice_supervisor, dialer, drive
+from app.api.v1.endpoints import agents, companies, company_settings, contacts, conversations, credentials, integrations, notification_settings, permissions, roles, teams, user_settings, users, webhooks, knowledge_bases, websocket_conversations, tools, workflow, calls, suggestions, auth, subscription, reports, optimization, webhooks as webhook_router, ws_updates, proxy, proactive, api_keys, voices, stt, public_voice, mcp, config, calendar, teams_calendar, chat, video_calls, ai_tools, intents, profile, notifications, chat_conversation_upload, leads, campaigns, tags, segments, templates, template_ai, agent_handoff, entity_notes, message_templates, invitations, workflow_templates, twilio_voice, freeswitch_voice, security_logs, token_usage, api_channel, api_integrations, billing, system, sms, email_outbound, social, linkedin_leads, call_queue, agent_skills, voice_supervisor, dialer, drive, accounts, pipelines, deals, email_tracking, booking
+from app.api.v1.endpoints import contact_import
+from app.api.v1.endpoints import contact_timeline
+from app.api.v1.endpoints import sequences
+from app.api.v1.endpoints import forms
+from app.api.v1.endpoints import campaign_sequence
+from app.api.v1.endpoints import audit_logs
+from app.api.v1.endpoints import data_export
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -74,6 +81,8 @@ api_router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 api_router.include_router(config.router, prefix="/config", tags=["config"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
 api_router.include_router(contacts.router, prefix="/contacts", tags=["contacts"])
+api_router.include_router(contact_import.router, prefix="/contacts", tags=["contacts"])
+api_router.include_router(contact_timeline.router, prefix="/contacts", tags=["contacts"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(teams_calendar.router, prefix="/teams-calendar", tags=["teams_calendar"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
@@ -91,6 +100,9 @@ api_router.include_router(ai_tools.router, prefix="/ai-tools", tags=["ai-tools"]
 api_router.include_router(intents.router, prefix="/intents", tags=["intents"])
 
 # CRM routers
+api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
+api_router.include_router(pipelines.router, prefix="/pipelines", tags=["pipelines"])
+api_router.include_router(deals.router, prefix="/deals", tags=["deals"])
 api_router.include_router(leads.router, prefix="/leads", tags=["leads"])
 api_router.include_router(campaigns.router, prefix="/campaigns", tags=["campaigns"])
 api_router.include_router(tags.router, prefix="/tags", tags=["tags"])
@@ -123,6 +135,11 @@ api_router.include_router(api_integrations.router, prefix="/api-integrations", t
 # SMS & Email outbound
 api_router.include_router(sms.router, prefix="/sms", tags=["sms"])
 api_router.include_router(email_outbound.router, prefix="/email", tags=["email"])
+api_router.include_router(email_tracking.router, prefix="/tracking", tags=["tracking"])
+api_router.include_router(booking.router, prefix="/booking-links", tags=["booking"])
+api_router.include_router(sequences.router, prefix="/sequences", tags=["sequences"])
+api_router.include_router(forms.router, prefix="/forms", tags=["forms"])
+api_router.include_router(campaign_sequence.router, prefix="/campaigns", tags=["campaigns"])
 
 # Marketing Hub — Social Publishing & LinkedIn Leads
 api_router.include_router(social.router, prefix="/social", tags=["social"])
@@ -140,3 +157,10 @@ api_router.include_router(cms_public.router, prefix="/public/cms", tags=["cms-pu
 
 # Drive (company file storage)
 api_router.include_router(drive.router, prefix="/drive", tags=["drive"])
+
+
+# Audit Logs
+api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
+
+# Data Export
+api_router.include_router(data_export.router, prefix="/export", tags=["export"])

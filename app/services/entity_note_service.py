@@ -5,6 +5,8 @@ from datetime import datetime
 from app.models.entity_note import EntityNote, NoteType
 from app.models.contact import Contact
 from app.models.lead import Lead
+from app.models.deal import Deal
+from app.models.account import Account
 from app.schemas.entity_note import EntityNoteCreate, EntityNoteUpdate
 
 
@@ -78,6 +80,58 @@ def count_notes_for_lead(db: Session, lead_id: int, company_id: int) -> int:
     ).count()
 
 
+def get_notes_for_deal(
+    db: Session,
+    deal_id: int,
+    company_id: int,
+    note_type: Optional[NoteType] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[EntityNote]:
+    query = db.query(EntityNote).options(
+        joinedload(EntityNote.creator)
+    ).filter(
+        EntityNote.deal_id == deal_id,
+        EntityNote.company_id == company_id
+    )
+    if note_type:
+        query = query.filter(EntityNote.note_type == note_type)
+    return query.order_by(EntityNote.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def count_notes_for_deal(db: Session, deal_id: int, company_id: int) -> int:
+    return db.query(EntityNote).filter(
+        EntityNote.deal_id == deal_id,
+        EntityNote.company_id == company_id
+    ).count()
+
+
+def get_notes_for_account(
+    db: Session,
+    account_id: int,
+    company_id: int,
+    note_type: Optional[NoteType] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[EntityNote]:
+    query = db.query(EntityNote).options(
+        joinedload(EntityNote.creator)
+    ).filter(
+        EntityNote.account_id == account_id,
+        EntityNote.company_id == company_id
+    )
+    if note_type:
+        query = query.filter(EntityNote.note_type == note_type)
+    return query.order_by(EntityNote.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def count_notes_for_account(db: Session, account_id: int, company_id: int) -> int:
+    return db.query(EntityNote).filter(
+        EntityNote.account_id == account_id,
+        EntityNote.company_id == company_id
+    ).count()
+
+
 def create_note(
     db: Session,
     note_data: EntityNoteCreate,
@@ -85,34 +139,33 @@ def create_note(
     user_id: int
 ) -> EntityNote:
     """Create a new note for a contact or lead"""
-    # Validate that either contact_id or lead_id is provided, but not both
-    if not note_data.contact_id and not note_data.lead_id:
-        raise ValueError("Either contact_id or lead_id must be provided")
-    if note_data.contact_id and note_data.lead_id:
-        raise ValueError("Cannot specify both contact_id and lead_id")
+    entity_ids = [note_data.contact_id, note_data.lead_id, note_data.deal_id, note_data.account_id]
+    provided = [x for x in entity_ids if x is not None]
+    if not provided:
+        raise ValueError("One of contact_id, lead_id, deal_id, or account_id must be provided")
+    if len(provided) > 1:
+        raise ValueError("Only one of contact_id, lead_id, deal_id, or account_id may be specified")
 
-    # Verify the contact/lead belongs to the company
     if note_data.contact_id:
-        contact = db.query(Contact).filter(
-            Contact.id == note_data.contact_id,
-            Contact.company_id == company_id
-        ).first()
-        if not contact:
+        if not db.query(Contact).filter(Contact.id == note_data.contact_id, Contact.company_id == company_id).first():
             raise ValueError("Contact not found or does not belong to this company")
-
     if note_data.lead_id:
-        lead = db.query(Lead).filter(
-            Lead.id == note_data.lead_id,
-            Lead.company_id == company_id
-        ).first()
-        if not lead:
+        if not db.query(Lead).filter(Lead.id == note_data.lead_id, Lead.company_id == company_id).first():
             raise ValueError("Lead not found or does not belong to this company")
+    if note_data.deal_id:
+        if not db.query(Deal).filter(Deal.id == note_data.deal_id, Deal.company_id == company_id).first():
+            raise ValueError("Deal not found or does not belong to this company")
+    if note_data.account_id:
+        if not db.query(Account).filter(Account.id == note_data.account_id, Account.company_id == company_id).first():
+            raise ValueError("Account not found or does not belong to this company")
 
     db_note = EntityNote(
         company_id=company_id,
         created_by=user_id,
         contact_id=note_data.contact_id,
         lead_id=note_data.lead_id,
+        deal_id=note_data.deal_id,
+        account_id=note_data.account_id,
         note_type=note_data.note_type,
         title=note_data.title,
         content=note_data.content,

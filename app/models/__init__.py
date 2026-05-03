@@ -47,6 +47,11 @@ from app.models.ai_tool_question import AIToolQuestion
 from app.models.intent import Intent, IntentMatch, Entity, ConversationTag
 
 # CRM Models
+from app.models.account import Account
+from app.models.email_tracking import EmailTrackingToken, TrackingTokenType
+from app.models.booking_link import BookingLink, BookingSlot, BookingSlotStatus
+from app.models.pipeline import Pipeline, DealStage
+from app.models.deal import Deal, DealStatus
 from app.models.lead import Lead
 from app.models.campaign import Campaign
 from app.models.campaign_contact import CampaignContact
@@ -96,4 +101,40 @@ from app.models.message_read import MessageRead
 
 # Drive Models
 from app.models.drive_item import DriveItem
+
+# Sequence Models
+from app.models.sequence import Sequence, SequenceStep, SequenceEnrollment, SequenceStepLog
+
+# Form Builder Models
+from app.models.form_builder import CaptureForm, FormSubmission
+
+# Campaign ↔ Sequence Triggers
+from app.models.campaign_sequence_trigger import CampaignSequenceTrigger
+
+# Contact Activity Timeline
+from app.models.contact_activity import ContactActivity
+from app.models.contact import Contact as _Contact
+from app.models.user import User as _User
+from app.models.company import Company as _Company
+from sqlalchemy.orm import relationship as _rel
+
+_Contact.activities = _rel(
+    "ContactActivity",
+    back_populates="contact",
+    cascade="all, delete-orphan",
+    order_by=ContactActivity.occurred_at.desc(),
+)
+_Company.contact_activities = _rel(
+    "ContactActivity",
+    back_populates="company",
+    cascade="all, delete-orphan",
+)
+_User.contact_activities = _rel(
+    "ContactActivity",
+    back_populates="user",
+)
+
+
+# Audit Logs
+from app.models.audit_log import AuditLog
 

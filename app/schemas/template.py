@@ -13,6 +13,7 @@ class TemplateBase(BaseModel):
     subject: Optional[str] = Field(None, max_length=500)
     body: Optional[str] = None
     html_body: Optional[str] = None
+    design: Optional[Dict[str, Any]] = None  # Unlayer editor JSON
 
     # Voice fields
     voice_script: Optional[str] = None
@@ -42,6 +43,7 @@ class TemplateUpdate(BaseModel):
     subject: Optional[str] = Field(None, max_length=500)
     body: Optional[str] = None
     html_body: Optional[str] = None
+    design: Optional[Dict[str, Any]] = None  # Unlayer editor JSON
 
     # Voice fields
     voice_script: Optional[str] = None

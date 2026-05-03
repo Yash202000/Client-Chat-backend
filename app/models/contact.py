@@ -68,6 +68,10 @@ class Contact(Base):
     company_id = Column(Integer, ForeignKey("companies.id"))
     company = relationship("Company", back_populates="contacts")
 
+    # CRM B2B account link (nullable — not all contacts belong to an account)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)
+    account = relationship("Account", back_populates="contacts")
+
     chat_messages = relationship("ChatMessage", back_populates="contact")
     sessions = relationship("ConversationSession", back_populates="contact")
 

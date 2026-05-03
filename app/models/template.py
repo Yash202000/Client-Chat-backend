@@ -34,6 +34,7 @@ class Template(Base):
     subject = Column(String(500), nullable=True)
     body = Column(Text, nullable=True)  # Plain text body
     html_body = Column(Text, nullable=True)  # HTML body for email
+    design = Column(JSONB, nullable=True)  # Unlayer editor JSON design
 
     # Voice fields
     voice_script = Column(Text, nullable=True)
