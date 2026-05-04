@@ -13,6 +13,8 @@ from app.api.v1.endpoints import forms
 from app.api.v1.endpoints import campaign_sequence
 from app.api.v1.endpoints import audit_logs
 from app.api.v1.endpoints import data_export
+from app.api.v1.endpoints import gdpr
+from app.api.v1.endpoints import compliance
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -164,3 +166,9 @@ api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-
 
 # Data Export
 api_router.include_router(data_export.router, prefix="/export", tags=["export"])
+
+# GDPR — Right to Erasure
+api_router.include_router(gdpr.router, prefix="/gdpr", tags=["gdpr"])
+
+# Compliance — Vanta / Drata integration + sub-processor list
+api_router.include_router(compliance.router, prefix="/compliance", tags=["compliance"])
