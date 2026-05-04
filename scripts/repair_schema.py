@@ -6,9 +6,6 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dotenv import load_dotenv
-load_dotenv()
-
 from sqlalchemy import create_engine, text, inspect
 from app.core.database import Base
 import app.models  # noqa: F401 — ensures all models are registered on Base.metadata

@@ -7,8 +7,6 @@ echo "Checking database state..."
 DB_STATE=$(python - <<'PYEOF'
 import os, sys
 sys.path.insert(0, "/app")
-from dotenv import load_dotenv
-load_dotenv()
 from sqlalchemy import create_engine, text
 try:
     engine = create_engine(os.environ["DATABASE_URL"])
