@@ -1,3 +1,13 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard/
+Disallow: /client-portal/
+Disallow: /accept-invite
+Disallow: /license-error
+Disallow: /internal-video-call
+Disallow: /linkedin-callback
+Disallow: /google/callback
+
 User-agent: Googlebot
 Allow: /
 
@@ -10,5 +20,4 @@ Allow: /
 User-agent: facebookexternalhit
 Allow: /
 
-User-agent: *
-Allow: /
+Sitemap: https://heygenally.com/sitemap.xml
