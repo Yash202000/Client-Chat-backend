@@ -25,7 +25,11 @@ async def send_proactive_message(
     elif proactive_message.contact_id:
         contact = contact_service.get_contact(db, proactive_message.contact_id, company.id)
         if contact:
-            session = conversation_session_service.get_or_create_session(db, contact.id)
+            conversation_id = f"proactive_{company.id}_{contact.id}"
+            session = conversation_session_service.get_or_create_session(
+                db, conversation_id=conversation_id, workflow_id=None,
+                contact_id=contact.id, channel="proactive", company_id=company.id
+            )
 
     if not session:
         raise HTTPException(

@@ -2051,7 +2051,7 @@ Return only valid JSON, nothing else:"""
             conversation_id = str(uuid.uuid4())
 
         session = conversation_session_service.get_or_create_session(
-            self.db, conversation_id, workflow_obj.id, contact_id=1, channel="test", company_id=workflow_obj.company_id
+            self.db, conversation_id, workflow_obj.id, contact_id=None, channel="test", company_id=workflow_obj.company_id
         )
 
         # Load all memories for this session into the context

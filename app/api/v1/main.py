@@ -15,6 +15,7 @@ from app.api.v1.endpoints import audit_logs
 from app.api.v1.endpoints import data_export
 from app.api.v1.endpoints import gdpr
 from app.api.v1.endpoints import compliance
+from app.api.v1.endpoints import tickets
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -163,6 +164,9 @@ api_router.include_router(drive.router, prefix="/drive", tags=["drive"])
 
 # Audit Logs
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
+
+# Ticketing
+api_router.include_router(tickets.router, prefix="/tickets", tags=["tickets"])
 
 # Data Export
 api_router.include_router(data_export.router, prefix="/export", tags=["export"])

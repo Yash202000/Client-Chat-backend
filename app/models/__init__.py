@@ -138,3 +138,21 @@ _User.contact_activities = _rel(
 # Audit Logs
 from app.models.audit_log import AuditLog
 
+# Ticketing Models
+from app.models.ticket_workflow import TicketWorkflow, TicketStatus, TicketTransition, StatusCategory
+from app.models.ticket_issue_type import TicketIssueType
+from app.models.ticket_project import TicketProject
+from app.models.ticket import (
+    Ticket, TicketComment, TicketAttachment, TicketActivity, TicketLink,
+    TicketProjectMember, ticket_watchers, TicketPriority, TicketLinkType, TicketActivityAction
+)
+
+from app.models.ticket_sprint import TicketSprint, SprintStatus
+
+from app.models.company import Company as _TicketCompany
+_TicketCompany.ticket_projects = _rel("TicketProject", back_populates="company", cascade="all, delete-orphan")
+_TicketCompany.ticket_workflows = _rel("TicketWorkflow", back_populates="company", cascade="all, delete-orphan")
+_TicketCompany.ticket_issue_types = _rel("TicketIssueType", back_populates="company", cascade="all, delete-orphan")
+_TicketCompany.tickets = _rel("Ticket", back_populates="company", cascade="all, delete-orphan")
+_TicketCompany.ticket_sprints = _rel("TicketSprint", back_populates="company", cascade="all, delete-orphan")
+

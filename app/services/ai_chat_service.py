@@ -20,7 +20,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         session = models_conversation_session.ConversationSession(
             conversation_id=conversation_id,
             company_id=company_id,
-            contact_id=user_id, # Using user_id as contact_id for now
+            contact_id=None,
             channel="ai_chat",
             agent_id=chat_request.agent_id
         )
@@ -34,7 +34,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
         message=chat_request.message,
         sender='user',
         company_id=company_id,
-        contact_id=user_id,
+        contact_id=None,
         agent_id=chat_request.agent_id
     )
     db.add(user_message)
@@ -165,7 +165,7 @@ async def handle_ai_chat(db: Session, chat_request: schemas_ai_chat.AIChatReques
             message=response_text,
             sender='agent',
             company_id=company_id,
-            contact_id=user_id
+            contact_id=None
         )
         db.add(model_message)
         db.commit()

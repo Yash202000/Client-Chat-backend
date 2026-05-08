@@ -3,6 +3,7 @@ from sqlalchemy import and_, or_
 from typing import List, Optional
 from app.models import contact as models_contact, chat_message as models_chat_message
 from app.models.tag import contact_tags, Tag
+from app.models.lead import Lead, LeadStage, QualificationStatus
 from app.schemas import contact as schemas_contact
 
 
@@ -37,12 +38,23 @@ def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100, 
 
     return query.offset(skip).limit(limit).all()
 
-def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int):
+def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int, source: str = None):
     db_contact = models_contact.Contact(
         **contact.model_dump(),
         company_id=company_id
     )
     db.add(db_contact)
+    db.flush()  # Get the contact ID without committing yet
+
+    # Auto-create a Lead record for every new contact
+    db_lead = Lead(
+        contact_id=db_contact.id,
+        company_id=company_id,
+        source=source,
+        stage=LeadStage.LEAD,
+        qualification_status=QualificationStatus.UNQUALIFIED,
+    )
+    db.add(db_lead)
     db.commit()
     db.refresh(db_contact)
     return db_contact
@@ -179,5 +191,5 @@ def get_or_create_contact_for_channel(
         contact_details["phone_number"] = channel_identifier
 
     new_contact_schema = schemas_contact.ContactCreate(**contact_details)
-    return create_contact(db, contact=new_contact_schema, company_id=company_id)
+    return create_contact(db, contact=new_contact_schema, company_id=company_id, source=channel)
 

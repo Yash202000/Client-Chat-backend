@@ -283,8 +283,18 @@ async def update_conversation_assignee(db: Session, session_id: str, user_id: in
     })
     await manager.broadcast(status_update_message, str(company_id))
 
-    # Send targeted notification to the assigned user
+    # Persist notification in DB and broadcast to the assigned user
     if assigned_user:
+        from app.crud.crud_notification import create_notification
+        create_notification(
+            db=db,
+            user_id=user_id,
+            notification_type="conversation_assigned",
+            title="Conversation assigned to you",
+            message=f"You've been assigned to handle a conversation with {contact_name}",
+            actor_id=None
+        )
+
         notification_message = json.dumps({
             "type": "conversation_assigned",
             "session_id": session_id,
@@ -296,11 +306,7 @@ async def update_conversation_assignee(db: Session, session_id: str, user_id: in
             "message": f"You've been assigned to handle conversation with {contact_name}",
             "timestamp": session.updated_at.isoformat()
         })
-        print(f"[update_conversation_assignee] Sending assignment notification to user {user_id} ({assigned_user.email})")
-        print(f"[update_conversation_assignee] Notification payload: {notification_message}")
-        # Broadcast to the entire company (frontend will filter for the assigned user)
         await manager.broadcast(notification_message, str(company_id))
-        print(f"[update_conversation_assignee] Notification broadcasted to company {company_id}")
 
     return True
 

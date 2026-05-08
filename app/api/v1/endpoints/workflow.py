@@ -561,7 +561,7 @@ async def simulate_workflow_endpoint(
         if is_new_session and body.context:
             conversation_session_service.get_or_create_session(
                 db, test_conversation_id, wf.id,
-                contact_id=1, channel="test", company_id=wf.company_id
+                contact_id=None, channel="test", company_id=wf.company_id
             )
             conversation_session_service.update_session(
                 db, test_conversation_id,
