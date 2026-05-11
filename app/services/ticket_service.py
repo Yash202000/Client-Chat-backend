@@ -1,11 +1,12 @@
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import and_, func
 from typing import List, Optional
 from datetime import datetime
 from fastapi import UploadFile
 
-from app.models.ticket import Ticket, TicketComment, TicketAttachment, TicketActivity, TicketLink, TicketProjectMember, ticket_watchers, TicketActivityAction
+from app.models.ticket import Ticket, TicketComment, TicketAttachment, TicketActivity, TicketLink, TicketProjectMember, ticket_watchers, ticket_co_assignees, TicketActivityAction
 from app.models.ticket_project import TicketProject
+from app.models.department import DepartmentUserMembership, Department
 from app.models.ticket_workflow import TicketWorkflow, TicketStatus, TicketTransition, StatusCategory
 from app.models.ticket_issue_type import TicketIssueType
 from app.models.ticket_sprint import TicketSprint, SprintStatus
@@ -174,9 +175,9 @@ def get_crm_workflow(db: Session, company_id: int, entity_type: str) -> Optional
 
 def get_workflow_with_details(db: Session, workflow_id: int) -> Optional[TicketWorkflow]:
     return db.query(TicketWorkflow).options(
-        joinedload(TicketWorkflow.statuses),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
+        selectinload(TicketWorkflow.statuses),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
     ).filter(TicketWorkflow.id == workflow_id).first()
 
 
@@ -294,9 +295,9 @@ def get_projects(db: Session, company_id: int) -> List[TicketProject]:
     return db.query(TicketProject).filter(
         TicketProject.company_id == company_id
     ).options(
-        joinedload(TicketProject.default_workflow).joinedload(TicketWorkflow.statuses),
-        joinedload(TicketProject.default_workflow).joinedload(TicketWorkflow.transitions),
-        joinedload(TicketProject.members).joinedload(TicketProjectMember.user),
+        joinedload(TicketProject.default_workflow).selectinload(TicketWorkflow.statuses),
+        joinedload(TicketProject.default_workflow).selectinload(TicketWorkflow.transitions),
+        selectinload(TicketProject.members).joinedload(TicketProjectMember.user),
     ).order_by(TicketProject.created_at).all()
 
 
@@ -305,9 +306,9 @@ def get_project(db: Session, project_id: int, company_id: int) -> Optional[Ticke
         TicketProject.id == project_id,
         TicketProject.company_id == company_id
     ).options(
-        joinedload(TicketProject.default_workflow).joinedload(TicketWorkflow.statuses),
-        joinedload(TicketProject.default_workflow).joinedload(TicketWorkflow.transitions),
-        joinedload(TicketProject.members).joinedload(TicketProjectMember.user),
+        joinedload(TicketProject.default_workflow).selectinload(TicketWorkflow.statuses),
+        joinedload(TicketProject.default_workflow).selectinload(TicketWorkflow.transitions),
+        selectinload(TicketProject.members).joinedload(TicketProjectMember.user),
     ).first()
 
 
@@ -397,9 +398,9 @@ def get_workflows(db: Session, company_id: int) -> List[TicketWorkflow]:
     return db.query(TicketWorkflow).filter(
         TicketWorkflow.company_id == company_id
     ).options(
-        joinedload(TicketWorkflow.statuses),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
+        selectinload(TicketWorkflow.statuses),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
     ).all()
 
 
@@ -408,9 +409,9 @@ def get_workflow(db: Session, workflow_id: int, company_id: int) -> Optional[Tic
         TicketWorkflow.id == workflow_id,
         TicketWorkflow.company_id == company_id
     ).options(
-        joinedload(TicketWorkflow.statuses),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
-        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
+        selectinload(TicketWorkflow.statuses),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
+        selectinload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
     ).first()
 
 
@@ -567,6 +568,7 @@ def _ticket_query(db: Session, company_id: int):
         joinedload(Ticket.project),
         joinedload(Ticket.assignee),
         joinedload(Ticket.reporter),
+        selectinload(Ticket.co_assignees),
     )
 
 
@@ -583,6 +585,7 @@ def get_tickets(
     contact_id: Optional[int] = None,
     account_id: Optional[int] = None,
     deal_id: Optional[int] = None,
+    ticket_number: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
 ) -> List[Ticket]:
@@ -607,30 +610,77 @@ def get_tickets(
         q = q.filter(Ticket.account_id == account_id)
     if deal_id:
         q = q.filter(Ticket.deal_id == deal_id)
+    if ticket_number:
+        q = q.filter(Ticket.ticket_number == ticket_number)
     return q.order_by(Ticket.position, Ticket.created_at.desc()).offset(skip).limit(limit).all()
 
 
-def get_ticket(db: Session, ticket_id: int, company_id: int) -> Optional[Ticket]:
-    return db.query(Ticket).filter(
+def get_ticket(db: Session, ticket_id: int, company_id: int):
+    ticket = db.query(Ticket).filter(
         Ticket.id == ticket_id,
         Ticket.company_id == company_id
     ).options(
+        # scalar/many-to-one: safe as joinedload (no row multiplication)
         joinedload(Ticket.status),
         joinedload(Ticket.issue_type),
         joinedload(Ticket.project),
         joinedload(Ticket.assignee),
         joinedload(Ticket.reporter),
-        joinedload(Ticket.comments).joinedload(TicketComment.author),
-        joinedload(Ticket.attachments).joinedload(TicketAttachment.uploaded_by),
-        joinedload(Ticket.activities).joinedload(TicketActivity.actor),
-        joinedload(Ticket.watchers),
-        joinedload(Ticket.source_links).joinedload(TicketLink.target_ticket).joinedload(Ticket.status),
-        joinedload(Ticket.target_links).joinedload(TicketLink.source_ticket).joinedload(Ticket.status),
-        joinedload(Ticket.sub_tickets).joinedload(Ticket.status),
-        joinedload(Ticket.sub_tickets).joinedload(Ticket.issue_type),
         joinedload(Ticket.parent).joinedload(Ticket.status),
         joinedload(Ticket.parent).joinedload(Ticket.issue_type),
+        # collections: use selectinload to avoid Cartesian product
+        selectinload(Ticket.comments).joinedload(TicketComment.author),
+        selectinload(Ticket.attachments).joinedload(TicketAttachment.uploaded_by),
+        selectinload(Ticket.activities).joinedload(TicketActivity.actor),
+        selectinload(Ticket.watchers),
+        selectinload(Ticket.co_assignees),
+        selectinload(Ticket.source_links).joinedload(TicketLink.target_ticket).joinedload(Ticket.status),
+        selectinload(Ticket.target_links).joinedload(TicketLink.source_ticket).joinedload(Ticket.status),
+        selectinload(Ticket.sub_tickets).joinedload(Ticket.status),
+        selectinload(Ticket.sub_tickets).joinedload(Ticket.issue_type),
     ).first()
+
+    if ticket:
+        ticket.user_context = _build_user_context(db, ticket)
+    return ticket
+
+
+def _build_user_context(db: Session, ticket) -> dict:
+    """Build {user_id: {job_title, depts: [{name, role}]}} for all users in this ticket."""
+    user_ids = set()
+    for act in ticket.activities:
+        if act.actor_id:
+            user_ids.add(act.actor_id)
+    for c in ticket.comments:
+        if c.author_id:
+            user_ids.add(c.author_id)
+    for u in ticket.watchers:
+        user_ids.add(u.id)
+    for u in ticket.co_assignees:
+        user_ids.add(u.id)
+    if ticket.assignee_id:
+        user_ids.add(ticket.assignee_id)
+    if ticket.reporter_id:
+        user_ids.add(ticket.reporter_id)
+
+    if not user_ids:
+        return {}
+
+    rows = (
+        db.query(DepartmentUserMembership, Department.name)
+        .join(Department, DepartmentUserMembership.department_id == Department.id)
+        .filter(DepartmentUserMembership.user_id.in_(user_ids))
+        .all()
+    )
+
+    context: dict = {}
+    for mem, dept_name in rows:
+        uid = str(mem.user_id)
+        if uid not in context:
+            context[uid] = {"depts": []}
+        context[uid]["depts"].append({"name": dept_name, "role": mem.role})
+
+    return context
 
 
 def create_ticket(db: Session, data: schemas.TicketCreate, company_id: int, reporter_id: int) -> Ticket:
@@ -671,8 +721,16 @@ def create_ticket(db: Session, data: schemas.TicketCreate, company_id: int, repo
     project.ticket_counter += 1
     ticket_number = f"{project.key}-{project.ticket_counter}"
 
+    # Validate and coerce custom fields before persisting
+    raw_cf = data.custom_fields or {}
+    if raw_cf:
+        from app.services.custom_field_service import validate_custom_field_values
+        raw_cf = validate_custom_field_values(db, company_id, "ticket", raw_cf)
+
+    ticket_data = data.model_dump(exclude={"status_id", "issue_type_id", "custom_fields"})
     ticket = Ticket(
-        **data.model_dump(exclude={"status_id", "issue_type_id"}),
+        **ticket_data,
+        custom_fields=raw_cf or None,
         company_id=company_id,
         reporter_id=reporter_id,
         ticket_number=ticket_number,
@@ -1074,6 +1132,29 @@ def add_watcher(db: Session, ticket_id: int, user_id: int, company_id: int) -> b
 def remove_watcher(db: Session, ticket_id: int, user_id: int, company_id: int) -> bool:
     db.execute(ticket_watchers.delete().where(
         and_(ticket_watchers.c.ticket_id == ticket_id, ticket_watchers.c.user_id == user_id)
+    ))
+    db.commit()
+    return True
+
+
+# ── Co-assignees ───────────────────────────────────────────────────────────────
+
+def add_co_assignee(db: Session, ticket_id: int, user_id: int, company_id: int) -> bool:
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id, Ticket.company_id == company_id).first()
+    if not ticket:
+        return False
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    stmt = pg_insert(ticket_co_assignees).values(
+        ticket_id=ticket_id, user_id=user_id
+    ).on_conflict_do_nothing()
+    db.execute(stmt)
+    db.commit()
+    return True
+
+
+def remove_co_assignee(db: Session, ticket_id: int, user_id: int, company_id: int) -> bool:
+    db.execute(ticket_co_assignees.delete().where(
+        and_(ticket_co_assignees.c.ticket_id == ticket_id, ticket_co_assignees.c.user_id == user_id)
     ))
     db.commit()
     return True

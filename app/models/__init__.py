@@ -150,7 +150,7 @@ from app.models.ticket import (
 from app.models.ticket_sprint import TicketSprint, SprintStatus
 
 # Custom Fields & Routing Rules
-from app.models.custom_field import CustomFieldDefinition
+from app.models.custom_field import CustomFieldDefinition, CustomFieldProjectConfig
 from app.models.routing_rule import RoutingRule, RoutingRoundRobinState
 
 # Hierarchy (Jurisdiction-based routing)

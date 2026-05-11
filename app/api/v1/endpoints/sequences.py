@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional
 
@@ -105,7 +105,7 @@ def get_sequence(
 ):
     seq = (
         db.query(Sequence)
-        .options(joinedload(Sequence.steps).joinedload(SequenceStep.template))
+        .options(selectinload(Sequence.steps).joinedload(SequenceStep.template))
         .filter(Sequence.id == sequence_id, Sequence.company_id == current_user.company_id)
         .first()
     )

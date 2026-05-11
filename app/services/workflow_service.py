@@ -1,14 +1,25 @@
 import json
-from sqlalchemy.orm import Session, joinedload
+import numpy as np
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 from app.models import workflow as models_workflow, agent as models_agent
 from app.schemas import workflow as schemas_workflow
 from app.services import vectorization_service, workflow_trigger_service
 
+
+def _workflow_embedding_text(name: str, description: str = None) -> str:
+    return f"{name} {description or ''}".strip()
+
+
+def _cache_workflow_embedding(db_workflow) -> None:
+    """Compute and store the embedding for a workflow in-place (no commit)."""
+    text = _workflow_embedding_text(db_workflow.name, db_workflow.description)
+    db_workflow.cached_embedding = vectorization_service.get_embedding(text).tolist()
+
 def get_workflow(db: Session, workflow_id: int, company_id: int):
     return db.query(models_workflow.Workflow).options(
-        joinedload(models_workflow.Workflow.agents),
-        joinedload(models_workflow.Workflow.versions)
+        selectinload(models_workflow.Workflow.agents),
+        selectinload(models_workflow.Workflow.versions)
     ).filter(
         models_workflow.Workflow.id == workflow_id,
         models_workflow.Workflow.company_id == company_id
@@ -16,8 +27,8 @@ def get_workflow(db: Session, workflow_id: int, company_id: int):
 
 def get_workflows(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_workflow.Workflow).options(
-        joinedload(models_workflow.Workflow.agents),
-        joinedload(models_workflow.Workflow.versions)
+        selectinload(models_workflow.Workflow.agents),
+        selectinload(models_workflow.Workflow.versions)
     ).filter(
         models_workflow.Workflow.company_id == company_id,
         models_workflow.Workflow.parent_workflow_id == None
@@ -62,6 +73,7 @@ def create_workflow(db: Session, workflow: schemas_workflow.WorkflowCreate, comp
     workflow_data['company_id'] = company_id
 
     db_workflow = models_workflow.Workflow(**workflow_data)
+    _cache_workflow_embedding(db_workflow)
     db.add(db_workflow)
     db.flush()  # Get the ID before adding agents
 
@@ -188,6 +200,10 @@ def update_workflow(db: Session, workflow_id: int, workflow: schemas_workflow.Wo
         # Auto-generate description if empty and visual_steps were updated
         if visual_steps_updated and visual_steps_data and not db_workflow.description:
             db_workflow.description = generate_workflow_description(visual_steps_data)
+
+        # Refresh cached embedding whenever name or description changes
+        if 'name' in update_data or 'description' in update_data or (visual_steps_updated and not db_workflow.description):
+            _cache_workflow_embedding(db_workflow)
 
         db.commit()
         db.refresh(db_workflow)
@@ -497,27 +513,29 @@ def find_similar_workflow(db: Session, company_id: int, query: str, agent_id: in
                 print(f"DEBUG: Found direct match for query '{query}' in workflow '{workflow.name}'")
                 return get_workflow(db, workflow.id, company_id)
 
-    # 2. If no direct match, fall back to similarity search
+    # 2. Semantic similarity search using cached embeddings (one embedding call for query only)
     query_embedding = vectorization_service.get_embedding(query)
-    
+
     best_match = None
     highest_similarity = -1
 
     for workflow in active_workflows:
-        workflow_text = f"{workflow.name} {workflow.description or ''}"
-        workflow_embedding = vectorization_service.get_embedding(workflow_text)
-        
-        similarity = vectorization_service.cosine_similarity(query_embedding, workflow_embedding)
-        
+        if workflow.cached_embedding:
+            wf_embedding = np.array(workflow.cached_embedding)
+        else:
+            # No cache yet (e.g. old workflow row) — compute and persist for next time
+            wf_embedding = vectorization_service.get_embedding(
+                _workflow_embedding_text(workflow.name, workflow.description)
+            )
+            workflow.cached_embedding = wf_embedding.tolist()
+            db.commit()
+
+        similarity = vectorization_service.cosine_similarity(query_embedding, wf_embedding)
         if similarity > highest_similarity:
             highest_similarity = similarity
             best_match = workflow
-            
-    # Adjust the threshold as needed (0.75 = high confidence matches only)
+
     SIMILARITY_THRESHOLD = 0.75
     if highest_similarity > SIMILARITY_THRESHOLD:
-        print(f"DEBUG: Best match found: '{best_match.name}' (Version: {best_match.version}) with similarity: {highest_similarity}")
         return get_workflow(db, best_match.id, company_id)
-    else:
-        print(f"DEBUG: No workflow found above similarity threshold ({SIMILARITY_THRESHOLD}). Highest: {highest_similarity}")
-        return None
+    return None

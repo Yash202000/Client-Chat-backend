@@ -6,7 +6,7 @@ VALID_ENTITY_TYPES = {"ticket", "lead", "deal", "contact"}
 VALID_FIELD_TYPES = {
     "text", "textarea", "number", "decimal", "boolean",
     "date", "datetime", "dropdown", "multi_select",
-    "user_picker", "url", "email", "phone",
+    "user_picker", "url", "email", "phone", "coordinates", "hierarchy_node",
 }
 
 
@@ -27,6 +27,7 @@ class CustomFieldDefinitionBase(BaseModel):
     position: int = 0
     is_active: bool = True
     group_name: Optional[str] = None
+    is_global: bool = True
 
     @field_validator("entity_type")
     @classmethod
@@ -64,11 +65,36 @@ class CustomFieldDefinitionUpdate(BaseModel):
     position: Optional[int] = None
     is_active: Optional[bool] = None
     group_name: Optional[str] = None
+    is_global: Optional[bool] = None
 
 
 class CustomFieldDefinitionOut(CustomFieldDefinitionBase):
     id: int
     company_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Project config schemas ────────────────────────────────────────────────────
+
+class CustomFieldProjectConfigUpsert(BaseModel):
+    visible: bool = True
+    required: Optional[bool] = None    # None = inherit from field def
+    position: Optional[int] = None     # None = inherit
+    group_name: Optional[str] = None   # None = inherit
+
+
+class CustomFieldProjectConfigOut(BaseModel):
+    id: int
+    field_id: int
+    project_id: int
+    visible: bool
+    required: Optional[bool]
+    position: Optional[int]
+    group_name: Optional[str]
     created_at: datetime
     updated_at: datetime
 

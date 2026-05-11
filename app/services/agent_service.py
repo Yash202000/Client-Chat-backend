@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import or_
 from app.models import agent as models_agent, tool as models_tool, credential as models_credential, knowledge_base as models_knowledge_base
 from app.schemas import agent as schemas_agent
@@ -7,10 +7,10 @@ from fastapi import HTTPException
 
 def get_agent(db: Session, agent_id: int, company_id: int):
     return db.query(models_agent.Agent).options(
-        joinedload(models_agent.Agent.tools),
-        joinedload(models_agent.Agent.workflows),
-        joinedload(models_agent.Agent.knowledge_bases),
-        joinedload(models_agent.Agent.credential)  # Eagerly load the credential
+        selectinload(models_agent.Agent.tools),
+        selectinload(models_agent.Agent.workflows),
+        selectinload(models_agent.Agent.knowledge_bases),
+        joinedload(models_agent.Agent.credential),
     ).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
 
 def get_agents(db: Session, company_id: int, skip: int = 0, limit: int = 100):
@@ -87,7 +87,7 @@ def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int)
     return db_agent
 
 def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, company_id: int):
-    db_agent = db.query(models_agent.Agent).options(joinedload(models_agent.Agent.tools), joinedload(models_agent.Agent.knowledge_bases)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
+    db_agent = db.query(models_agent.Agent).options(selectinload(models_agent.Agent.tools), selectinload(models_agent.Agent.knowledge_bases)).filter(models_agent.Agent.id == agent_id, models_agent.Agent.company_id == company_id).first()
     if db_agent:
         update_data = agent.model_dump(exclude_unset=True)
         

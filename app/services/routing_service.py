@@ -37,7 +37,7 @@ def evaluate_and_route(
 
     for rule in rules:
         if _matches_conditions(entity, rule.conditions or []):
-            assigned_id = _execute_action(db, rule, company_id)
+            assigned_id = _execute_action(db, rule, company_id, entity=entity)
             if assigned_id and hasattr(entity, "assignee_id") and entity.assignee_id is None:
                 entity.assignee_id = assigned_id
             return assigned_id
@@ -79,6 +79,14 @@ def _matches_conditions(entity, conditions: list) -> bool:
     return True
 
 
+def _scalar(v) -> str:
+    """Normalize a value to a plain string — unwraps str-enum values."""
+    import enum
+    if isinstance(v, enum.Enum):
+        return str(v.value)
+    return str(v)
+
+
 def _eval_condition(entity, cond: dict) -> bool:
     field = cond.get("field", "")
     operator = cond.get("operator", "eq")
@@ -94,15 +102,15 @@ def _eval_condition(entity, cond: dict) -> bool:
         return False
 
     if operator == "eq":
-        return str(actual) == str(expected)
+        return _scalar(actual) == _scalar(expected)
     elif operator == "neq":
-        return str(actual) != str(expected)
+        return _scalar(actual) != _scalar(expected)
     elif operator == "in":
         items = expected if isinstance(expected, list) else [expected]
-        return str(actual) in [str(i) for i in items]
+        return _scalar(actual) in [_scalar(i) for i in items]
     elif operator == "not_in":
         items = expected if isinstance(expected, list) else [expected]
-        return str(actual) not in [str(i) for i in items]
+        return _scalar(actual) not in [_scalar(i) for i in items]
     elif operator == "contains":
         # For JSONB list fields (tags, labels) or string contains
         if isinstance(actual, list):
@@ -139,7 +147,7 @@ def _get_field_value(entity, field: str) -> Any:
 
 # ── Action execution ──────────────────────────────────────────────────────────
 
-def _execute_action(db: Session, rule: RoutingRule, company_id: int) -> Optional[int]:
+def _execute_action(db: Session, rule: RoutingRule, company_id: int, entity=None) -> Optional[int]:
     action_type = rule.action_type
     config = rule.action_config or {}
 
@@ -147,7 +155,7 @@ def _execute_action(db: Session, rule: RoutingRule, company_id: int) -> Optional
         return config.get("user_id")
 
     elif action_type == "assign_round_robin":
-        return _round_robin(db, rule, config.get("team_id"), company_id)
+        return _round_robin(db, rule, config.get("team_id"), company_id, role=config.get("role"))
 
     elif action_type == "assign_by_skill":
         return _assign_by_skill(
@@ -164,16 +172,144 @@ def _execute_action(db: Session, rule: RoutingRule, company_id: int) -> Optional
     elif action_type == "assign_by_department":
         return _assign_by_department(db, rule, entity, company_id, config)
 
+    elif action_type == "assign_by_role":
+        return _assign_by_role(db, rule, company_id, config, entity=entity)
+
     elif action_type == "no_action":
         return None
 
     return None
 
 
-def _round_robin(
-    db: Session, rule: RoutingRule, team_id: Optional[int], company_id: int
+def _infer_dept_ids_from_conditions(
+    db: Session, rule: RoutingRule, entity, company_id: int
+) -> Optional[List[int]]:
+    """
+    Scan rule conditions for custom_fields.X hierarchy references (eq/in operators).
+    Resolve the entity's actual field values to node ancestor IDs, then find
+    departments that cover all matched nodes. Returns dept ID list or None if no
+    hierarchy conditions exist.
+    """
+    from app.models.hierarchy import HierarchyType
+    conditions = rule.conditions or []
+
+    type_name_to_id = {
+        ht.name.lower(): ht.id
+        for ht in db.query(HierarchyType).filter(HierarchyType.company_id == company_id).all()
+    }
+
+    # First pass: collect all (type_id, code) lookups needed
+    lookups: List[tuple] = []
+    lookup_order: List[tuple] = []  # preserves order for result mapping
+    for cond in conditions:
+        field = cond.get("field", "")
+        operator = cond.get("operator", "eq")
+        if not field.startswith("custom_fields.") or operator not in ("eq", "in"):
+            continue
+        sub_key = field.split(".", 1)[1].lower()
+        type_id = type_name_to_id.get(sub_key)
+        if type_id is None:
+            continue
+        raw_val = _get_field_value(entity, field)
+        if not raw_val:
+            continue
+        lookups.append((type_id, str(raw_val)))
+        lookup_order.append((type_id, str(raw_val)))
+
+    if not lookups:
+        return None
+
+    # Single query for all needed nodes
+    from sqlalchemy import tuple_ as sa_tuple
+    node_rows = db.query(HierarchyNode).filter(
+        HierarchyNode.company_id == company_id,
+        HierarchyNode.is_active == True,
+        sa_tuple(HierarchyNode.type_id, HierarchyNode.code).in_(lookups),
+    ).all()
+    nodes_by_key = {(n.type_id, n.code): n for n in node_rows}
+
+    node_id_sets: List[set] = []
+    for type_id, code in lookup_order:
+        node = nodes_by_key.get((type_id, code))
+        if not node:
+            continue
+        ancestor_ids = {int(x) for x in node.path.split(".") if x}
+        node_id_sets.append(ancestor_ids)
+
+    if not node_id_sets:
+        return None
+
+    return dept_svc.find_departments_by_nodes(db, company_id, node_id_sets)
+
+
+def _assign_by_role(
+    db: Session, rule: RoutingRule, company_id: int, config: dict, entity=None
 ) -> Optional[int]:
-    """Pick the next available agent in the team after the last-assigned one."""
+    """
+    Round-robin among users with the given dept role.
+    When the rule has classification/location conditions, scopes to departments
+    that handle those hierarchy nodes; otherwise falls back to company-wide.
+    """
+    from app.models.department import DepartmentUserMembership
+    role = config.get("role")
+    team_id = config.get("team_id")
+
+    # Try to scope to relevant departments from hierarchy conditions
+    dept_ids: Optional[List[int]] = None
+    if entity is not None:
+        dept_ids = _infer_dept_ids_from_conditions(db, rule, entity, company_id)
+
+    if role:
+        q = (
+            db.query(DepartmentUserMembership.user_id)
+            .join(User, User.id == DepartmentUserMembership.user_id)
+            .filter(
+                DepartmentUserMembership.company_id == company_id,
+                DepartmentUserMembership.role == role,
+                User.is_active == True,
+            )
+        )
+        if dept_ids is not None:
+            q = q.filter(DepartmentUserMembership.department_id.in_(dept_ids))
+        user_ids = [r[0] for r in q.distinct().all()]
+    else:
+        # Fallback: all active users in company (or scoped depts)
+        if dept_ids is not None:
+            user_ids = dept_svc.find_users_in_departments(db, company_id, dept_ids, role=None)
+        else:
+            q = db.query(User.id).filter(User.company_id == company_id, User.is_active == True)
+            if team_id:
+                q = q.join(TeamMembership, TeamMembership.user_id == User.id).filter(
+                    TeamMembership.team_id == team_id
+                )
+            user_ids = [r[0] for r in q.all()]
+
+    if not user_ids:
+        return None
+
+    user_ids = sorted(user_ids)
+    state = db.query(RoutingRoundRobinState).filter(RoutingRoundRobinState.rule_id == rule.id).first()
+    if state and state.last_assigned_user_id in user_ids:
+        idx = user_ids.index(state.last_assigned_user_id)
+        next_id = user_ids[(idx + 1) % len(user_ids)]
+    else:
+        next_id = user_ids[0]
+
+    if state:
+        state.last_assigned_user_id = next_id
+        state.last_assigned_at = datetime.utcnow()
+    else:
+        db.add(RoutingRoundRobinState(rule_id=rule.id, last_assigned_user_id=next_id, last_assigned_at=datetime.utcnow()))
+    db.flush()
+    return next_id
+
+
+def _round_robin(
+    db: Session, rule: RoutingRule, team_id: Optional[int], company_id: int,
+    role: Optional[str] = None,
+) -> Optional[int]:
+    """Pick the next available member in the team (optionally filtered by role) after the last-assigned one."""
+    from app.models.department import DepartmentUserMembership
     members = (
         db.query(TeamMembership)
         .join(User, User.id == TeamMembership.user_id)
@@ -184,6 +320,14 @@ def _round_robin(
     )
     if team_id:
         members = members.filter(TeamMembership.team_id == team_id)
+
+    if role:
+        # Filter to users who have this dept role in at least one department
+        role_user_ids = db.query(DepartmentUserMembership.user_id).filter(
+            DepartmentUserMembership.company_id == company_id,
+            DepartmentUserMembership.role == role,
+        ).subquery()
+        members = members.filter(TeamMembership.user_id.in_(role_user_ids))
 
     members = members.order_by(TeamMembership.user_id).all()
     if not members:
@@ -280,35 +424,35 @@ def _assign_by_node_match(
     if not node_fields:
         return None
 
-    # Step 1: resolve each field's code value to node IDs (+ ancestors)
-    all_required_node_ids: List[set] = []
-
+    # Step 1: collect all (field, code, type_id) we need, then fetch nodes in one query
+    field_lookups = []  # (field_name, code, type_id_or_None)
     for field in node_fields:
         raw_val = _get_field_value(entity, f"custom_fields.{field}") or _get_field_value(entity, field)
-        if not raw_val:
-            continue
+        if raw_val:
+            field_lookups.append((field, str(raw_val), type_map.get(field)))
 
-        type_id = type_map.get(field)
+    all_required_node_ids: List[set] = []
+    if not field_lookups:
+        return None
 
-        # Try to find the node by code within the given type
-        node_q = db.query(HierarchyNode).filter(
-            HierarchyNode.company_id == company_id,
-            HierarchyNode.code == str(raw_val),
-            HierarchyNode.is_active == True,
-        )
-        if type_id:
-            node_q = node_q.filter(HierarchyNode.type_id == type_id)
-        node = node_q.first()
+    codes = list({code for _, code, _ in field_lookups})
+    node_rows = db.query(HierarchyNode).filter(
+        HierarchyNode.company_id == company_id,
+        HierarchyNode.code.in_(codes),
+        HierarchyNode.is_active == True,
+    ).all()
+    # Index by (code, type_id) and by code alone for untyped lookups
+    nodes_by_code_type = {(n.code, n.type_id): n for n in node_rows}
+    nodes_by_code = {n.code: n for n in node_rows}
 
+    for _, code, type_id in field_lookups:
+        node = nodes_by_code_type.get((code, type_id)) if type_id else nodes_by_code.get(code)
         if not node:
             continue
-
         if ancestor_match:
-            # Include the node itself plus all ancestors from the materialized path
             ancestor_ids = {int(x) for x in node.path.split(".") if x}
         else:
             ancestor_ids = {node.id}
-
         all_required_node_ids.append(ancestor_ids)
 
     if not all_required_node_ids:

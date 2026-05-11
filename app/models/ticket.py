@@ -43,6 +43,13 @@ ticket_watchers = Table(
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
 )
 
+ticket_co_assignees = Table(
+    "ticket_co_assignees",
+    Base.metadata,
+    Column("ticket_id", Integer, ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -107,6 +114,7 @@ class Ticket(Base):
     activities = relationship("TicketActivity", back_populates="ticket",
                               cascade="all, delete-orphan", order_by="TicketActivity.created_at.desc()")
     watchers = relationship("User", secondary=ticket_watchers)
+    co_assignees = relationship("User", secondary=ticket_co_assignees)
     source_links = relationship("TicketLink", foreign_keys="TicketLink.source_ticket_id",
                                 cascade="all, delete-orphan")
     target_links = relationship("TicketLink", foreign_keys="TicketLink.target_ticket_id",

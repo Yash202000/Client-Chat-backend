@@ -3,7 +3,7 @@ from app.core.database import SessionLocal
 from fastapi import Header, HTTPException, Depends, Query, WebSocketDisconnect, status, WebSocket, WebSocketException
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core import security
 from app.core.config import settings
@@ -61,7 +61,7 @@ async def get_current_user(
     
     # Eager load role and permissions
     user = db.query(models_user.User).options(
-        joinedload(models_user.User.role).joinedload(models_role.Role.permissions)
+        joinedload(models_user.User.role).selectinload(models_role.Role.permissions)
     ).filter(models_user.User.email == token_data.email).first()
 
     if user is None:

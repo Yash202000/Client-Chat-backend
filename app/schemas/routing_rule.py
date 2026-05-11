@@ -6,7 +6,8 @@ VALID_ENTITY_TYPES = {"ticket", "lead", "deal"}
 VALID_TRIGGERS = {"on_create", "on_transition", "both"}
 VALID_ACTION_TYPES = {
     "assign_to_user", "assign_round_robin", "assign_by_skill",
-    "assign_to_queue", "no_action",
+    "assign_to_queue", "assign_by_node_match", "assign_by_department",
+    "assign_by_role", "no_action",
 }
 VALID_OPERATORS = {"eq", "neq", "in", "not_in", "contains", "gte", "lte", "exists", "not_exists"}
 

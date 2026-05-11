@@ -1,9 +1,14 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException
+from datetime import datetime
 
-from app.models.custom_field import CustomFieldDefinition
-from app.schemas.custom_field import CustomFieldDefinitionCreate, CustomFieldDefinitionUpdate
+from app.models.custom_field import CustomFieldDefinition, CustomFieldProjectConfig
+from app.schemas.custom_field import (
+    CustomFieldDefinitionCreate, CustomFieldDefinitionUpdate,
+    CustomFieldProjectConfigUpsert,
+)
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -13,7 +18,14 @@ def get_definitions(
     company_id: int,
     entity_type: Optional[str] = None,
     include_inactive: bool = False,
+    project_id: Optional[int] = None,
 ) -> List[CustomFieldDefinition]:
+    """
+    Return field definitions for the company.
+    When project_id is given:
+      - Always include global fields (is_global=True).
+      - Include non-global fields only if they have a config row with visible=True for that project.
+    """
     q = db.query(CustomFieldDefinition).filter(
         CustomFieldDefinition.company_id == company_id
     )
@@ -21,6 +33,24 @@ def get_definitions(
         q = q.filter(CustomFieldDefinition.entity_type == entity_type)
     if not include_inactive:
         q = q.filter(CustomFieldDefinition.is_active == True)
+
+    if project_id is not None:
+        from sqlalchemy import or_, and_, exists
+        subq = (
+            db.query(CustomFieldProjectConfig.field_id)
+            .filter(
+                CustomFieldProjectConfig.project_id == project_id,
+                CustomFieldProjectConfig.visible == True,
+            )
+            .subquery()
+        )
+        q = q.filter(
+            or_(
+                CustomFieldDefinition.is_global == True,
+                CustomFieldDefinition.id.in_(subq),
+            )
+        )
+
     return q.order_by(CustomFieldDefinition.entity_type, CustomFieldDefinition.position).all()
 
 
@@ -59,6 +89,7 @@ def create_definition(
         position=data.position,
         is_active=data.is_active,
         group_name=data.group_name,
+        is_global=data.is_global,
     )
     db.add(defn)
     db.commit()
@@ -104,6 +135,66 @@ def reorder_definitions(
         ).update({"position": pos})
     db.commit()
     return get_definitions(db, company_id, entity_type)
+
+
+# ── Project config CRUD ───────────────────────────────────────────────────────
+
+def get_project_configs(
+    db: Session, field_id: int, company_id: int
+) -> List[CustomFieldProjectConfig]:
+    return db.query(CustomFieldProjectConfig).filter(
+        CustomFieldProjectConfig.field_id == field_id,
+        CustomFieldProjectConfig.company_id == company_id,
+    ).all()
+
+
+def upsert_project_config(
+    db: Session,
+    field_id: int,
+    project_id: int,
+    data: CustomFieldProjectConfigUpsert,
+    company_id: int,
+) -> CustomFieldProjectConfig:
+    existing = db.query(CustomFieldProjectConfig).filter(
+        CustomFieldProjectConfig.field_id == field_id,
+        CustomFieldProjectConfig.project_id == project_id,
+    ).first()
+
+    if existing:
+        existing.visible = data.visible
+        existing.required = data.required
+        existing.position = data.position
+        existing.group_name = data.group_name
+        existing.updated_at = datetime.utcnow()
+    else:
+        existing = CustomFieldProjectConfig(
+            company_id=company_id,
+            field_id=field_id,
+            project_id=project_id,
+            visible=data.visible,
+            required=data.required,
+            position=data.position,
+            group_name=data.group_name,
+        )
+        db.add(existing)
+
+    db.commit()
+    db.refresh(existing)
+    return existing
+
+
+def delete_project_config(
+    db: Session, field_id: int, project_id: int, company_id: int
+) -> bool:
+    cfg = db.query(CustomFieldProjectConfig).filter(
+        CustomFieldProjectConfig.field_id == field_id,
+        CustomFieldProjectConfig.project_id == project_id,
+        CustomFieldProjectConfig.company_id == company_id,
+    ).first()
+    if cfg:
+        db.delete(cfg)
+        db.commit()
+    return True
 
 
 # ── Value validation ───────────────────────────────────────────────────────────
@@ -177,6 +268,26 @@ def _coerce_and_validate(defn: CustomFieldDefinition, value: Any) -> Any:
             return value
         elif ft == "user_picker":
             return int(value)
+        elif ft == "hierarchy_node":
+            # value must be a string node code; existence validated at API level if needed
+            return str(value)
+        elif ft == "coordinates":
+            if isinstance(value, dict):
+                lat = value.get("lat")
+                lng = value.get("lng")
+            elif isinstance(value, (list, tuple)) and len(value) == 2:
+                lat, lng = value[0], value[1]
+            else:
+                raise HTTPException(status_code=422, detail=f"'{defn.label}' must be {{lat, lng}}")
+            try:
+                lat, lng = float(lat), float(lng)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"'{defn.label}' lat/lng must be numbers")
+            if not (-90 <= lat <= 90):
+                raise HTTPException(status_code=422, detail=f"'{defn.label}' latitude must be -90 to 90")
+            if not (-180 <= lng <= 180):
+                raise HTTPException(status_code=422, detail=f"'{defn.label}' longitude must be -180 to 180")
+            return {"lat": lat, "lng": lng}
         else:
             return str(value)
     except HTTPException:

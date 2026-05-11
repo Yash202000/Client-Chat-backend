@@ -1,4 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, JSON, ForeignKey, Boolean, Table
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.database import Base
@@ -49,6 +51,9 @@ class Workflow(Base):
     #   "auto_trigger_enabled": true,
     #   "min_confidence": 0.75
     # }
+
+    # Cached embedding for fast similarity search (avoids recomputing on every routing call)
+    cached_embedding = Column(ARRAY(Float), nullable=True)
 
     # Versioning fields
     version = Column(Integer, default=1, nullable=False)

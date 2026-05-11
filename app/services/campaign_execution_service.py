@@ -727,15 +727,16 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
         for e in all_enrollments:
             print(f"[CAMPAIGN EXECUTION]   - Enrollment {e.id}: status={e.status}, next_scheduled={e.next_scheduled_at}, current_step={e.current_step}")
 
-    # Send messages
-    for enrollment in due_enrollments:
+    # Send messages concurrently
+    async def _send_one(enrollment):
         try:
-            print(f"[CAMPAIGN EXECUTION] Processing enrollment {enrollment.id} for contact {enrollment.contact_id}")
-            result = await send_campaign_message(db, campaign_id, enrollment.id, company_id)
-            print(f"[CAMPAIGN EXECUTION] Result for enrollment {enrollment.id}: {result}")
+            return await send_campaign_message(db, campaign_id, enrollment.id, company_id)
         except Exception as e:
             print(f"[CAMPAIGN EXECUTION] Error processing enrollment {enrollment.id}: {e}")
             traceback.print_exc()
+            return None
+
+    await asyncio.gather(*[_send_one(e) for e in due_enrollments])
 
     # Update campaign metrics
     try:
@@ -883,22 +884,25 @@ async def process_all_scheduled_campaigns(db: Session):
 
         print(f"[CAMPAIGN SCHEDULER] Found {len(active_campaigns)} active campaigns")
 
+        # Single query to find which campaigns have due enrollments (avoids N count queries)
+        active_ids = [c.id for c in active_campaigns]
+        due_campaign_ids = {
+            row[0]
+            for row in db.query(CampaignContact.campaign_id).filter(
+                CampaignContact.campaign_id.in_(active_ids),
+                CampaignContact.status == EnrollmentStatus.ACTIVE,
+                or_(
+                    CampaignContact.next_scheduled_at <= current_time.replace(tzinfo=None),
+                    CampaignContact.next_scheduled_at == None,
+                ),
+            ).distinct().all()
+        }
+
         for campaign in active_campaigns:
+            if campaign.id not in due_campaign_ids:
+                continue
             try:
-                # Check if there are any due enrollments for this campaign
-                due_count = db.query(CampaignContact).filter(
-                    CampaignContact.campaign_id == campaign.id,
-                    CampaignContact.status == EnrollmentStatus.ACTIVE,
-                    or_(
-                        CampaignContact.next_scheduled_at <= current_time.replace(tzinfo=None),
-                        CampaignContact.next_scheduled_at == None
-                    )
-                ).count()
-
-                if due_count > 0:
-                    print(f"[CAMPAIGN SCHEDULER] Campaign {campaign.id} ({campaign.name}) has {due_count} due messages")
-                    await process_campaign_queue(db, campaign.id, campaign.company_id)
-
+                await process_campaign_queue(db, campaign.id, campaign.company_id)
             except Exception as e:
                 print(f"[CAMPAIGN SCHEDULER] Error processing campaign {campaign.id}: {e}")
                 traceback.print_exc()

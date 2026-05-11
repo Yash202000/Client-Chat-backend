@@ -34,6 +34,7 @@ class UserSummary(BaseModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
     profile_picture_url: Optional[str] = None
+    job_title: Optional[str] = None
     class Config: from_attributes = True
 
 class StatusSummary(BaseModel):
@@ -368,6 +369,7 @@ class TicketOut(BaseModel):
     project: Optional[ProjectSummary] = None
     assignee: Optional[UserSummary] = None
     reporter: Optional[UserSummary] = None
+    co_assignees: List[UserSummary] = []
     comment_count: Optional[int] = None
     attachment_count: Optional[int] = None
     class Config: from_attributes = True
@@ -382,6 +384,8 @@ class TicketDetailOut(TicketOut):
     sub_tickets: List[TicketSummary] = []
     parent: Optional[TicketSummary] = None
     available_transitions: List[TicketTransitionOut] = []
+    # user_id → {job_title, depts: [{name, role}]} — populated by get_ticket for activity/comment context
+    user_context: Dict[str, Any] = {}
     class Config: from_attributes = True
 
 

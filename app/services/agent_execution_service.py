@@ -28,14 +28,20 @@ def _get_embeddings(agent: Agent, texts: list[str]):
     print(f"Generating embeddings for {len(texts)} texts using {agent.embedding_model}...")
     
     if agent.embedding_model == 'gemini':
-        embeddings = []
-        for text in texts:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _embed_one(text):
             try:
-                result = gemini_provider.genai.embed_content(model="models/embedding-001", content=text, task_type="RETRIEVAL_DOCUMENT")
-                embeddings.append(result['embedding'])
+                result = gemini_provider.genai.embed_content(
+                    model="models/embedding-001", content=text, task_type="RETRIEVAL_DOCUMENT"
+                )
+                return result['embedding']
             except Exception as e:
-                print(f"An error occurred while embedding text with Gemini: {e}")
-                embeddings.append(np.zeros(768)) # Gemini's embedding dimension
+                print(f"Gemini embedding error: {e}")
+                return np.zeros(768)
+
+        with ThreadPoolExecutor(max_workers=min(len(texts), 8)) as pool:
+            embeddings = list(pool.map(_embed_one, texts))
         return np.array(embeddings)
     
     elif agent.embedding_model == 'nvidia':
@@ -75,16 +81,15 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
     all_retrieved_chunks = []
     query_embedding = _get_embeddings(agent, [user_query])[0]
 
+    # Reuse a single chroma client for all local KBs
+    _chroma_client = None
+
     for kb in knowledge_bases:
         try:
-            print(kb.type, kb.provider, kb.connection_details, kb.chroma_collection_name, kb.faiss_index_id)
             if kb.type == "local" and kb.chroma_collection_name:
-                # Query the local ChromaDB collection using company-specific client (multi-tenant isolation)
-                company_chroma_client = get_company_chroma_client(agent.company_id)
-                collections = company_chroma_client.list_collections() # Debug line to ensure connection
-                print(f"Available collections: {[col.name for col in collections]}")
-                print(company_chroma_client.count_collections())
-                collection = company_chroma_client.get_collection(name=kb.chroma_collection_name)
+                if _chroma_client is None:
+                    _chroma_client = get_company_chroma_client(agent.company_id)
+                collection = _chroma_client.get_collection(name=kb.chroma_collection_name)
                 results = collection.query(
                     query_embeddings=[query_embedding.tolist()],
                     n_results=k

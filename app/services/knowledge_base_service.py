@@ -107,7 +107,7 @@ def _chunk_content(content: str, chunk_size: int = 500, chunk_overlap: int = 50)
 
 def create_knowledge_base(db: Session, knowledge_base: schemas_knowledge_base.KnowledgeBaseCreate, company_id: int):
     chunks = _chunk_content(knowledge_base.content)
-    chunk_embeddings = [vectorization_service.get_embedding(chunk).tolist() for chunk in chunks]
+    chunk_embeddings = vectorization_service.get_embeddings_batch(chunks).tolist() if chunks else []
     db_knowledge_base = models_knowledge_base.KnowledgeBase(**knowledge_base.dict(), company_id=company_id, embeddings=chunk_embeddings)
     db.add(db_knowledge_base)
     db.commit()
@@ -120,7 +120,7 @@ def update_knowledge_base(db: Session, knowledge_base_id: int, knowledge_base: s
         update_data = knowledge_base.model_dump(exclude_unset=True)
         if 'content' in update_data:
             chunks = _chunk_content(update_data['content'])
-            db_knowledge_base.embeddings = [vectorization_service.get_embedding(chunk).tolist() for chunk in chunks]
+            db_knowledge_base.embeddings = vectorization_service.get_embeddings_batch(chunks).tolist() if chunks else []
         for key, value in update_data.items():
             setattr(db_knowledge_base, key, value)
         db.commit()

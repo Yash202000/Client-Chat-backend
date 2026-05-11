@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload, selectinload
 from app.models import role as models_role, permission as models_permission
 from app.schemas import role as schemas_role
 
@@ -171,7 +171,7 @@ def get_role_by_name(db: Session, name: str, company_id: int = None):
     return query.first()
 
 def get_roles(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_role.Role).options(joinedload(models_role.Role.permissions)).filter(models_role.Role.company_id == company_id).offset(skip).limit(limit).all()
+    return db.query(models_role.Role).options(selectinload(models_role.Role.permissions)).filter(models_role.Role.company_id == company_id).offset(skip).limit(limit).all()
 
 def create_role(db: Session, role: schemas_role.RoleCreate, company_id: int = None):
     db_role = models_role.Role(

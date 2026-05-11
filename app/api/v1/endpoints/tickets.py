@@ -227,6 +227,7 @@ def list_tickets(
     contact_id: Optional[int] = None,
     account_id: Optional[int] = None,
     deal_id: Optional[int] = None,
+    ticket_number: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -238,6 +239,7 @@ def list_tickets(
         assignee_id=assignee_id, priority=priority,
         search=search, sprint_id=sprint_id, no_sprint=no_sprint,
         contact_id=contact_id, account_id=account_id, deal_id=deal_id,
+        ticket_number=ticket_number,
         skip=skip, limit=limit,
     )
 
@@ -424,6 +426,24 @@ def add_watcher(ticket_id: int, user_id: int, db: Session = Depends(get_db),
 def remove_watcher(ticket_id: int, user_id: int, db: Session = Depends(get_db),
                    current_user: models_user.User = Depends(get_current_active_user)):
     ticket_service.remove_watcher(db, ticket_id=ticket_id, user_id=user_id, company_id=current_user.company_id)
+    return {"ok": True}
+
+
+@router.post("/{ticket_id}/co-assignees/{user_id}",
+             dependencies=[Depends(require_permission("ticket:update"))])
+def add_co_assignee(ticket_id: int, user_id: int, db: Session = Depends(get_db),
+                    current_user: models_user.User = Depends(get_current_active_user)):
+    ok = ticket_service.add_co_assignee(db, ticket_id=ticket_id, user_id=user_id, company_id=current_user.company_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return {"ok": True}
+
+
+@router.delete("/{ticket_id}/co-assignees/{user_id}",
+               dependencies=[Depends(require_permission("ticket:update"))])
+def remove_co_assignee(ticket_id: int, user_id: int, db: Session = Depends(get_db),
+                       current_user: models_user.User = Depends(get_current_active_user)):
+    ticket_service.remove_co_assignee(db, ticket_id=ticket_id, user_id=user_id, company_id=current_user.company_id)
     return {"ok": True}
 
 

@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from app.models import ChatChannel, ChannelMembership, InternalChatMessage, ChatAttachment, MessageReaction, MessageMention, User, Team
 from app.models.pinned_message import PinnedMessage
@@ -69,7 +69,7 @@ def get_user_channels(db: Session, user_id: int) -> List[ChatChannel]:
         db.query(ChatChannel)
         .join(ChannelMembership)
         .filter(ChannelMembership.user_id == user_id)
-        .options(joinedload(ChatChannel.participants).joinedload(ChannelMembership.user))
+        .options(selectinload(ChatChannel.participants).joinedload(ChannelMembership.user))
         .all()
     )
 
@@ -80,7 +80,7 @@ def get_user_channels_with_summary(db: Session, user_id: int) -> list:
         db.query(ChatChannel)
         .join(ChannelMembership)
         .filter(ChannelMembership.user_id == user_id)
-        .options(joinedload(ChatChannel.participants).joinedload(ChannelMembership.user))
+        .options(selectinload(ChatChannel.participants).joinedload(ChannelMembership.user))
         .all()
     )
 

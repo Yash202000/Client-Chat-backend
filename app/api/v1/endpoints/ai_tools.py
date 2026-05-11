@@ -1,6 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Response, File, UploadFile
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import List, Dict
 import json
 
@@ -47,7 +47,7 @@ async def import_ai_tools(file: UploadFile = File(...), db: Session = Depends(ge
 
 @router.get("/admin/export", tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool:export"))])
 def export_ai_tools(db: Session = Depends(get_db)):
-    tools = db.query(ai_tool_model.AITool).options(joinedload(ai_tool_model.AITool.category), joinedload(ai_tool_model.AITool.questions)).all()
+    tools = db.query(ai_tool_model.AITool).options(joinedload(ai_tool_model.AITool.category), selectinload(ai_tool_model.AITool.questions)).all()
     
     # Manually construct the dictionary to ensure all required fields are included
     tools_data = []

@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any, Tuple
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import and_, or_
 from datetime import datetime
 from app.models.content_item import ContentItem
@@ -174,7 +174,7 @@ def validate_content_data(content_type: ContentType, data: Dict[str, Any]) -> Li
 def get_content_item(db: Session, item_id: int, company_id: int) -> Optional[ContentItem]:
     """Get a content item by ID."""
     return db.query(ContentItem).options(
-        joinedload(ContentItem.categories)
+        selectinload(ContentItem.categories)
     ).filter(
         and_(
             ContentItem.id == item_id,
@@ -197,7 +197,7 @@ def get_content_items(
 ) -> List[ContentItem]:
     """Get content items with filters."""
     query = db.query(ContentItem).options(
-        joinedload(ContentItem.categories)
+        selectinload(ContentItem.categories)
     ).filter(ContentItem.company_id == company_id)
 
     if content_type_id:

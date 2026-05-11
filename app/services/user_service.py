@@ -1,5 +1,5 @@
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from app.models import user as models_user, role as models_role, permission as models_permission
 from app.schemas import user as schemas_user
 from app.core.security import get_password_hash
@@ -14,13 +14,13 @@ _pending_offline_tasks: Dict[int, asyncio.Task] = {}
 OFFLINE_GRACE_PERIOD = 5  # seconds
 
 def get_user(db: Session, user_id: int):
-    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.id == user_id).first()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).selectinload(models_role.Role.permissions)).filter(models_user.User.id == user_id).first()
 
 def get_user_by_email(db: Session, email: str):
-    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.email == email).first()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).selectinload(models_role.Role.permissions)).filter(models_user.User.email == email).first()
 
 def get_users(db: Session, company_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models_user.User).options(joinedload(models_user.User.role).joinedload(models_role.Role.permissions)).filter(models_user.User.company_id == company_id).offset(skip).limit(limit).all()
+    return db.query(models_user.User).options(joinedload(models_user.User.role).selectinload(models_role.Role.permissions)).filter(models_user.User.company_id == company_id).offset(skip).limit(limit).all()
 
 from app.services import user_settings_service, company_service
 from app.schemas import user_settings as schemas_user_settings, company as schemas_company
