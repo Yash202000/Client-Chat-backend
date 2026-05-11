@@ -1,7 +1,8 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from decimal import Decimal
+from app.schemas.ticket import StatusSummary, TicketTransitionOut, UserSummary
 
 
 class DealContactSummary(BaseModel):
@@ -44,8 +45,10 @@ class DealBase(BaseModel):
     title: str
     amount: Optional[Decimal] = None
     currency: str = "USD"
-    pipeline_id: int
-    stage_id: int
+    pipeline_id: Optional[int] = None
+    stage_id: Optional[int] = None
+    workflow_id: Optional[int] = None
+    status_id: Optional[int] = None
     contact_id: Optional[int] = None
     account_id: Optional[int] = None
     owner_id: Optional[int] = None
@@ -89,6 +92,8 @@ class Deal(DealBase):
     contact: Optional[DealContactSummary] = None
     account: Optional[DealAccountSummary] = None
     owner: Optional[DealOwnerSummary] = None
+    wf_status: Optional[StatusSummary] = None
+    available_transitions: List[TicketTransitionOut] = []
 
     class Config:
         from_attributes = True

@@ -149,6 +149,13 @@ from app.models.ticket import (
 
 from app.models.ticket_sprint import TicketSprint, SprintStatus
 
+# Custom Fields & Routing Rules
+from app.models.custom_field import CustomFieldDefinition
+from app.models.routing_rule import RoutingRule, RoutingRoundRobinState
+
+# Hierarchy (Jurisdiction-based routing)
+from app.models.hierarchy import HierarchyType, HierarchyNode, UserNodeAssignment, TeamNodeAssignment
+
 from app.models.company import Company as _TicketCompany
 _TicketCompany.ticket_projects = _rel("TicketProject", back_populates="company", cascade="all, delete-orphan")
 _TicketCompany.ticket_workflows = _rel("TicketWorkflow", back_populates="company", cascade="all, delete-orphan")

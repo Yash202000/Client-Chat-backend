@@ -16,6 +16,7 @@ router = APIRouter()
             dependencies=[Depends(require_permission("ticket:read"))])
 def list_workflows(db: Session = Depends(get_db),
                    current_user: models_user.User = Depends(get_current_active_user)):
+    ticket_service.seed_company_defaults(db, company_id=current_user.company_id)
     return ticket_service.get_workflows(db, company_id=current_user.company_id)
 
 

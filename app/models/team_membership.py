@@ -1,5 +1,6 @@
 
 from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -17,6 +18,8 @@ class TeamMembership(Base):
     priority = Column(Integer, default=0, server_default='0') # Higher priority agents get assignments first
     max_concurrent_sessions = Column(Integer, default=3, server_default='3') # Maximum concurrent sessions
     current_session_count = Column(Integer, default=0, server_default='0') # Current active sessions
+    # Skills for skill-based routing: list of skill strings e.g. ["billing", "technical", "enterprise"]
+    skills = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

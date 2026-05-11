@@ -16,6 +16,10 @@ from app.api.v1.endpoints import data_export
 from app.api.v1.endpoints import gdpr
 from app.api.v1.endpoints import compliance
 from app.api.v1.endpoints import tickets
+from app.api.v1.endpoints import custom_fields
+from app.api.v1.endpoints import routing_rules
+from app.api.v1.endpoints import hierarchy
+from app.api.v1.endpoints import departments
 from app.api.v1.endpoints.cms import content_types as cms_content_types
 from app.api.v1.endpoints.cms import content_items as cms_content_items
 from app.api.v1.endpoints.cms import media as cms_media
@@ -176,3 +180,13 @@ api_router.include_router(gdpr.router, prefix="/gdpr", tags=["gdpr"])
 
 # Compliance — Vanta / Drata integration + sub-processor list
 api_router.include_router(compliance.router, prefix="/compliance", tags=["compliance"])
+
+# Custom Field Definitions
+api_router.include_router(custom_fields.router, prefix="/custom-fields", tags=["custom-fields"])
+
+# Routing Rules
+api_router.include_router(routing_rules.router, prefix="/routing-rules", tags=["routing-rules"])
+
+# Hierarchy (Jurisdiction-based routing)
+api_router.include_router(hierarchy.router, prefix="/hierarchy", tags=["hierarchy"])
+api_router.include_router(departments.router, prefix="/departments", tags=["departments"])

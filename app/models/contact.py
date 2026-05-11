@@ -35,8 +35,12 @@ class Contact(Base):
     custom_attributes = Column(JSON, nullable=True)
 
     # CRM fields
-    lead_source = Column(String, nullable=True, index=True)  # e.g., "website", "referral", "campaign_123"
-    lifecycle_stage = Column(Enum(LifecycleStage), default=LifecycleStage.LEAD, nullable=True, index=True)
+    lead_source = Column(String, nullable=True, index=True)
+    # Workflow-driven lifecycle stage (new) — replaces hardcoded LifecycleStage enum
+    workflow_id = Column(Integer, ForeignKey("ticket_workflows.id"), nullable=True, index=True)
+    status_id = Column(Integer, ForeignKey("ticket_statuses.id"), nullable=True, index=True)
+    # Keep lifecycle_stage as nullable for backward compat
+    lifecycle_stage = Column(Enum(LifecycleStage), nullable=True, index=True)
 
     # Communication preferences
     do_not_contact = Column(Boolean, default=False, nullable=False)
@@ -67,6 +71,8 @@ class Contact(Base):
 
     company_id = Column(Integer, ForeignKey("companies.id"))
     company = relationship("Company", back_populates="contacts")
+    workflow = relationship("TicketWorkflow", foreign_keys=[workflow_id])
+    status = relationship("TicketStatus", foreign_keys=[status_id])
 
     # CRM B2B account link (nullable — not all contacts belong to an account)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)

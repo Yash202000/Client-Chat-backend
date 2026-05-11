@@ -32,39 +32,120 @@ DEFAULT_ISSUE_TYPES = [
     {"name": "Sub-task", "icon": "git-branch",   "color": "#94a3b8", "position": 4},
 ]
 
+CRM_WORKFLOWS = {
+    "lead": {
+        "name": "Lead Workflow",
+        "statuses": [
+            {"name": "New",         "color": "#94a3b8", "category": StatusCategory.TODO,        "position": 0, "is_default": True},
+            {"name": "Contacted",   "color": "#3b82f6", "category": StatusCategory.IN_PROGRESS, "position": 1},
+            {"name": "MQL",         "color": "#8b5cf6", "category": StatusCategory.IN_PROGRESS, "position": 2},
+            {"name": "SQL",         "color": "#f59e0b", "category": StatusCategory.IN_PROGRESS, "position": 3},
+            {"name": "Opportunity", "color": "#ec4899", "category": StatusCategory.IN_PROGRESS, "position": 4},
+            {"name": "Won",         "color": "#22c55e", "category": StatusCategory.DONE,        "position": 5},
+            {"name": "Lost",        "color": "#ef4444", "category": StatusCategory.DONE,        "position": 6},
+        ],
+        "transitions": [
+            ("Contact",       "New",         "Contacted"),
+            ("Qualify (MQL)", "Contacted",   "MQL"),
+            ("Qualify (SQL)", "MQL",         "SQL"),
+            ("Convert",       "SQL",         "Opportunity"),
+            ("Close Won",     "Opportunity", "Won"),
+            ("Close Lost",    None,          "Lost"),
+            ("Reopen",        "Lost",        "New"),
+            ("Reopen",        "Won",         "New"),
+        ],
+    },
+    "deal": {
+        "name": "Deal Workflow",
+        "statuses": [
+            {"name": "Prospecting",  "color": "#94a3b8", "category": StatusCategory.TODO,        "position": 0, "is_default": True},
+            {"name": "Qualified",    "color": "#3b82f6", "category": StatusCategory.IN_PROGRESS, "position": 1},
+            {"name": "Proposal",     "color": "#8b5cf6", "category": StatusCategory.IN_PROGRESS, "position": 2},
+            {"name": "Negotiation",  "color": "#f59e0b", "category": StatusCategory.IN_PROGRESS, "position": 3},
+            {"name": "Closed Won",   "color": "#22c55e", "category": StatusCategory.DONE,        "position": 4},
+            {"name": "Closed Lost",  "color": "#ef4444", "category": StatusCategory.DONE,        "position": 5},
+        ],
+        "transitions": [
+            ("Qualify",      "Prospecting", "Qualified"),
+            ("Propose",      "Qualified",   "Proposal"),
+            ("Negotiate",    "Proposal",    "Negotiation"),
+            ("Close Won",    "Negotiation", "Closed Won"),
+            ("Close Lost",   None,          "Closed Lost"),
+            ("Reopen",       "Closed Lost", "Prospecting"),
+            ("Reopen",       "Closed Won",  "Prospecting"),
+        ],
+    },
+    "contact": {
+        "name": "Contact Workflow",
+        "statuses": [
+            {"name": "New",        "color": "#94a3b8", "category": StatusCategory.TODO,        "position": 0, "is_default": True},
+            {"name": "Subscriber", "color": "#3b82f6", "category": StatusCategory.IN_PROGRESS, "position": 1},
+            {"name": "Lead",       "color": "#8b5cf6", "category": StatusCategory.IN_PROGRESS, "position": 2},
+            {"name": "MQL",        "color": "#f59e0b", "category": StatusCategory.IN_PROGRESS, "position": 3},
+            {"name": "Customer",   "color": "#22c55e", "category": StatusCategory.DONE,        "position": 4},
+            {"name": "Churned",    "color": "#ef4444", "category": StatusCategory.DONE,        "position": 5},
+        ],
+        "transitions": [
+            ("Subscribe",  "New",        "Subscriber"),
+            ("Qualify",    "Subscriber", "Lead"),
+            ("Mark MQL",   "Lead",       "MQL"),
+            ("Convert",    "MQL",        "Customer"),
+            ("Churn",      None,         "Churned"),
+            ("Reactivate", "Churned",    "New"),
+        ],
+    },
+}
+
+
+def _seed_workflow(db: Session, company_id: int, name: str, entity_type: Optional[str],
+                   is_default: bool, statuses_data: list, transitions_data: list) -> TicketWorkflow:
+    """Create a workflow with statuses and transitions."""
+    wf = TicketWorkflow(company_id=company_id, name=name, is_default=is_default, entity_type=entity_type)
+    db.add(wf)
+    db.flush()
+    for s in statuses_data:
+        db.add(TicketStatus(workflow_id=wf.id, company_id=company_id, **s))
+    db.flush()
+    status_map = {s.name: s.id for s in db.query(TicketStatus).filter(TicketStatus.workflow_id == wf.id).all()}
+    for name_, from_name, to_name in transitions_data:
+        from_id = status_map.get(from_name) if from_name else None
+        to_id = status_map.get(to_name)
+        if to_id:
+            db.add(TicketTransition(workflow_id=wf.id, name=name_, from_status_id=from_id, to_status_id=to_id))
+    return wf
+
 
 def seed_company_defaults(db: Session, company_id: int):
-    """Create default workflow and issue types for a company if they don't exist."""
+    """Create default ticket workflow, CRM workflows, and issue types for a company."""
     existing = db.query(TicketWorkflow).filter(
         TicketWorkflow.company_id == company_id,
         TicketWorkflow.is_default == True
     ).first()
-    if existing:
-        return existing
+    if not existing:
+        ticket_wf = _seed_workflow(
+            db, company_id, "Default Workflow", entity_type=None, is_default=True,
+            statuses_data=DEFAULT_WORKFLOW_STATUSES,
+            transitions_data=[
+                ("Start",        "To Do",       "In Progress"),
+                ("Review",       "In Progress", "In Review"),
+                ("Done",         "In Review",   "Done"),
+                ("Reopen",       "Done",        "To Do"),
+                ("Cancel",       None,          "Cancelled"),
+                ("Back to Todo", "In Progress", "To Do"),
+            ],
+        )
 
-    workflow = TicketWorkflow(company_id=company_id, name="Default Workflow", is_default=True)
-    db.add(workflow)
-    db.flush()
-
-    for s in DEFAULT_WORKFLOW_STATUSES:
-        db.add(TicketStatus(workflow_id=workflow.id, company_id=company_id, **s))
-
-    # Add default transitions after flush to get status IDs
-    db.flush()
-    statuses = db.query(TicketStatus).filter(TicketStatus.workflow_id == workflow.id).order_by(TicketStatus.position).all()
-    status_map = {s.name: s.id for s in statuses}
-
-    transitions = [
-        ("Start",         status_map.get("To Do"),       status_map.get("In Progress")),
-        ("Review",        status_map.get("In Progress"), status_map.get("In Review")),
-        ("Done",          status_map.get("In Review"),   status_map.get("Done")),
-        ("Reopen",        status_map.get("Done"),        status_map.get("To Do")),
-        ("Cancel",        None,                          status_map.get("Cancelled")),
-        ("Back to Todo",  status_map.get("In Progress"), status_map.get("To Do")),
-    ]
-    for name, from_id, to_id in transitions:
-        if to_id:
-            db.add(TicketTransition(workflow_id=workflow.id, name=name, from_status_id=from_id, to_status_id=to_id))
+    # Seed CRM workflows if missing
+    for entity_type, cfg in CRM_WORKFLOWS.items():
+        exists = db.query(TicketWorkflow).filter(
+            TicketWorkflow.company_id == company_id,
+            TicketWorkflow.entity_type == entity_type,
+        ).first()
+        if not exists:
+            _seed_workflow(
+                db, company_id, cfg["name"], entity_type=entity_type, is_default=False,
+                statuses_data=cfg["statuses"], transitions_data=cfg["transitions"],
+            )
 
     existing_types = db.query(TicketIssueType).filter(TicketIssueType.company_id == company_id).count()
     if existing_types == 0:
@@ -72,8 +153,139 @@ def seed_company_defaults(db: Session, company_id: int):
             db.add(TicketIssueType(company_id=company_id, **t))
 
     db.commit()
-    db.refresh(workflow)
-    return workflow
+    return existing
+
+
+def get_crm_workflow(db: Session, company_id: int, entity_type: str) -> Optional[TicketWorkflow]:
+    """Get (or lazily create) the CRM workflow for an entity type."""
+    wf = db.query(TicketWorkflow).filter(
+        TicketWorkflow.company_id == company_id,
+        TicketWorkflow.entity_type == entity_type,
+    ).first()
+    if not wf and entity_type in CRM_WORKFLOWS:
+        cfg = CRM_WORKFLOWS[entity_type]
+        wf = _seed_workflow(
+            db, company_id, cfg["name"], entity_type=entity_type, is_default=False,
+            statuses_data=cfg["statuses"], transitions_data=cfg["transitions"],
+        )
+        db.commit()
+    return wf
+
+
+def get_workflow_with_details(db: Session, workflow_id: int) -> Optional[TicketWorkflow]:
+    return db.query(TicketWorkflow).options(
+        joinedload(TicketWorkflow.statuses),
+        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.from_status),
+        joinedload(TicketWorkflow.transitions).joinedload(TicketTransition.to_status),
+    ).filter(TicketWorkflow.id == workflow_id).first()
+
+
+def get_available_transitions(db: Session, workflow_id: int, status_id: Optional[int]) -> List[TicketTransition]:
+    """Return transitions available from the given status (or from any status if status_id is None)."""
+    return db.query(TicketTransition).options(
+        joinedload(TicketTransition.to_status),
+    ).filter(
+        TicketTransition.workflow_id == workflow_id,
+        (TicketTransition.from_status_id == status_id) | (TicketTransition.from_status_id == None),
+    ).all()
+
+
+def execute_entity_transition(
+    db: Session,
+    entity,  # Lead | Deal | Contact — any model with workflow_id + status_id
+    transition_id: int,
+    data: schemas.TicketTransitionExecute,
+    company_id: int,
+    user_id: int,
+) -> None:
+    """Execute a workflow transition on any CRM entity (lead, deal, contact)."""
+    transition = db.query(TicketTransition).options(
+        joinedload(TicketTransition.to_status),
+        joinedload(TicketTransition.from_status),
+    ).filter(TicketTransition.id == transition_id).first()
+
+    if not transition:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Transition not found")
+    if transition.workflow_id != entity.workflow_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Transition does not belong to this entity's workflow")
+    if transition.from_status_id and transition.from_status_id != entity.status_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Transition not valid from current status")
+
+    # Validate required screen fields
+    if transition.screen_fields:
+        fv = data.field_values or {}
+        for sf in transition.screen_fields:
+            if sf.get("required") and sf.get("field") != "comment":
+                if not fv.get(sf["field"]):
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=422, detail=f"{sf['label']} is required")
+        if any(sf.get("required") and sf.get("field") == "comment" for sf in transition.screen_fields):
+            if not data.comment:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=422, detail="Comment is required")
+
+    # Apply status change
+    entity.status_id = transition.to_status_id
+
+    # Apply field values — built-in fields + custom fields
+    fv = data.field_values or {}
+    _BUILTIN_FIELDS = {"assignee_id", "priority", "due_date", "time_estimate"}
+
+    if "assignee_id" in fv and hasattr(entity, "assignee_id"):
+        entity.assignee_id = fv["assignee_id"]
+    if "priority" in fv and hasattr(entity, "priority"):
+        entity.priority = fv["priority"]
+    if "due_date" in fv and hasattr(entity, "due_date"):
+        entity.due_date = fv["due_date"]
+    if "time_estimate" in fv and hasattr(entity, "time_estimate"):
+        entity.time_estimate = fv["time_estimate"]
+
+    # Persist validated custom field values into entity.custom_fields
+    custom_fv = {k: v for k, v in fv.items() if k not in _BUILTIN_FIELDS}
+    if custom_fv:
+        from app.services.custom_field_service import validate_custom_field_values
+        # Determine entity_type from class name
+        entity_type_name = type(entity).__name__.lower()  # "lead", "deal", "contact", "ticket"
+        validated = validate_custom_field_values(
+            db, company_id, entity_type_name, custom_fv, required_only=True
+        )
+        existing_cf = dict(entity.custom_fields or {})
+        existing_cf.update(validated)
+        entity.custom_fields = existing_cf
+
+    # Apply post-actions
+    if transition.post_actions:
+        assign = transition.post_actions.get("assign_to", {})
+        atype = assign.get("type")
+        if atype == "reporter" and hasattr(entity, "reporter_id"):
+            entity.assignee_id = entity.reporter_id
+        elif atype == "unassign" and hasattr(entity, "assignee_id"):
+            entity.assignee_id = None
+        elif atype == "user":
+            uid = assign.get("value")
+            if uid and hasattr(entity, "assignee_id"):
+                entity.assignee_id = int(uid)
+        elif atype == "role":
+            from app.models.user import User
+            role_user = db.query(User).filter(
+                User.company_id == company_id, User.role == assign.get("value")
+            ).first()
+            if role_user and hasattr(entity, "assignee_id"):
+                entity.assignee_id = role_user.id
+
+    # Fire on_transition routing rules
+    if hasattr(entity, "assignee_id") and entity.assignee_id is None:
+        from app.services.routing_service import evaluate_and_route
+        entity_type_name = type(entity).__name__.lower()
+        evaluate_and_route(
+            db, entity, entity_type_name, company_id,
+            trigger="on_transition", transition_id=transition_id
+        )
+
+    db.commit()
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
@@ -99,18 +311,46 @@ def get_project(db: Session, project_id: int, company_id: int) -> Optional[Ticke
     ).first()
 
 
+def _create_workflow_for_project(db: Session, company_id: int, project_name: str) -> TicketWorkflow:
+    """Create a fresh workflow named after the project with the default statuses/transitions."""
+    workflow = TicketWorkflow(
+        company_id=company_id,
+        name=f"{project_name} Workflow",
+        is_default=False,
+    )
+    db.add(workflow)
+    db.flush()
+
+    for s in DEFAULT_WORKFLOW_STATUSES:
+        db.add(TicketStatus(workflow_id=workflow.id, company_id=company_id, **s))
+    db.flush()
+
+    statuses = db.query(TicketStatus).filter(TicketStatus.workflow_id == workflow.id).order_by(TicketStatus.position).all()
+    status_map = {s.name: s.id for s in statuses}
+    transitions = [
+        ("Start",        status_map.get("To Do"),       status_map.get("In Progress")),
+        ("Review",       status_map.get("In Progress"), status_map.get("In Review")),
+        ("Done",         status_map.get("In Review"),   status_map.get("Done")),
+        ("Reopen",       status_map.get("Done"),        status_map.get("To Do")),
+        ("Cancel",       None,                          status_map.get("Cancelled")),
+        ("Back to Todo", status_map.get("In Progress"), status_map.get("To Do")),
+    ]
+    for name, from_id, to_id in transitions:
+        if to_id:
+            db.add(TicketTransition(workflow_id=workflow.id, name=name, from_status_id=from_id, to_status_id=to_id))
+
+    return workflow
+
+
 def create_project(db: Session, project: schemas.TicketProjectCreate, company_id: int, user_id: int) -> TicketProject:
     seed_company_defaults(db, company_id)
 
-    # Assign default workflow if not specified
+    # Use explicitly provided workflow, otherwise create a project-specific one
     workflow_id = project.default_workflow_id
     if not workflow_id:
-        default_wf = db.query(TicketWorkflow).filter(
-            TicketWorkflow.company_id == company_id,
-            TicketWorkflow.is_default == True
-        ).first()
-        if default_wf:
-            workflow_id = default_wf.id
+        wf = _create_workflow_for_project(db, company_id, project.name)
+        db.flush()
+        workflow_id = wf.id
 
     db_project = TicketProject(
         **project.model_dump(exclude={"default_workflow_id"}),
@@ -447,6 +687,12 @@ def create_ticket(db: Session, data: schemas.TicketCreate, company_id: int, repo
         actor_id=reporter_id,
         action=TicketActivityAction.CREATED,
     ))
+
+    # Auto-assign via routing rules (only if no assignee already set)
+    if not ticket.assignee_id:
+        from app.services.routing_service import evaluate_and_route
+        evaluate_and_route(db, ticket, "ticket", company_id, trigger="on_create")
+
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -532,10 +778,11 @@ def execute_transition(db: Session, ticket_id: int, data: schemas.TicketTransiti
     old_status_id = ticket.status_id
     ticket.status_id = transition.to_status_id
 
-    # Apply field_values from screen
-    allowed_screen_fields = {"priority", "assignee_id", "due_date", "time_estimate"}
+    # Apply field_values from screen — built-in + custom fields
+    _BUILTIN = {"priority", "assignee_id", "due_date", "time_estimate"}
+    custom_fv = {}
     for fname, fval in field_values.items():
-        if fname in allowed_screen_fields and hasattr(ticket, fname):
+        if fname in _BUILTIN and hasattr(ticket, fname):
             if fname == "due_date" and fval:
                 try:
                     setattr(ticket, fname, datetime.strptime(fval, "%Y-%m-%d").date())
@@ -545,6 +792,15 @@ def execute_transition(db: Session, ticket_id: int, data: schemas.TicketTransiti
                 ticket.time_estimate = int(fval)
             else:
                 setattr(ticket, fname, fval)
+        elif fname not in _BUILTIN:
+            custom_fv[fname] = fval
+
+    if custom_fv:
+        from app.services.custom_field_service import validate_custom_field_values
+        validated = validate_custom_field_values(db, company_id, "ticket", custom_fv, required_only=True)
+        existing_cf = dict(ticket.custom_fields or {})
+        existing_cf.update(validated)
+        ticket.custom_fields = existing_cf
 
     # Mark resolved/closed based on target status category
     new_status = db.query(TicketStatus).filter(TicketStatus.id == transition.to_status_id).first()
@@ -600,6 +856,14 @@ def execute_transition(db: Session, ticket_id: int, data: schemas.TicketTransiti
             body=data.comment,
             is_internal=False,
         ))
+
+    # Fire on_transition routing rules if still unassigned
+    if not ticket.assignee_id:
+        from app.services.routing_service import evaluate_and_route
+        evaluate_and_route(
+            db, ticket, "ticket", company_id,
+            trigger="on_transition", transition_id=data.transition_id
+        )
 
     db.commit()
     db.refresh(ticket)

@@ -21,6 +21,8 @@ class TicketWorkflow(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
+    # "lead" | "deal" | "contact" | None (ticket-project workflows)
+    entity_type = Column(String, nullable=True, index=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

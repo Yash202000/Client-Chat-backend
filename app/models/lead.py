@@ -37,8 +37,12 @@ class Lead(Base):
     source = Column(String, nullable=True, index=True)  # e.g., "website", "campaign", "referral", "import"
     campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=True, index=True)
 
-    # Pipeline stage
-    stage = Column(Enum(LeadStage), default=LeadStage.LEAD, nullable=False, index=True)
+    # Workflow-driven status (new) — replaces hardcoded stage enum
+    workflow_id = Column(Integer, ForeignKey("ticket_workflows.id"), nullable=True, index=True)
+    status_id = Column(Integer, ForeignKey("ticket_statuses.id"), nullable=True, index=True)
+
+    # Pipeline stage (kept nullable for backward compat — use status_id going forward)
+    stage = Column(Enum(LeadStage), nullable=True, index=True)
     stage_changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     previous_stage = Column(Enum(LeadStage), nullable=True)
 
@@ -68,6 +72,8 @@ class Lead(Base):
 
     # Relationships
     contact = relationship("Contact", back_populates="leads")
+    workflow = relationship("TicketWorkflow", foreign_keys=[workflow_id])
+    status = relationship("TicketStatus", foreign_keys=[status_id])
     company = relationship("Company", back_populates="leads")
     assignee = relationship("User", foreign_keys=[assignee_id], back_populates="assigned_leads")
     campaign = relationship("Campaign", back_populates="leads")

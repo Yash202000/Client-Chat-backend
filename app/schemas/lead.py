@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from decimal import Decimal
 from app.schemas.contact import Contact as ContactSchema
+from app.schemas.ticket import StatusSummary, TicketTransitionOut, UserSummary
 
 
 class LeadBase(BaseModel):
@@ -10,7 +11,9 @@ class LeadBase(BaseModel):
     assignee_id: Optional[int] = None
     source: Optional[str] = None
     campaign_id: Optional[int] = None
-    stage: Optional[str] = "lead"
+    stage: Optional[str] = None
+    workflow_id: Optional[int] = None
+    status_id: Optional[int] = None
     qualification_status: Optional[str] = "unqualified"
     qualification_data: Optional[Dict[str, Any]] = None
     score: Optional[int] = 0
@@ -47,8 +50,10 @@ class LeadUpdate(BaseModel):
 class Lead(LeadBase):
     id: int
     company_id: int
-    stage: str
-    stage_changed_at: datetime
+    workflow_id: Optional[int] = None
+    status_id: Optional[int] = None
+    stage: Optional[str] = None
+    stage_changed_at: Optional[datetime] = None
     previous_stage: Optional[str] = None
     qualification_status: str
     score: int
@@ -58,13 +63,16 @@ class Lead(LeadBase):
     lost_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # Workflow-driven fields (populated by service layer)
+    status: Optional[StatusSummary] = None
+    assignee: Optional[UserSummary] = None
+    available_transitions: List[TicketTransitionOut] = []
 
     class Config:
         from_attributes = True
 
 
 class LeadWithContact(Lead):
-    """Lead schema with contact information included"""
     contact: Optional[ContactSchema] = None
 
     class Config:
@@ -72,8 +80,8 @@ class LeadWithContact(Lead):
 
 
 class LeadStageUpdate(BaseModel):
-    """Schema for updating lead stage"""
-    stage: str
+    status_id: Optional[int] = None
+    stage: Optional[str] = None
     reason: Optional[str] = None
 
 

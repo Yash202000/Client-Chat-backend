@@ -151,6 +151,7 @@ class TicketWorkflowOut(BaseModel):
     name: str
     description: Optional[str] = None
     is_default: bool
+    entity_type: Optional[str] = None
     statuses: List[TicketStatusOut] = []
     transitions: List[TicketTransitionOut] = []
     created_at: datetime

@@ -39,12 +39,32 @@ def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100, 
     return query.offset(skip).limit(limit).all()
 
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int, source: str = None):
+    from app.services.ticket_service import get_crm_workflow
+    from app.models.ticket_workflow import TicketStatus
+
+    contact_data = contact.model_dump()
+    workflow_id = None
+    status_id = None
+
+    wf = get_crm_workflow(db, company_id, "contact")
+    if wf:
+        workflow_id = wf.id
+        default_s = db.query(TicketStatus).filter(
+            TicketStatus.workflow_id == wf.id, TicketStatus.is_default == True
+        ).first() or db.query(TicketStatus).filter(
+            TicketStatus.workflow_id == wf.id
+        ).order_by(TicketStatus.position).first()
+        if default_s:
+            status_id = default_s.id
+
     db_contact = models_contact.Contact(
-        **contact.model_dump(),
-        company_id=company_id
+        **contact_data,
+        company_id=company_id,
+        workflow_id=workflow_id,
+        status_id=status_id,
     )
     db.add(db_contact)
-    db.flush()  # Get the contact ID without committing yet
+    db.flush()
 
     # Auto-create a Lead record for every new contact
     db_lead = Lead(

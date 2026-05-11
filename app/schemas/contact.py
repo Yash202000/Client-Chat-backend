@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from app.schemas.ticket import StatusSummary, TicketTransitionOut
 
 
 class ContactTagSchema(BaseModel):
@@ -48,6 +49,8 @@ class Contact(ContactBase):
     id: int
     company_id: int
     account_id: Optional[int] = None
+    workflow_id: Optional[int] = None
+    status_id: Optional[int] = None
     do_not_contact: bool
     opt_in_status: str
     opt_in_date: Optional[datetime] = None
@@ -57,8 +60,9 @@ class Contact(ContactBase):
     last_contacted_at: Optional[datetime] = None
     tags: Optional[List[ContactTagSchema]] = []
     profile_picture_url: Optional[str] = None
-    # Session channel — populated by by_session endpoint
     channel: Optional[str] = None
+    wf_status: Optional[StatusSummary] = None
+    available_transitions: List[TicketTransitionOut] = []
 
     class Config:
         from_attributes = True

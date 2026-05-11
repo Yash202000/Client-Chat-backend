@@ -23,6 +23,10 @@ class Deal(Base):
     currency = Column(String(3), nullable=False, default="USD")
     status = Column(Enum(DealStatus), default=DealStatus.OPEN, nullable=False, index=True)
 
+    # Workflow-driven status (new) — replaces hardcoded open/won/lost enum
+    workflow_id = Column(Integer, ForeignKey("ticket_workflows.id"), nullable=True, index=True)
+    status_id = Column(Integer, ForeignKey("ticket_statuses.id"), nullable=True, index=True)
+
     pipeline_id = Column(Integer, ForeignKey("pipelines.id"), nullable=False, index=True)
     stage_id = Column(Integer, ForeignKey("deal_stages.id"), nullable=False, index=True)
 
@@ -40,6 +44,8 @@ class Deal(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    workflow = relationship("TicketWorkflow", foreign_keys=[workflow_id])
+    wf_status = relationship("TicketStatus", foreign_keys=[status_id])
     pipeline = relationship("Pipeline", back_populates="deals")
     stage = relationship("DealStage", back_populates="deals")
     contact = relationship("Contact", back_populates="deals")

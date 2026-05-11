@@ -1,20 +1,31 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from typing import List, Optional
 from decimal import Decimal
 from app.models.deal import Deal, DealStatus
 from app.models.pipeline import DealStage
+from app.models.ticket_workflow import TicketStatus
 from app.schemas.deal import DealCreate, DealUpdate
 
 
+def _deal_query(db: Session):
+    return db.query(Deal).options(
+        joinedload(Deal.wf_status),
+        joinedload(Deal.contact),
+        joinedload(Deal.account),
+        joinedload(Deal.owner),
+        joinedload(Deal.stage),
+    )
+
+
 def get_deal(db: Session, deal_id: int, company_id: int) -> Optional[Deal]:
-    return db.query(Deal).filter(Deal.id == deal_id, Deal.company_id == company_id).first()
+    return _deal_query(db).filter(Deal.id == deal_id, Deal.company_id == company_id).first()
 
 
 def get_deals(db: Session, company_id: int, pipeline_id: Optional[int] = None,
               stage_id: Optional[int] = None, owner_id: Optional[int] = None,
               status: Optional[str] = None, skip: int = 0, limit: int = 100) -> List[Deal]:
-    q = db.query(Deal).filter(Deal.company_id == company_id)
+    q = _deal_query(db).filter(Deal.company_id == company_id)
     if pipeline_id:
         q = q.filter(Deal.pipeline_id == pipeline_id)
     if stage_id:
@@ -35,8 +46,32 @@ def search_deals(db: Session, company_id: int, query: str,
 
 
 def create_deal(db: Session, deal: DealCreate, company_id: int) -> Deal:
-    db_deal = Deal(**deal.model_dump(), company_id=company_id)
+    from app.services.ticket_service import get_crm_workflow
+    deal_data = deal.model_dump()
+    # Auto-assign the company deal workflow if not provided
+    if not deal_data.get("workflow_id"):
+        wf = get_crm_workflow(db, company_id, "deal")
+        if wf:
+            deal_data["workflow_id"] = wf.id
+            if not deal_data.get("status_id"):
+                default_s = db.query(TicketStatus).filter(
+                    TicketStatus.workflow_id == wf.id, TicketStatus.is_default == True
+                ).first() or db.query(TicketStatus).filter(
+                    TicketStatus.workflow_id == wf.id
+                ).order_by(TicketStatus.position).first()
+                if default_s:
+                    deal_data["status_id"] = default_s.id
+    db_deal = Deal(**deal_data, company_id=company_id)
     db.add(db_deal)
+    db.flush()
+
+    # Auto-assign via routing rules
+    if not getattr(db_deal, "owner_id", None):
+        from app.services.routing_service import evaluate_and_route
+        assigned_id = evaluate_and_route(db, db_deal, "deal", company_id, trigger="on_create")
+        if assigned_id and hasattr(db_deal, "owner_id"):
+            db_deal.owner_id = assigned_id
+
     db.commit()
     db.refresh(db_deal)
     return db_deal

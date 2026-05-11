@@ -5,7 +5,11 @@ import hashlib
 
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import contact_service, integration_service, messaging_service
+from app.services.ticket_service import (
+    get_crm_workflow, get_workflow_with_details, get_available_transitions, execute_entity_transition,
+)
 from app.schemas import contact as schemas_contact
+from app.schemas.ticket import TicketTransitionExecute as TicketTransitionData
 from app.models import conversation_session as models_conversation_session
 from app.models import user as models_user
 from app.models import integration as models_integration
@@ -25,6 +29,35 @@ def _resolve_profile_picture(contact) -> Optional[str]:
     return None
 
 router = APIRouter()
+
+
+@router.get("/workflow", dependencies=[Depends(require_permission("contact:read"))])
+def get_contact_workflow(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Return the contact workflow (statuses + transitions) for the current company."""
+    wf = get_crm_workflow(db, current_user.company_id, "contact")
+    if not wf:
+        raise HTTPException(status_code=404, detail="Contact workflow not found")
+    return get_workflow_with_details(db, wf.id)
+
+
+@router.post("/{contact_id}/transition", response_model=schemas_contact.Contact, dependencies=[Depends(require_permission("contact:update"))])
+def transition_contact(
+    contact_id: int,
+    data: TicketTransitionData,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    contact = contact_service.get_contact(db, contact_id=contact_id, company_id=current_user.company_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    execute_entity_transition(db, contact, data.transition_id, data, current_user.company_id, current_user.id)
+    db.refresh(contact)
+    contact.available_transitions = get_available_transitions(db, contact.workflow_id, contact.status_id)
+    return contact
+
 
 @router.get("/", response_model=List[schemas_contact.Contact], dependencies=[Depends(require_permission("contact:read"))])
 def read_contacts(
@@ -56,6 +89,10 @@ def read_contacts(
             "last_contacted_at": contact.last_contacted_at,
             "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in contact.tag_objects] if hasattr(contact, 'tag_objects') else [],
             "profile_picture_url": _resolve_profile_picture(contact),
+            "workflow_id": contact.workflow_id,
+            "status_id": contact.status_id,
+            "wf_status": {"id": contact.status.id, "name": contact.status.name, "color": contact.status.color, "category": contact.status.category} if getattr(contact, 'status', None) else None,
+            "available_transitions": get_available_transitions(db, contact.workflow_id, contact.status_id) if contact.workflow_id and contact.status_id else [],
         }
         result.append(contact_dict)
     return result

@@ -4,19 +4,35 @@ from typing import List, Optional, Dict, Any
 
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import lead_service, lead_qualification_service
+from app.services.ticket_service import (
+    get_crm_workflow, get_workflow_with_details, get_available_transitions, execute_entity_transition,
+)
 from app.schemas import lead as schemas_lead
+from app.schemas import ticket as schemas_ticket
 from app.schemas.lead_score import LeadScoreCreate
 from app.models import user as models_user
-from app.models.lead import LeadStage, QualificationStatus
+from app.models.lead import QualificationStatus
 
 router = APIRouter()
+
+
+@router.get("/workflow", dependencies=[Depends(require_permission("lead:read"))])
+def get_lead_workflow(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    """Return the lead workflow (statuses + transitions) for the current company."""
+    wf = get_crm_workflow(db, current_user.company_id, "lead")
+    if not wf:
+        raise HTTPException(status_code=404, detail="Lead workflow not found")
+    return get_workflow_with_details(db, wf.id)
 
 
 @router.get("/", response_model=List[schemas_lead.LeadWithContact], dependencies=[Depends(require_permission("lead:read"))])
 def list_leads(
     skip: int = 0,
     limit: int = 100,
-    stage: Optional[str] = None,
+    status_id: Optional[int] = None,
     assignee_id: Optional[int] = None,
     min_score: Optional[int] = None,
     max_score: Optional[int] = None,
@@ -27,16 +43,12 @@ def list_leads(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    """
-    List leads with optional filtering
-    """
-    # If filters are provided, use search
-    if any([stage, assignee_id, min_score, max_score, source, qualification_status, query, tag_ids]):
+    if any([status_id, assignee_id, min_score, max_score, source, qualification_status, query, tag_ids]):
         leads = lead_service.search_leads(
             db=db,
             company_id=current_user.company_id,
             query=query,
-            stage=LeadStage(stage) if stage else None,
+            status_id=status_id,
             assignee_id=assignee_id,
             min_score=min_score,
             max_score=max_score,
@@ -44,15 +56,17 @@ def list_leads(
             qualification_status=QualificationStatus(qualification_status) if qualification_status else None,
             tag_ids=tag_ids,
             skip=skip,
-            limit=limit
+            limit=limit,
         )
     else:
-        leads = lead_service.get_leads(
-            db=db,
-            company_id=current_user.company_id,
-            skip=skip,
-            limit=limit
-        )
+        leads = lead_service.get_leads(db=db, company_id=current_user.company_id, skip=skip, limit=limit)
+
+    # Attach available_transitions to each lead
+    for lead in leads:
+        if lead.workflow_id and lead.status_id:
+            lead.available_transitions = get_available_transitions(db, lead.workflow_id, lead.status_id)
+        else:
+            lead.available_transitions = []
     return leads
 
 
@@ -148,12 +162,27 @@ def get_lead(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    """
-    Get a specific lead by ID
-    """
     lead = lead_service.get_lead(db=db, lead_id=lead_id, company_id=current_user.company_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if lead.workflow_id and lead.status_id:
+        lead.available_transitions = get_available_transitions(db, lead.workflow_id, lead.status_id)
+    return lead
+
+
+@router.post("/{lead_id}/transition", response_model=schemas_lead.LeadWithContact, dependencies=[Depends(require_permission("lead:update"))])
+def transition_lead(
+    lead_id: int,
+    data: schemas_ticket.TicketTransitionExecute,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user)
+):
+    lead = lead_service.get_lead(db=db, lead_id=lead_id, company_id=current_user.company_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    execute_entity_transition(db, lead, data.transition_id, data, current_user.company_id, current_user.id)
+    db.refresh(lead)
+    lead.available_transitions = get_available_transitions(db, lead.workflow_id, lead.status_id)
     return lead
 
 
@@ -256,18 +285,16 @@ def update_lead_stage(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
-    """
-    Update lead stage with tracking
-    """
-    updated_lead = lead_service.update_lead_stage(
-        db=db,
-        lead_id=lead_id,
-        stage_update=stage_update,
-        company_id=current_user.company_id
-    )
-    if not updated_lead:
+    """Direct status update by status_id (use /transition for workflow-validated changes)."""
+    lead = lead_service.get_lead(db=db, lead_id=lead_id, company_id=current_user.company_id)
+    if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    return updated_lead
+    if stage_update.status_id:
+        lead.status_id = stage_update.status_id
+        lead.stage_changed_at = __import__("datetime").datetime.utcnow()
+        db.commit()
+        db.refresh(lead)
+    return lead
 
 
 @router.put("/{lead_id}/assign", response_model=schemas_lead.Lead, dependencies=[Depends(require_permission("lead:update"))])
