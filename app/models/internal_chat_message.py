@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, func, JSON, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, func, JSON, Boolean, Index
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -25,6 +25,11 @@ class InternalChatMessage(Base):
     attachments = relationship("ChatAttachment", back_populates="message", cascade="all, delete-orphan")
     reactions = relationship("MessageReaction", back_populates="message", cascade="all, delete-orphan")
     mentions = relationship("MessageMention", back_populates="message", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Covers the common query: WHERE channel_id = X AND parent_message_id IS NULL ORDER BY created_at DESC
+        Index('ix_chat_messages_channel_created', 'channel_id', 'created_at'),
+    )
 
     # Self-referential relationship for threading
     # When a parent message is deleted, its replies are also deleted

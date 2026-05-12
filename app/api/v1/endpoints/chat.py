@@ -171,12 +171,19 @@ async def create_message(
     
     message_data = chat_schema.InternalChatMessage.from_orm(new_message)
     websocket_message = WebSocketMessage(type="new_message", payload=message_data.model_dump())
-    
-    print(f"Broadcasting message: {websocket_message.model_dump_json()}")
-    # Broadcast the new message to all connected clients in the channel
+
+    # Broadcast to channel WebSocket (for members currently on that channel)
     await manager.broadcast(websocket_message.model_dump_json(), str(channel_id))
-    print(f"Finished broadcasting to channel {channel_id}")
-    
+
+    # Broadcast to company WebSocket so users on other pages get a toast notification
+    channel = crud_chat.get_channel(db, channel_id=channel_id)
+    channel_members = crud_chat.get_channel_members(db, channel_id=channel_id)
+    channel_member_ids = [m.id for m in channel_members]
+    company_msg = json.loads(websocket_message.model_dump_json())
+    company_msg['payload']['channel_member_ids'] = channel_member_ids
+    company_msg['payload']['channel_name'] = channel.name if channel else None
+    await manager.broadcast(json.dumps(company_msg), str(current_user.company_id))
+
     return new_message
 
 @router.post("/channels/{channel_id}/join", response_model=chat_schema.ChannelMembership, dependencies=[Depends(require_permission("chat:update"))])

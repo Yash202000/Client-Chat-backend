@@ -12,14 +12,22 @@ from app.crud import crud_notification
 
 # CRUD for ChatChannel
 def find_existing_dm(db: Session, user_id_1: int, user_id_2: int, company_id: int) -> Optional[ChatChannel]:
-    """Return existing DM channel between two users, or None."""
+    """Return existing 1-on-1 DM channel between exactly two users, or None."""
     user1_channels = db.query(ChannelMembership.channel_id).filter(ChannelMembership.user_id == user_id_1)
     user2_channels = db.query(ChannelMembership.channel_id).filter(ChannelMembership.user_id == user_id_2)
+    # Subquery: channels with exactly 2 members
+    exact_two = (
+        db.query(ChannelMembership.channel_id)
+        .group_by(ChannelMembership.channel_id)
+        .having(func.count(ChannelMembership.user_id) == 2)
+        .subquery()
+    )
     row = (
         db.query(ChatChannel.id)
         .filter(
             ChatChannel.id.in_(user1_channels),
             ChatChannel.id.in_(user2_channels),
+            ChatChannel.id.in_(exact_two),
             ChatChannel.channel_type == 'DM',
             ChatChannel.company_id == company_id,
         )
@@ -251,10 +259,12 @@ def create_system_message(db: Session, channel_id: int, content: str, extra_data
 
 def get_channel_messages(db: Session, channel_id: int, skip: int = 0, limit: int = 100) -> List[InternalChatMessage]:
     # Only get top-level messages (not replies)
-    return db.query(InternalChatMessage).filter(
+    # Fetch latest `limit` messages by ordering DESC, then reverse to return chronological order
+    rows = db.query(InternalChatMessage).filter(
         InternalChatMessage.channel_id == channel_id,
         InternalChatMessage.parent_message_id == None
-    ).order_by(InternalChatMessage.created_at.asc()).offset(skip).limit(limit).all()
+    ).order_by(InternalChatMessage.created_at.desc()).offset(skip).limit(limit).all()
+    return list(reversed(rows))
 
 def get_message_replies(db: Session, message_id: int, skip: int = 0, limit: int = 50) -> List[InternalChatMessage]:
     """Get all replies to a specific message"""
