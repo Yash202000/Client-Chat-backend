@@ -27,7 +27,6 @@ router = APIRouter()
 @router.post("")
 async def receive_linkedin_message(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
-    print(f"Received LinkedIn webhook data: {data}")
 
     try:
         # LinkedIn webhook structure is different. We need to parse it accordingly.
@@ -43,7 +42,6 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                         
                         integration = integration_service.get_integration_by_linkedin_company_id(db, linkedin_company_id=linkedin_company_id)
                         if not integration:
-                            print(f"Error: No active integration found for linkedin_company_id: {linkedin_company_id}")
                             continue
 
                         sender_id = message_event["sender"]["id"]
@@ -70,7 +68,6 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                         # Reopen resolved sessions when a new message arrives
                         if session.status == 'resolved':
                             session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
-                            print(f"Reopened resolved session {session.conversation_id} for incoming LinkedIn message")
 
                         chat_message = ChatMessageCreate(message=message_text, message_type="text")
                         created_message = chat_service.create_chat_message(db, chat_message, agent_id=None, session_id=session.conversation_id, company_id=company_id, sender="user")
@@ -82,7 +79,6 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                         )
 
                         if not session.is_ai_enabled:
-                            print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                             continue
 
                         # Check if a workflow is paused and waiting for input
@@ -156,7 +152,6 @@ async def receive_linkedin_message(request: Request, db: Session = Depends(get_d
                             logging.info(f"[LinkedIn] No trigger match, trying LLM-based routing")
                             agents = agent_service.get_agents(db, company_id=company_id, limit=1)
                             if not agents:
-                                print(f"Error: No agents found for company {company_id} to handle the response.")
                                 continue
                             agent = agents[0]
 

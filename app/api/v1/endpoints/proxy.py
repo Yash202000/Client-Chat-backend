@@ -32,7 +32,6 @@ async def image_proxy(url: str):
             )
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             # Return a transparent 1x1 PNG fallback instead of an error
-            print(f"[image-proxy] Failed to fetch image from {url}: {e}")
             return Response(
                 content=FALLBACK_IMAGE,
                 media_type="image/png",

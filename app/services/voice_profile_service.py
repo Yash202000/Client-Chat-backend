@@ -63,8 +63,7 @@ class VoiceProfileService:
         async with aiohttp.ClientSession() as session:
             async with session.delete(url, headers=headers) as response:
                 if response.status != 200:
-                    # Log the error but proceed with deleting from our DB anyway
-                    print(f"Warning: Failed to delete voice from ElevenLabs. Status: {response.status}")
+                    pass
 
         # Delete from our database
         self.db.delete(db_voice_profile)

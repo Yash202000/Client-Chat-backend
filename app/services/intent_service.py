@@ -4,6 +4,8 @@ import re
 from datetime import datetime
 from app.models.intent import Intent, IntentMatch, Entity, intent_entities
 from app.models.workflow import Workflow
+import logging
+logger = logging.getLogger(__name__)
 
 
 class IntentService:
@@ -34,15 +36,12 @@ class IntentService:
         ).order_by(Intent.priority.desc()).all()
 
         if not intents:
-            print(f"No active intents found for company {company_id}")
             return None
 
-        print(f"Checking message against {len(intents)} intents...")
 
         # Stage 1: Keyword matching (very fast)
         keyword_match = self._keyword_match(message, intents)
         if keyword_match and keyword_match[1] >= 0.9:  # High confidence (90%+)
-            print(f"✓ Keyword match: {keyword_match[0].name} ({keyword_match[1]:.2f})")
             return await self._finalize_intent_match(
                 keyword_match[0], message, conversation_id, keyword_match[1], "keyword"
             )
@@ -50,7 +49,6 @@ class IntentService:
         # Stage 2: Phrase similarity (medium speed)
         phrase_match = self._phrase_similarity_match(message, intents)
         if phrase_match and phrase_match[1] >= 0.8:  # Good confidence (80%+)
-            print(f"✓ Phrase similarity match: {phrase_match[0].name} ({phrase_match[1]:.2f})")
             return await self._finalize_intent_match(
                 phrase_match[0], message, conversation_id, phrase_match[1], "similarity"
             )
@@ -58,12 +56,10 @@ class IntentService:
         # Stage 3: LLM classification (accurate but slower)
         llm_match = await self._llm_classify_intent(message, intents)
         if llm_match and llm_match[1] >= llm_match[0].confidence_threshold:
-            print(f"✓ LLM match: {llm_match[0].name} ({llm_match[1]:.2f})")
             return await self._finalize_intent_match(
                 llm_match[0], message, conversation_id, llm_match[1], "llm"
             )
 
-        print(f"✗ No intent matched for message: '{message[:50]}...'")
         return None
 
     def _keyword_match(self, message: str, intents: List[Intent]) -> Optional[Tuple[Intent, float]]:
@@ -182,7 +178,7 @@ Respond with JSON in this exact format (no markdown, just raw JSON):
                     return (matched_intent, confidence)
 
         except Exception as e:
-            print(f"Error in LLM intent classification: {e}")
+            logger.exception(e)
 
         return None
 
@@ -239,16 +235,14 @@ Respond with JSON in this exact format (no markdown, just raw JSON):
                     match = re.search(entity.validation_regex, message)
                     if match:
                         extracted[entity.name] = match.group(0)
-                        print(f"✓ Extracted entity '{entity.name}': {match.group(0)} (regex)")
                 except Exception as e:
-                    print(f"Regex extraction error for {entity.name}: {e}")
+                    logger.exception(e)
 
             elif entity.extraction_method == "llm":
                 # LLM extraction
                 value = await self._llm_extract_entity(message, entity)
                 if value:
                     extracted[entity.name] = value
-                    print(f"✓ Extracted entity '{entity.name}': {value} (llm)")
 
         return extracted
 
@@ -284,7 +278,6 @@ Response (just the value or NOT_FOUND):"""
             return response
 
         except Exception as e:
-            print(f"Error extracting entity {entity.name}: {e}")
             return None
 
     def update_intent_match_execution_status(
@@ -320,7 +313,6 @@ async def generate_llm_response(prompt: str, temperature: float = 0.1, max_token
         # Use Groq API key from settings
         api_key = settings.GROQ_API_KEY
         if not api_key:
-            print("Warning: GROQ_API_KEY not configured, LLM intent classification disabled")
             return ""
 
         client = AsyncGroq(api_key=api_key, timeout=30.0)
@@ -336,5 +328,4 @@ async def generate_llm_response(prompt: str, temperature: float = 0.1, max_token
         return chat_completion.choices[0].message.content or ""
 
     except Exception as e:
-        print(f"Error generating LLM response: {e}")
         return ""

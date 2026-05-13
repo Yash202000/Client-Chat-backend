@@ -72,7 +72,6 @@ def execute_custom_tool(db: Session, tool: Tool, company_id: int, session_id: st
             )
             if follow_up_response:
                 tool_result["formatted_response"] = follow_up_response
-                print(f"[TOOL EXECUTION] Added follow-up response: {follow_up_response}")
 
         return tool_result
 
@@ -91,19 +90,14 @@ async def execute_mcp_tool(db_tool: Tool, mcp_tool_name: str, parameters: dict):
     mcp_server_url = db_tool.mcp_server_url
     actual_params = parameters or {}
 
-    print(f"DEBUG: Attempting to connect to MCP server at {mcp_server_url}")
     try:
         async with Client(mcp_server_url) as client:
-            print(f"DEBUG: Connected to MCP server. Calling tool '{mcp_tool_name}' with params: {actual_params}")
             if actual_params:
                 result = await client.call_tool(mcp_tool_name, arguments={"params": actual_params})
             else:
                 result = await client.call_tool(mcp_tool_name)
-            print(f"DEBUG: MCP tool call returned: {result}")
         return {"result": result}
     except Exception as e:
-        print(f"ERROR: An unexpected error occurred during MCP tool execution: {e}")
-        print(traceback.format_exc())
         return {
             "error": f"An error occurred on MCP server {mcp_server_url} while running tool '{mcp_tool_name}'.",
             "details": str(e)
@@ -131,7 +125,6 @@ async def execute_tool(
     Returns:
         Tool execution result dictionary, or None if tool not found
     """
-    print(f"[TOOL EXECUTION] Executing tool: {tool_name}")
 
     # Check if tool_name is None or empty
     if not tool_name:
@@ -161,7 +154,6 @@ async def execute_tool(
         db_tool = tool_service.get_tool_by_name(db, original_connection_name, company_id)
 
         if not db_tool or not db_tool.mcp_server_url:
-            print(f"[TOOL EXECUTION] Error: MCP connection '{original_connection_name}' not found.")
             return {"error": f"MCP connection '{original_connection_name}' not found."}
 
         return await execute_mcp_tool(
@@ -173,7 +165,6 @@ async def execute_tool(
     # Otherwise, it's a custom tool
     db_tool = tool_service.get_tool_by_name(db, tool_name, company_id)
     if not db_tool:
-        print(f"[TOOL EXECUTION] Error: Tool '{tool_name}' not found.")
         return {"error": f"Tool '{tool_name}' not found."}
 
     return execute_custom_tool(

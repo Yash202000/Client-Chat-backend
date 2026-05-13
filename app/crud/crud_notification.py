@@ -6,6 +6,8 @@ from datetime import datetime
 from app.services.connection_manager import manager
 import json
 import asyncio
+import logging
+logger = logging.getLogger(__name__)
 
 def create_notification(
     db: Session,
@@ -199,9 +201,8 @@ def _broadcast_unread_count(db: Session, user_id: int) -> None:
                 str(user.company_id)
             )
         )
-        print(f"[Notification] Broadcasted unread count ({unread_count}) to user {user_id}")
     except Exception as e:
-        print(f"[Notification] Error broadcasting unread count: {e}")
+        logger.exception(e)
 
 # Helper function to create missed call notifications
 def create_missed_call_notification(

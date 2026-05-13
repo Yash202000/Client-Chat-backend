@@ -18,6 +18,8 @@ from app.core.config import settings
 
 import httpx
 import numexpr
+import logging
+logger = logging.getLogger(__name__)
 
 
 class WorkflowExecutionService:
@@ -70,7 +72,6 @@ class WorkflowExecutionService:
         if not isinstance(value, str) or '{{' not in value:
             return value
 
-        print(f"DEBUG: Resolving placeholders in: '{value}' with context: {context}")
 
         def drill_down(obj, keys):
             """Helper to drill down into nested objects/dicts."""
@@ -90,10 +91,8 @@ class WorkflowExecutionService:
             if source == "context":
                 remaining_path = path[1:]
                 resolved_value = drill_down(context, remaining_path)
-                print(f"    - Source: context, Path: {remaining_path}, Value: '{resolved_value}'")
             else:
                 step_result = results.get(source)
-                print(f"    - Source: results, Step: {source}, Result: {step_result}")
                 if step_result:
                     remaining_path = path[1:]
                     resolved_value = drill_down(step_result, remaining_path) if remaining_path else step_result
@@ -106,7 +105,6 @@ class WorkflowExecutionService:
                             resolved_value = ''
                         else:
                             resolved_value = output_value
-                print(f"    - Resolved value: '{resolved_value}'")
 
             return resolved_value
 
@@ -116,20 +114,16 @@ class WorkflowExecutionService:
         single_placeholder_match = re.match(r"^\s*\{\{([^{}]+)\}\}\s*$", value)
         if single_placeholder_match:
             placeholder = single_placeholder_match.group(1).strip()
-            print(f"  - Found single placeholder: {placeholder}")
             resolved = resolve_single_placeholder(placeholder)
-            print(f"DEBUG: Returning actual value (type: {type(resolved).__name__}): {resolved}")
             return resolved
 
         # For embedded placeholders in text, convert to strings
         def replace_func(match):
             placeholder = match.group(1).strip()
-            print(f"  - Found placeholder: {placeholder}")
             resolved_value = resolve_single_placeholder(placeholder)
             return str(resolved_value) if resolved_value is not None else ''
 
         resolved_string = re.sub(r"\{\{(.*?)\}\}", replace_func, value)
-        print(f"DEBUG: Final resolved string: '{resolved_string}'")
         return resolved_string
 
     def _clear_validation_state(self, context: dict):
@@ -232,7 +226,6 @@ class WorkflowExecutionService:
                     resolved_args[arg_name] = resolved_value
                 arg_names_ordered.append(arg_name)
 
-        print(f"[CODE NODE] Arguments: {resolved_args}, Return vars: {return_variables}")
 
         # Build execution scope with arguments directly available
         execution_scope = {
@@ -275,7 +268,6 @@ class WorkflowExecutionService:
                             # Call the function with arguments in order
                             func = execution_scope[func_name]
                             arg_values = [resolved_args[name] for name in arg_names_ordered if name in resolved_args]
-                            print(f"[CODE NODE] Auto-calling function '{func_name}' with args: {arg_values}")
                             func_result = func(*arg_values)
 
                             # If there's one return variable, assign the function result to it
@@ -283,7 +275,6 @@ class WorkflowExecutionService:
                                 var_name = return_variables[0].strip()
                                 execution_scope[var_name] = func_result
                                 context[var_name] = func_result
-                                print(f"[CODE NODE] Output: {{{var_name}: {func_result}}}")
                                 return {"output": {var_name: func_result}}
                             elif return_variables and len(return_variables) > 1 and isinstance(func_result, (tuple, list)):
                                 # Multiple return values
@@ -293,11 +284,9 @@ class WorkflowExecutionService:
                                     if i < len(func_result):
                                         output[var_name] = func_result[i]
                                         context[var_name] = func_result[i]
-                                print(f"[CODE NODE] Output: {output}")
                                 return {"output": output if output else func_result}
                             else:
                                 # No return variables defined, just return the function result
-                                print(f"[CODE NODE] Output: {func_result}")
                                 return {"output": func_result}
 
                 # Collect return variables into output (for non-function code or manually called functions)
@@ -310,7 +299,6 @@ class WorkflowExecutionService:
                             # Also store in context for later use in workflow
                             context[var_name] = execution_scope[var_name]
 
-                    print(f"[CODE NODE] Output: {output}")
                     return {"output": output if output else "Code executed successfully."}
                 else:
                     # Legacy behavior: return the 'output' variable if set
@@ -318,7 +306,6 @@ class WorkflowExecutionService:
 
             except Exception as e:
                 import traceback
-                print(f"[CODE NODE] Error: {e}")
                 return {"error": f"Error executing code: {e}", "traceback": traceback.format_exc()}
 
         # Run the synchronous code execution in a thread pool to avoid blocking the event loop
@@ -356,15 +343,13 @@ class WorkflowExecutionService:
         # Resolve the variable placeholder to get the actual value from the context or results
         actual_value = self._resolve_placeholders(variable_placeholder, context, results)
 
-        print(f"    - Variable '{variable_placeholder}' resolved to: '{actual_value}' (type: {type(actual_value)})")
-        print(f"    - Operator: '{operator}', Comparison Value: '{comparison_value}'")
 
         # Coerce types for comparison where possible
         try:
             if isinstance(actual_value, (int, float)):
                 comparison_value = type(actual_value)(comparison_value)
         except (ValueError, TypeError):
-            pass
+            logger.exception("Unexpected error")
 
         result = False
         if operator == "equals":
@@ -394,7 +379,6 @@ class WorkflowExecutionService:
         elif operator == "is_not_set":
             result = actual_value is None or actual_value == ''
 
-        print(f"    - Result: {result}")
         return result
 
     def _execute_conditional_node(self, node_data: dict, context: dict, results: dict):
@@ -413,20 +397,16 @@ class WorkflowExecutionService:
 
         # Check if using new multi-condition format
         if conditions and isinstance(conditions, list) and len(conditions) > 0:
-            print(f"DEBUG: Executing multi-condition node with {len(conditions)} conditions:")
 
             for index, condition in enumerate(conditions):
                 variable = condition.get("variable", "")
                 operator = condition.get("operator", "equals")
                 value = condition.get("value", "")
 
-                print(f"  Condition {index} (handle '{index}'):")
                 if self._evaluate_single_condition(variable, operator, value, context, results):
-                    print(f"  ✓ Condition {index} matched! Routing to handle '{index}'")
                     return {"output": index}  # Return index for routing
 
             # No condition matched, return else
-            print(f"  ✗ No conditions matched. Routing to 'else' handle")
             return {"output": "else"}
 
         else:
@@ -435,9 +415,7 @@ class WorkflowExecutionService:
             operator = node_data.get("operator", "equals")
             comparison_value = node_data.get("value", "")
 
-            print(f"DEBUG: Executing single conditional node:")
             result = self._evaluate_single_condition(variable_placeholder, operator, comparison_value, context, results)
-            print(f"  - Condition evaluated to: {result}")
             return {"output": result}
 
     def _execute_foreach_loop_node(self, node_data: dict, context: dict, results: dict, node_id: str):
@@ -483,7 +461,6 @@ class WorkflowExecutionService:
 
             if len(resolved_array) == 0:
                 # Empty array - exit immediately
-                print(f"DEBUG: [ForEach] Empty array, exiting loop")
                 return {"output": "exit"}
 
             # Initialize index to 0
@@ -491,8 +468,6 @@ class WorkflowExecutionService:
             context[item_var] = resolved_array[0]
             context[index_var] = 0
 
-            print(f"DEBUG: [ForEach] Starting loop with {len(resolved_array)} items")
-            print(f"DEBUG: [ForEach] First item: {resolved_array[0]}")
             return {"output": "loop"}
 
         else:
@@ -503,7 +478,6 @@ class WorkflowExecutionService:
 
             if next_index >= len(array):
                 # Loop complete - clean up and exit
-                print(f"DEBUG: [ForEach] Loop complete after {len(array)} iterations")
                 del context[loop_index_key]
                 del context[loop_array_key]
                 return {"output": "exit"}
@@ -513,7 +487,6 @@ class WorkflowExecutionService:
             context[item_var] = array[next_index]
             context[index_var] = next_index
 
-            print(f"DEBUG: [ForEach] Iteration {next_index + 1}/{len(array)}, item: {array[next_index]}")
             return {"output": "loop"}
 
     def _execute_while_loop_node(self, node_data: dict, context: dict, results: dict, node_id: str):
@@ -540,7 +513,6 @@ class WorkflowExecutionService:
 
         if conditions and isinstance(conditions, list) and len(conditions) > 0:
             # Multi-condition: ALL conditions must be true (AND logic)
-            print(f"DEBUG: [While] Iteration {iteration}, evaluating {len(conditions)} conditions")
 
             all_true = True
             for idx, condition in enumerate(conditions):
@@ -549,23 +521,19 @@ class WorkflowExecutionService:
                 value = condition.get("value", "")
 
                 result = self._evaluate_single_condition(variable, operator, value, context, results)
-                print(f"DEBUG: [While] Condition {idx}: {variable} {operator} {value} = {result}")
 
                 if not result:
                     all_true = False
                     break
 
             if all_true:
-                print(f"DEBUG: [While] All conditions true, continuing loop")
                 return {"output": "loop"}
             else:
-                print(f"DEBUG: [While] Condition(s) false, exiting loop after {iteration} iterations")
                 del context[iteration_key]
                 return {"output": "exit"}
 
         else:
             # No conditions - exit immediately (prevents infinite loop)
-            print(f"DEBUG: [While] No conditions configured, exiting loop")
             if iteration_key in context:
                 del context[iteration_key]
             return {"output": "exit"}
@@ -659,10 +627,9 @@ class WorkflowExecutionService:
                     if isinstance(value, dict) and "attachments" in value:
                         attachments = value.get("attachments", [])
                         if attachments:
-                            print(f"DEBUG: Found attachments in context variable '{key}'")
                             break
         else:
-            print(f"DEBUG: Vision not enabled for agent, skipping attachments")
+            pass
 
         llm_response = await self.llm_tool_service.execute(
             model=node_data.get("model"),
@@ -703,7 +670,6 @@ class WorkflowExecutionService:
             min_confidence = route.get("min_confidence", 0.7)
 
             if detected_intent == intent_name and intent_confidence >= min_confidence:
-                print(f"✓ Intent router: Routing to '{intent_name}' (confidence: {intent_confidence:.2f})")
                 return {
                     "output": intent_name,
                     "route": intent_name,
@@ -711,7 +677,6 @@ class WorkflowExecutionService:
                 }
 
         # No matching route, use default
-        print(f"✓ Intent router: Using default route (no intent match)")
         return {
             "output": "default",
             "route": "default",
@@ -736,10 +701,8 @@ class WorkflowExecutionService:
         for entity_name in entities_to_collect:
             if entity_name in context and context[entity_name]:
                 collected_entities[entity_name] = context[entity_name]
-                print(f"✓ Entity '{entity_name}' already in context: {context[entity_name]}")
             else:
                 missing_entities.append(entity_name)
-                print(f"✗ Entity '{entity_name}' missing from context")
 
         if not missing_entities:
             # All entities collected
@@ -762,7 +725,6 @@ class WorkflowExecutionService:
         first_missing = missing_entities[0]
         prompt_text = prompts.get(first_missing, f"Please provide your {first_missing}")
 
-        print(f"ℹ Prompting user for entity '{first_missing}'")
 
         return {
             "status": "paused_for_prompt",
@@ -799,7 +761,6 @@ class WorkflowExecutionService:
         else:
             has_entity = False
 
-        print(f"✓ Check entity '{entity_name}': {has_entity} (value: {entity_value})")
 
         return {
             "output": has_entity,
@@ -847,7 +808,6 @@ class WorkflowExecutionService:
                 context[var_name] = resolved_value
 
             updated_vars[var_name] = context[var_name]
-            print(f"✓ Updated context: {var_name} = {context[var_name]} (mode: {update_mode})")
 
         # Also support legacy variables dict format
         variables = node_data.get("variables", {})
@@ -855,7 +815,6 @@ class WorkflowExecutionService:
             resolved_value = self._resolve_placeholders(str(value), context, results)
             context[name] = resolved_value
             updated_vars[name] = resolved_value
-            print(f"✓ Updated context: {name} = {resolved_value}")
 
         return {
             "output": "Context updated",
@@ -888,7 +847,6 @@ class WorkflowExecutionService:
                     self.db, conversation_id, session_context
                 )
 
-                print(f"✓ Added tags to conversation: {resolved_tags}")
 
                 return {
                     "output": "Tags added",
@@ -896,7 +854,6 @@ class WorkflowExecutionService:
                     "all_tags": updated_tags
                 }
         except Exception as e:
-            print(f"✗ Error adding tags: {e}")
             return {"error": f"Failed to add tags: {e}"}
 
     def _execute_assign_to_agent_node(
@@ -940,14 +897,12 @@ class WorkflowExecutionService:
                     self.db, conversation_id, session_context
                 )
 
-                print(f"✓ Assigned conversation to {assignment_type}: {pool_name or agent_id}")
 
                 return {
                     "output": "Assigned to agent",
                     "assignment": assignment_info
                 }
         except Exception as e:
-            print(f"✗ Error assigning to agent: {e}")
             return {"error": f"Failed to assign to agent: {e}"}
 
     def _execute_set_status_node(self, node_data: dict, context: dict, results: dict, conversation_id: str):
@@ -979,7 +934,6 @@ class WorkflowExecutionService:
                     self.db, conversation_id, session_context
                 )
 
-            print(f"✓ Set conversation status to: {status}")
 
             return {
                 "output": f"Status set to {status}",
@@ -987,7 +941,6 @@ class WorkflowExecutionService:
                 "reason": resolved_reason
             }
         except Exception as e:
-            print(f"✗ Error setting status: {e}")
             return {"error": f"Failed to set status: {e}"}
 
     async def _execute_channel_redirect_node(
@@ -1049,7 +1002,6 @@ class WorkflowExecutionService:
         fallback_on_failure = node_data.get("fallback_on_failure", "continue")
         max_retries = node_data.get("max_retries", 3)
 
-        print(f"✓ Channel Redirect: {redirect_type} to {target_channel} (workflow: {workflow_continuation})")
 
         try:
             # Step 1: Resolve target contact information
@@ -1063,7 +1015,6 @@ class WorkflowExecutionService:
                     error_msg += f"contact record, "
                 if contact_info_source in ["auto", "variable"] and variable_name:
                     error_msg += f"context.{variable_name}"
-                print(f"✗ Channel Redirect: {error_msg}")
 
                 if fallback_on_failure == "error_edge":
                     return {
@@ -1074,7 +1025,6 @@ class WorkflowExecutionService:
                     }
                 return {"output": "redirect_skipped", "error_message": error_msg}
 
-            print(f"  → Target recipient: {recipient_id} (source: {info_source})")
 
             # Step 2: Get integration for target channel
             integration_type = self._get_integration_type_for_channel(target_channel)
@@ -1084,7 +1034,6 @@ class WorkflowExecutionService:
 
             if not integration:
                 error_msg = f"No {target_channel} integration configured for this company"
-                print(f"✗ Channel Redirect: {error_msg}")
 
                 if fallback_on_failure == "error_edge":
                     return {
@@ -1105,7 +1054,7 @@ class WorkflowExecutionService:
             )
 
             if target_session:
-                print(f"  → Found existing session: {target_session.conversation_id}")
+                pass
             else:
                 # No existing session found, create a new one using recipient_id
                 target_workflow_id = workflow_id if workflow_continuation == "transfer" else None
@@ -1117,7 +1066,6 @@ class WorkflowExecutionService:
                     channel=target_channel,
                     company_id=company_id
                 )
-                print(f"  → Created new session: {target_session.conversation_id}")
 
             # Step 4: Execute redirect based on type
             if redirect_type == "invite_link":
@@ -1157,7 +1105,6 @@ class WorkflowExecutionService:
                 )
 
                 self.db.commit()
-                print(f"  → Workflow transferred to target session (next_step: {next_node_id})")
                 stop_execution = True
 
             # Step 6: Handle original session behavior
@@ -1165,7 +1112,6 @@ class WorkflowExecutionService:
                 original_session_behavior, conversation_id, target_session.conversation_id
             )
 
-            print(f"✓ Channel Redirect: Successfully initiated to {target_channel}")
 
             return {
                 "output": "workflow_transferred" if stop_execution else "redirect_initiated",
@@ -1178,7 +1124,6 @@ class WorkflowExecutionService:
             }
 
         except Exception as e:
-            print(f"✗ Channel Redirect Error: {e}")
             if fallback_on_failure == "error_edge":
                 return {
                     "output": None,
@@ -1287,7 +1232,6 @@ class WorkflowExecutionService:
             else:
                 return {"error": "unsupported_channel", "error_message": f"Channel {target_channel} not supported"}
 
-            print(f"  → Invite message sent to {target_channel}")
             return {"output": "message_sent", "result": result}
 
         except Exception as e:
@@ -1333,7 +1277,6 @@ class WorkflowExecutionService:
                 conversation_session_service.update_session_context(
                     self.db, target_session.conversation_id, target_context
                 )
-                print(f"  → Context copied to target session")
 
             # Send transfer welcome message
             resolved_message = self._resolve_placeholders(transfer_message, context, results)
@@ -1357,7 +1300,6 @@ class WorkflowExecutionService:
             else:
                 return {"error": "unsupported_channel", "error_message": f"Channel {target_channel} not supported"}
 
-            print(f"  → Transfer message sent to {target_channel}")
             return {"output": "transfer_complete", "result": result}
 
         except Exception as e:
@@ -1389,7 +1331,6 @@ class WorkflowExecutionService:
 
             session_update = ConversationSessionUpdate(status="paused")
             conversation_session_service.update_session(self.db, original_conversation_id, session_update)
-            print(f"  → Original session paused")
 
         elif behavior == "close":
             # Close/resolve session
@@ -1404,7 +1345,6 @@ class WorkflowExecutionService:
 
             session_update = ConversationSessionUpdate(status="resolved")
             conversation_session_service.update_session(self.db, original_conversation_id, session_update)
-            print(f"  → Original session closed/resolved")
 
         else:  # keep_active
             # Just link sessions in context for reference
@@ -1417,7 +1357,6 @@ class WorkflowExecutionService:
             conversation_session_service.update_session_context(
                 self.db, original_conversation_id, session_context
             )
-            print(f"  → Original session kept active, linked to target")
 
     async def _execute_question_classifier_node(self, node_data: dict, context: dict, results: dict, company_id: int):
         """
@@ -1433,11 +1372,9 @@ class WorkflowExecutionService:
         question = context.get(input_variable, "")
 
         if not question:
-            print(f"✗ Question classifier: No input found in '{input_variable}'")
             return {"output": "default", "classification": None}
 
         if not classes:
-            print(f"✗ Question classifier: No classes configured")
             return {"output": "default", "classification": None}
 
         # Build classification prompt
@@ -1460,7 +1397,6 @@ Instructions:
 
 Category:"""
 
-        print(f"✓ Question classifier: Classifying '{question[:50]}...' into classes: {class_names}")
 
         try:
             # Call LLM using existing llm_tool_service
@@ -1488,16 +1424,13 @@ Category:"""
                     break
 
             if matched_class:
-                print(f"✓ Question classifier: Classified as '{matched_class}'")
                 context[output_variable] = matched_class
                 return {"output": matched_class, "classification": matched_class}
             else:
-                print(f"ℹ Question classifier: LLM returned '{classification}' which doesn't match any class, using default")
                 context[output_variable] = "default"
                 return {"output": "default", "classification": None}
 
         except Exception as e:
-            print(f"✗ Question classifier error: {e}")
             return {"output": "default", "classification": None, "error": str(e)}
 
     async def _execute_extract_entities_node(self, node_data: dict, context: dict, results: dict, company_id: int, workflow: Workflow, conversation_id: str):
@@ -1512,7 +1445,6 @@ Category:"""
         max_retries = node_data.get("max_retries", 2)
 
         if not entities_config:
-            print("✗ Extract entities: No entities configured")
             return {"output": {}, "status": "complete"}
 
         # Check if resuming from pause (user providing missing entity)
@@ -1526,7 +1458,6 @@ Category:"""
         )
 
         if extracting_entity_name and not is_valid_resume:
-            print(f"⚠ Extract entities: Stale resume markers detected (variable_to_save='{variable_to_save}' != extracting_entity_name='{extracting_entity_name}'). Starting fresh extraction.")
             # Clear stale markers and entity values
             context.pop("_extracting_entity_name", None)
             context.pop("_missing_entities", None)
@@ -1546,7 +1477,6 @@ Category:"""
                 except (json.JSONDecodeError, TypeError):
                     missing_entities = []
 
-            print(f"✓ Extract entities: Resuming, user provided value for '{extracting_entity_name}'")
 
             # Get the user's response - try extracting_entity_name first, then fall back to user_message
             user_provided_text = context.get(extracting_entity_name, "") or context.get("user_message", "")
@@ -1628,13 +1558,10 @@ Extracted value:"""
                                 agent_id=self._executing_agent_id,
                                 session_id=conversation_id
                             )
-                            print(f"✓ Extracted and validated '{extracted_value}' for {extracting_entity_name} (type: {entity_type})")
                         else:
-                            # Validation failed - don't save, keep in missing list
-                            print(f"✗ Validation failed for {extracting_entity_name}: {validation_error}")
+                            pass
 
                     except Exception as e:
-                        print(f"✗ LLM extraction failed for {extracting_entity_name}: {e}, using raw input")
                         context[extracting_entity_name] = user_provided_text
                         is_valid = True  # Exception path - accept raw input
                 else:
@@ -1642,7 +1569,6 @@ Extracted value:"""
                     context[extracting_entity_name] = user_provided_text
                     is_valid = True
             else:
-                print(f"⚠ Warning: No user input found for '{extracting_entity_name}', using empty value")
                 context[extracting_entity_name] = ""
                 is_valid = True
 
@@ -1694,7 +1620,6 @@ Extracted value:"""
                         session_id=conversation_id
                     )
 
-                    print(f"ℹ Extract entities: Still missing {len(missing_entities)} entities, asking for '{next_entity_name}'")
 
                     return {
                         "status": "paused_for_prompt",
@@ -1716,7 +1641,6 @@ Extracted value:"""
                 entity_name = entity_config["name"]
                 extracted_entities[entity_name] = context.get(entity_name)
 
-            print(f"✓ Extract entities: All entities collected: {list(extracted_entities.keys())}")
             return {"output": extracted_entities, "status": "complete"}
 
         # First time execution - attempt LLM extraction
@@ -1724,7 +1648,6 @@ Extracted value:"""
         input_text = self._resolve_placeholders(input_source, context, results)
 
         if not input_text:
-            print(f"✗ Extract entities: No input text found from source '{input_source}'")
             input_text = ""
 
         # Build LLM extraction prompt
@@ -1744,7 +1667,6 @@ Message: "{input_text}"
 
 Return only valid JSON, nothing else:"""
 
-        print(f"✓ Extract entities: Attempting to extract {len(entities_config)} entities from: '{input_text[:100]}...'")
 
         try:
             # Call LLM
@@ -1780,10 +1702,8 @@ Return only valid JSON, nothing else:"""
             if not isinstance(extracted_entities, dict):
                 raise ValueError(f"LLM returned non-dict response: {type(extracted_entities)}")
 
-            print(f"✓ Extract entities: LLM returned: {extracted_entities}")
 
         except Exception as e:
-            print(f"✗ Extract entities: LLM extraction failed: {e}")
             import traceback
             traceback.print_exc()
             # Treat all as missing
@@ -1837,27 +1757,21 @@ Return only valid JSON, nothing else:"""
                         agent_id=self._executing_agent_id,
                         session_id=conversation_id
                     )
-                    print(f"✓ Entity '{entity_name}' extracted and validated: {entity_value} (type: {entity_type})")
                 else:
                     # Validation failed - treat as missing
                     if is_required:
                         missing_entities.append(entity_name)
-                        print(f"✗ Entity '{entity_name}' extracted but validation failed: {validation_error}")
                     else:
                         context[entity_name] = None
-                        print(f"ℹ Entity '{entity_name}' validation failed but optional: {validation_error}")
             elif is_required:
                 # Missing and required
                 missing_entities.append(entity_name)
-                print(f"✗ Entity '{entity_name}' missing and required")
             else:
                 # Missing but optional
                 context[entity_name] = None
-                print(f"ℹ Entity '{entity_name}' missing but optional, setting to null")
 
         # If all required entities extracted, return success
         if not missing_entities:
-            print(f"✓ Extract entities: All required entities extracted successfully")
             return {"output": extracted_entities, "status": "complete"}
 
         # Some entities missing - pause and ask for first one
@@ -1896,7 +1810,6 @@ Return only valid JSON, nothing else:"""
             session_id=conversation_id
         )
 
-        print(f"ℹ Extract entities: {len(missing_entities)} entities missing, asking for '{first_missing}'")
 
         return {
             "status": "paused_for_prompt",
@@ -2006,7 +1919,6 @@ Return only valid JSON, nothing else:"""
         if not subworkflow:
             return {"error": f"Subworkflow with ID {subworkflow_id} not found"}
 
-        print(f"✓ Subworkflow node: Executing subworkflow '{subworkflow.name}' (ID: {subworkflow_id}) at depth {current_depth + 1}")
 
         # Return execution directive - actual execution happens in execute_workflow
         return {
@@ -2042,11 +1954,10 @@ Return only valid JSON, nothing else:"""
         self._executing_agent = executing_agent
         self._executing_agent_id = executing_agent_id
 
-        print(f"DEBUG: Fetched workflow: {workflow_obj.name} (ID: {workflow_obj.id})")
         if executing_agent:
-            print(f"DEBUG: Executing agent: {executing_agent.name} (ID: {executing_agent.id})")
+            pass
         else:
-            print("DEBUG: No executing agent set for workflow.")
+            pass
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
 
@@ -2068,7 +1979,6 @@ Return only valid JSON, nothing else:"""
         # ============================================================
         # Check if this workflow has intent detection enabled
         if self.workflow_intent_service.workflow_has_intents_enabled(workflow_obj):
-            print(f"DEBUG: Intent detection enabled for workflow '{workflow_obj.name}'")
 
             intent_match = await self.workflow_intent_service.detect_intent_for_workflow(
                 message=user_message,
@@ -2079,7 +1989,6 @@ Return only valid JSON, nothing else:"""
 
             if intent_match:
                 intent_dict, confidence, entities, matched_method = intent_match
-                print(f"✓ Workflow intent detected: {intent_dict.get('name')} (confidence: {confidence:.2f}, method: {matched_method})")
 
                 # Add detected intent information to context
                 context['detected_intent'] = intent_dict.get('name')
@@ -2088,7 +1997,6 @@ Return only valid JSON, nothing else:"""
 
                 # Merge extracted entities into context
                 if entities:
-                    print(f"✓ Extracted entities: {entities}")
                     context.update(entities)
 
                     # Save entities to memory for persistence
@@ -2104,10 +2012,9 @@ Return only valid JSON, nothing else:"""
                 # Check if confidence meets auto-trigger threshold
                 if not self.workflow_intent_service.should_auto_trigger(workflow_obj, confidence):
                     min_confidence = workflow_obj.intent_config.get("min_confidence", 0.7)
-                    print(f"ℹ Intent confidence {confidence:.2f} below threshold {min_confidence}, workflow may not proceed")
                     # Continue execution anyway since workflow was explicitly called
             else:
-                print(f"✗ No intent matched for workflow '{workflow_obj.name}'")
+                pass
 
         results = {}
 
@@ -2118,12 +2025,10 @@ Return only valid JSON, nothing else:"""
         if visual_steps_data is None and hasattr(workflow_obj, 'versions') and workflow_obj.versions:
             active_version = next((v for v in workflow_obj.versions if v.is_active), None)
             if active_version and active_version.visual_steps:
-                print(f"DEBUG: Using active version {active_version.id} (v{active_version.version}) instead of parent {workflow_obj.id}")
                 visual_steps_data = active_version.visual_steps
 
         # Handle None or empty visual_steps
         if visual_steps_data is None:
-            print(f"WARNING: Workflow {workflow_obj.id} has no visual_steps defined")
             return {"status": "error", "response": "Workflow configuration is incomplete. Please contact support."}
 
         if isinstance(visual_steps_data, str):
@@ -2134,12 +2039,10 @@ Return only valid JSON, nothing else:"""
 
         # Validate that visual_steps_data has required structure
         if not isinstance(visual_steps_data, dict):
-            print(f"WARNING: Workflow {workflow_obj.id} visual_steps is not a dict: {type(visual_steps_data)}")
             return {"status": "error", "response": "Workflow configuration is invalid. Please contact support."}
 
         graph_engine = GraphExecutionEngine(visual_steps_data)
         
-        print(f"DEBUG: Workflow resumed with user_message: '{user_message}'")
         # Check if workflow is paused (indicated by next_step_id being set)
         should_resume = False
         if session.next_step_id:
@@ -2148,7 +2051,6 @@ Return only valid JSON, nothing else:"""
             # Check if the node exists in the current workflow version
             # This can fail if the workflow version was changed while session was paused
             if current_node_id not in graph_engine.nodes:
-                print(f"WARNING: Paused node '{current_node_id}' not found in current workflow version. Restarting workflow.")
                 # Reset session state and start fresh
                 session_update = ConversationSessionUpdate(
                     next_step_id=None,
@@ -2163,7 +2065,6 @@ Return only valid JSON, nothing else:"""
                 memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=self._executing_agent_id, session_id=conversation_id)
             else:
                 should_resume = True
-                print(f"DEBUG: Resuming from paused state. Context from memory: {context}")
                 # Add attachments to context when resuming
                 context["user_attachments"] = attachments or []
 
@@ -2203,16 +2104,13 @@ Return only valid JSON, nothing else:"""
                                 option_key = validation_result.matched_option_key
                             else:
                                 user_message = validation_result.matched_option_key
-                        print(f"DEBUG: Validation passed - matched: {validation_result.matched_option_key}, confidence: {validation_result.confidence}")
                         self._clear_validation_state(context)
                     else:
                         # Validation failed - check retry count
                         retry_count += 1
-                        print(f"DEBUG: Validation failed ({retry_count}/{max_retries}): {validation_result.reason}")
 
                         if retry_count >= max_retries:
                             # Max retries exceeded - clear state and continue with original input
-                            print(f"DEBUG: Max retries exceeded, continuing with original input")
                             self._clear_validation_state(context)
                         else:
                             # Re-ask with hint
@@ -2273,15 +2171,12 @@ Return only valid JSON, nothing else:"""
                     # Store extracted value for later use (LLM mode extracts entities from responses)
                     if validation_result.extracted_value:
                         listen_extracted_value = validation_result.extracted_value
-                        print(f"DEBUG: LLM extracted value: '{listen_extracted_value}' from '{user_message}'")
 
                     if not validation_result.is_valid:
                         listen_retry_count += 1
-                        print(f"DEBUG: Listen validation failed ({listen_retry_count}/{listen_max_retries}): {validation_result.reason}")
 
                         if listen_retry_count >= listen_max_retries:
                             # Max retries - continue anyway
-                            print(f"DEBUG: Listen max retries exceeded, continuing")
                             self._clear_listen_validation_state(context)
                         else:
                             # Re-ask with hint message
@@ -2331,7 +2226,6 @@ Return only valid JSON, nothing else:"""
 
                 # The variable to save was stored in the context before pausing.
                 variable_to_save = context.get("variable_to_save")
-                print(f"DEBUG: Retrieved variable_to_save: '{variable_to_save}'")
                 if variable_to_save:
                     # Determine what value to save to the workflow variable
                     # Priority: option_key > LLM extracted value > raw user_message
@@ -2339,10 +2233,8 @@ Return only valid JSON, nothing else:"""
                         value_to_save = option_key
                     elif listen_extracted_value:
                         value_to_save = listen_extracted_value
-                        print(f"DEBUG: Using LLM extracted value: '{value_to_save}'")
                     else:
                         value_to_save = user_message
-                    print(f"DEBUG: Will save to variable '{variable_to_save}': option_key={option_key}, extracted={listen_extracted_value}, user_message={user_message}, value_to_save={value_to_save}")
 
                     # Check if the incoming message is a JSON string (from a form submission)
                     try:
@@ -2356,13 +2248,11 @@ Return only valid JSON, nothing else:"""
                                 "text": value_to_save,
                                 "attachments": attachments
                             }
-                            print(f"DEBUG: Saved message with {len(attachments)} attachment(s) to '{variable_to_save}'")
                         else:
                             # Check if this is a location input that needs geocoding
                             expected_input_type = context.get("expected_input_type")
                             if expected_input_type == "location" and isinstance(value_to_save, str) and value_to_save.strip():
                                 # User typed a text location (Instagram, etc.) - geocode it
-                                print(f"DEBUG: Geocoding text location: '{value_to_save}'")
                                 geocoded = await geocoding_service.forward_geocode(value_to_save)
                                 if geocoded and geocoded.get("latitude") and geocoded.get("longitude"):
                                     # Format to match WhatsApp/WebSocket location format
@@ -2382,7 +2272,6 @@ Return only valid JSON, nothing else:"""
                                         "display_name": geocoded.get("display_name", value_to_save),
                                         "original_input": value_to_save
                                     }
-                                    print(f"DEBUG: Geocoded location: lat={lat}, lng={lng}")
                                 else:
                                     # If geocoding fails, save as text with empty location
                                     context[variable_to_save] = {
@@ -2396,7 +2285,6 @@ Return only valid JSON, nothing else:"""
                                 context[variable_to_save] = value_to_save
                         # Clear expected_input_type after processing
                         context.pop("expected_input_type", None)
-                    print(f"DEBUG: Context after updating with user message: {context}")
                     # Save the updated context back to memory
                     memory_service.set_memory(self.db, MemoryCreate(key=variable_to_save, value=context[variable_to_save]), agent_id=self._executing_agent_id, session_id=conversation_id)
         else:
@@ -2639,7 +2527,6 @@ Return only valid JSON, nothing else:"""
                                             integration=whatsapp_integration,
                                             db=self.db
                                         )
-                                        print(f"[workflow_execution] Sent intermediate response to WhatsApp: {message_text[:50]}...")
                                 elif session_channel == 'telegram':
                                     # Get Telegram integration
                                     telegram_integration = integration_service.get_integration_by_type_and_company(
@@ -2651,10 +2538,9 @@ Return only valid JSON, nothing else:"""
                                             message_text=message_text,
                                             integration=telegram_integration
                                         )
-                                        print(f"[workflow_execution] Sent intermediate response to Telegram: {message_text[:50]}...")
                                 # Add other channels as needed (instagram, messenger)
                             except Exception as channel_error:
-                                print(f"[workflow_execution] Error sending to {session_channel}: {channel_error}")
+                                logger.exception(channel_error)
 
                         # Generate TTS only for voice-capable channels (web_chat, twilio_voice, freeswitch)
                         elif session_channel not in text_channels:
@@ -2671,7 +2557,7 @@ Return only valid JSON, nothing else:"""
                                         try:
                                             openai_api_key = credential_service.get_decrypted_credential(self.db, openai_credential.id, workflow_obj.company_id)
                                         except Exception:
-                                            pass
+                                            logger.exception("Unexpected error")
                                     tts_service = TTSService(openai_api_key=openai_api_key)
                                     # Use message_text (already extracted from dict if needed)
                                     audio_stream = tts_service.text_to_speech_stream(message_text, voice_id, tts_provider)
@@ -2684,9 +2570,8 @@ Return only valid JSON, nothing else:"""
                                         json.dumps({"type": "audio_end"}),
                                         "agent"
                                     )
-                                    print(f"[workflow_execution] TTS audio sent for intermediate response in session: {conversation_id}")
                             except Exception as tts_error:
-                                print(f"[workflow_execution] TTS error for intermediate response: {tts_error}")
+                                logger.exception(tts_error)
 
             # ============================================================
             # NEW CHAT-SPECIFIC NODES
@@ -2817,8 +2702,6 @@ Return only valid JSON, nothing else:"""
                         # Check both 'output_variable' and 'save_to_variable' for backward compatibility
                         variable_to_save = params.get("output_variable") or params.get("save_to_variable")
                 
-                print(f"DEBUG: Pausing node data: {node_data}")
-                print(f"DEBUG: 'output_variable' from node data is: '{variable_to_save}'")
                 if variable_to_save:
                     context["variable_to_save"] = variable_to_save
                     memory_service.set_memory(self.db, MemoryCreate(key="variable_to_save", value=variable_to_save), agent_id=self._executing_agent_id, session_id=conversation_id)
@@ -2883,7 +2766,6 @@ Return only valid JSON, nothing else:"""
                 conversation_session_service.update_session(self.db, conversation_id, session_update)
                 self.db.refresh(session)
 
-                print(f"✓ Subworkflow: Pushed to stack, entering subworkflow {subworkflow_id} at depth {depth}")
 
                 # Recursively execute subworkflow
                 return await self.execute_workflow(
@@ -2900,7 +2782,6 @@ Return only valid JSON, nothing else:"""
 
             # Handle workflow transfer - stop execution on original channel
             if result and result.get("stop_execution"):
-                print(f"✓ Workflow transferred to another channel, stopping execution on original")
                 # Clear workflow state on original session since workflow transferred
                 session_update = ConversationSessionUpdate(
                     workflow_id=None,
@@ -2917,9 +2798,7 @@ Return only valid JSON, nothing else:"""
                     "response": response_messages[-1] if response_messages else result.get("output")
                 }
 
-            print(f"DEBUG: About to call get_next_node for node '{current_node_id}' with result: {result}")
             current_node_id = graph_engine.get_next_node(current_node_id, result)
-            print(f"DEBUG: get_next_node returned: {current_node_id}")
 
         # Get the final output before checking for subworkflow completion
         if response_messages:
@@ -2938,7 +2817,6 @@ Return only valid JSON, nothing else:"""
             parent_workflow_id = completed_entry["parent_workflow_id"]
             parent_next_step_id = completed_entry["parent_next_step_id"]
 
-            print(f"✓ Subworkflow completed: Returning to parent workflow {parent_workflow_id}, next step: {parent_next_step_id}")
 
             # Store subworkflow results in context under the configured output variable
             context[output_variable] = {
@@ -2981,8 +2859,7 @@ Return only valid JSON, nothing else:"""
                 if self._executing_agent_id:
                     memory_service.delete_memory(self.db, marker, self._executing_agent_id, conversation_id)
             except:
-                pass  # Marker might not exist in memory
-        print(f"DEBUG: Cleaned up extraction markers from context and memory on workflow completion")
+                logger.exception("Unexpected error")
 
         # Update session context
         session_update = ConversationSessionUpdate(status='active', context=context, subworkflow_stack=None)
@@ -2993,11 +2870,9 @@ Return only valid JSON, nothing else:"""
         session.next_step_id = None
         self.db.commit()
         self.db.refresh(session)
-        print(f"DEBUG: Workflow completed. Cleared workflow_id and next_step_id for session {conversation_id}")
 
         # Clear all memory for this session so next workflow starts fresh
         if self._executing_agent_id:
             memory_service.delete_all_memories(self.db, agent_id=self._executing_agent_id, session_id=conversation_id)
-            print(f"DEBUG: Cleared all memory for session {conversation_id}")
 
         return {"status": "completed", "response": final_output, "conversation_id": conversation_id}

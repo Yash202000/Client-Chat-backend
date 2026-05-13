@@ -240,7 +240,6 @@ def create_global_permissions_and_super_admin(db: Session):
             # Remove from all roles first
             old_perm.roles.clear()
             db.delete(old_perm)
-            print(f"[Startup] Removed old permission: {old_perm_name}")
     db.commit()
 
     # Create permissions if they don't exist (both API and page permissions)
@@ -252,7 +251,6 @@ def create_global_permissions_and_super_admin(db: Session):
             db_perm = models_permission.Permission(name=name, description=desc)
             db.add(db_perm)
             new_permissions_added = True
-            print(f"[Startup] Added new permission: {name}")
     db.commit()
 
     # Create or update Super Admin role
@@ -266,7 +264,7 @@ def create_global_permissions_and_super_admin(db: Session):
     assign_permissions_to_role(db, role_id=super_admin_role.id, permission_ids=permission_ids)
 
     if new_permissions_added:
-        print(f"[Startup] Added new permissions and updated Super Admin role")
+        pass
 
 def create_initial_roles_for_company(db: Session, company_id: int):
     """

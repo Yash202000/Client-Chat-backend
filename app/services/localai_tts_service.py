@@ -1,6 +1,8 @@
 import aiohttp
 import os
 from typing import AsyncGenerator
+import logging
+logger = logging.getLogger(__name__)
 
 LOCALAI_TTS_URL = os.getenv("LOCALAI_TTS_URL", "http://localhost:8082/tts")
 
@@ -32,7 +34,7 @@ class LocalAITTSService:
                 async for chunk in response.content.iter_any():
                     yield chunk
         except Exception as e:
-            print(f"Error during Local AI TTS streaming: {e}")
+            logger.exception(e)
             
     async def close(self):
         if self.session and not self.session.closed:

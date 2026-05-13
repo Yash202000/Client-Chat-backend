@@ -94,7 +94,6 @@ async def send_invitation_email(
     ).first()
 
     if not company_settings or not company_settings.smtp_host:
-        print(f"[INVITATION] SMTP not configured for company {company_id}, skipping email")
         return False
 
     # Get company and inviter info
@@ -189,10 +188,8 @@ If you didn't expect this invitation, you can safely ignore this email.
             from_name=company_settings.smtp_from_name or company_name,
             smtp_config=smtp_config
         )
-        print(f"[INVITATION] Email sent to {invitation.email}")
         return True
     except Exception as e:
-        print(f"[INVITATION] Failed to send email: {e}")
         return False
 
 

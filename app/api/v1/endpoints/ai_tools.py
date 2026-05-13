@@ -146,8 +146,6 @@ def unfavorite_tool(tool_id: int, db: Session = Depends(get_db), current_user: u
 
 @router.post("/{tool_id}/execute", tags=["AI Tools"], dependencies=[Depends(require_permission("ai-tool:read"))])
 def execute_tool(tool_id: int, request: ai_tool_schema.ExecuteToolRequest, db: Session = Depends(get_db), current_user: user_model.User = Depends(get_current_active_user)):
-    print(f"Received answers: {request.answers}")
-    print(f"Received language: {request.language}")
     db_tool = crud_ai_tool.get_ai_tool(db, tool_id=tool_id)
     if db_tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")

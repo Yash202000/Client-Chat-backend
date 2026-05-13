@@ -9,6 +9,8 @@ from app.core.dependencies import get_db, get_current_user
 from app.models.user import User
 from app.services import credential_service
 from app.services.vault_service import vault_service
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -33,7 +35,7 @@ def get_access_token_if_available(db: Session, company_id: int):
             if access_token:
                 return access_token
         except Exception as e:
-            print(f"Could not decrypt credentials, proceeding without them. Error: {e}")
+            logger.exception(e)
     return None
 
 

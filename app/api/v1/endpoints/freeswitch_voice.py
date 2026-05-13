@@ -618,7 +618,7 @@ async def freeswitch_audio_stream(
                     try:
                         await timeout_task
                     except asyncio.CancelledError:
-                        pass
+                        logger.exception("Unexpected error")
 
                     realtime_success = await handle_freeswitch_realtime_mode(
                         websocket=websocket,
@@ -716,7 +716,7 @@ async def freeswitch_audio_stream(
         try:
             await timeout_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
 
         # Reset VAD state
         vad_service.reset()

@@ -3,6 +3,8 @@ import aiohttp
 import os
 import asyncio
 from typing import Literal
+import logging
+logger = logging.getLogger(__name__)
 
 # Deepgram configuration
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
@@ -135,7 +137,6 @@ class STTService:
             )
             return True
         except Exception as e:
-            print(f"Error connecting to Deepgram: {e}")
             return False
 
     async def stream(self):
@@ -159,7 +160,6 @@ class STTService:
                                 "data": transcript
                             })
                 except Exception as e:
-                    print(f"Error receiving from Deepgram: {e}")
                     break
 
         async def client_receiver():
@@ -170,10 +170,9 @@ class STTService:
                     if self.deepgram_ws and not self.deepgram_ws.closed:
                         await self.deepgram_ws.send_bytes(audio_chunk)
                     else:
-                        print("Deepgram connection not available.")
                         break
             except Exception as e:
-                print(f"Error receiving from client: {e}")
+                logger.exception(e)
 
         # Run both tasks concurrently
         if self.deepgram_ws:

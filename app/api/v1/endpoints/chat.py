@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
@@ -248,8 +248,8 @@ def remove_channel_member(
 @router.post("/upload", dependencies=[Depends(require_permission("chat:create"))])
 async def upload_file(
     file: UploadFile = File(...),
-    message_id: int = None,
-    channel_id: int = None,
+    message_id: int = Form(None),
+    channel_id: int = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -303,11 +303,13 @@ async def upload_file(
 
             # Broadcast attachment to channel if channel_id provided
             if channel_id:
+                attachment_payload = chat_schema.ChatAttachment.from_orm(attachment).model_dump()
                 attachment_message = WebSocketMessage(
                     type="attachment_added",
                     payload={
                         "message_id": message_id,
-                        "attachment": chat_schema.ChatAttachment.from_orm(attachment).model_dump()
+                        "channel_id": channel_id,
+                        "attachment": attachment_payload,
                     }
                 )
                 await manager.broadcast(attachment_message.model_dump_json(), str(channel_id))
@@ -337,34 +339,25 @@ async def upload_file(
 @router.get("/download/{file_key:path}", dependencies=[Depends(require_permission("chat:read"))])
 async def download_file(
     file_key: str,
+    inline: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Download a file from S3"""
+    """Download or inline-preview a file from S3"""
     try:
-        # Get file from S3
         response = s3_client.get_object(Bucket=BUCKET_NAME, Key=file_key)
         content = response['Body'].read()
-
-        # Get content type
         content_type = response.get('ContentType', 'application/octet-stream')
-
-        # Extract filename from key
         filename = Path(file_key).name
-
+        disposition = f"inline; filename=\"{filename}\"" if inline else f"attachment; filename=\"{filename}\""
         from fastapi.responses import Response
         return Response(
             content=content,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
+            headers={"Content-Disposition": disposition},
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File not found: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File not found: {str(e)}")
 
 @router.post("/messages/{message_id}/reactions", response_model=chat_schema.MessageReaction, dependencies=[Depends(require_permission("chat:create"))])
 async def add_message_reaction(

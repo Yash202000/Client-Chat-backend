@@ -222,4 +222,3 @@ async def create_default_roles_and_permissions():
 
 if __name__ == "__main__":
     asyncio.run(create_default_roles_and_permissions())
-    print("Default roles and permissions created successfully.")

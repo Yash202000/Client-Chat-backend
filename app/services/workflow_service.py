@@ -393,15 +393,13 @@ def export_workflow(db: Session, workflow_id: int, company_id: int) -> dict:
         return None
 
     # Debug: Log what we're actually exporting
-    print(f"DEBUG export: id={workflow_id}, name={workflow.name}, visual_steps is {'None' if workflow.visual_steps is None else 'present'}")
     if workflow.visual_steps:
-        print(f"DEBUG export: visual_steps type={type(workflow.visual_steps)}, len={len(str(workflow.visual_steps))}")
+        pass
 
     # If this is a parent workflow with no visual_steps, try to use the active version instead
     if workflow.visual_steps is None and workflow.versions:
         active_version = next((v for v in workflow.versions if v.is_active), None)
         if active_version and active_version.visual_steps:
-            print(f"DEBUG export: Using active version {active_version.id} instead of parent {workflow_id}")
             workflow = active_version
 
     visual_steps = _parse_json_field(workflow.visual_steps, {"nodes": [], "edges": []})
@@ -496,7 +494,6 @@ def find_similar_workflow(db: Session, company_id: int, query: str, agent_id: in
     workflow_ids = [row[0] for row in id_query.all()]
 
     if not workflow_ids:
-        print(f"DEBUG: No active workflows found for company_id: {company_id}, agent_id: {agent_id}")
         return None
 
     # Fetch full workflow objects
@@ -510,7 +507,6 @@ def find_similar_workflow(db: Session, company_id: int, query: str, agent_id: in
             # Ensure trigger_phrases is a list
             phrases = workflow.trigger_phrases if isinstance(workflow.trigger_phrases, list) else []
             if any(phrase.lower() == query.lower() for phrase in phrases):
-                print(f"DEBUG: Found direct match for query '{query}' in workflow '{workflow.name}'")
                 return get_workflow(db, workflow.id, company_id)
 
     # 2. Semantic similarity search using cached embeddings (one embedding call for query only)

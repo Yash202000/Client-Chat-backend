@@ -22,7 +22,6 @@ def send_messenger_message_tool(db: Session, session: ConversationSession, recip
 
     try:
         # As before, this is a placeholder for a proper async call.
-        print(f"TOOL: Would send Messenger message to {recipient_psid}: {message}")
         return {"status": "success", "message": "Message queued for sending."}
 
     except Exception as e:

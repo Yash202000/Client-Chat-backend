@@ -280,12 +280,10 @@ async def find_workflow_for_channel_message(
 
     logger = logging.getLogger(__name__)
 
-    print(f"[TRIGGER SERVICE] Looking for triggers - channel={channel}, company_id={company_id}")
 
     # PRIORITY 1: Check for direct channel triggers
     triggers = get_triggers_by_channel(db, channel, company_id)
 
-    print(f"[TRIGGER SERVICE] Found {len(triggers) if triggers else 0} triggers for channel {channel}")
 
     if triggers:
         logger.info(f"Found {len(triggers)} direct triggers for channel {channel}")
@@ -298,13 +296,11 @@ async def find_workflow_for_channel_message(
             ).first()
 
             if workflow:
-                print(f"[TRIGGER SERVICE] ✓ Direct trigger match - workflow {workflow.id}: {workflow.name}")
                 logger.info(f"Direct trigger match - executing workflow {workflow.id}: {workflow.name}")
                 return workflow
             else:
-                print(f"[TRIGGER SERVICE] Trigger {trigger.id} has inactive/missing workflow")
+                pass
 
-    print(f"[TRIGGER SERVICE] No direct triggers matched, trying intent detection...")
     logger.debug(f"No direct triggers for channel {channel}, trying intent detection...")
 
     # PRIORITY 2: Use intent detection (for workflows without specific channel triggers)

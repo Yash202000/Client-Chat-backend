@@ -325,7 +325,6 @@ async def handle_subscription_activated(db: Session, payload: dict):
     plan_id = notes.get("plan_id")
 
     if not company_id:
-        print(f"Missing company_id in subscription notes: {razorpay_subscription_id}")
         return
 
     company_id = int(company_id)
@@ -348,7 +347,6 @@ async def handle_subscription_activated(db: Session, payload: dict):
         current_period_start=current_period_start,
         current_period_end=current_period_end,
     )
-    print(f"Activated subscription for company {company_id}")
 
 
 async def handle_subscription_charged(db: Session, payload: dict):
@@ -373,7 +371,6 @@ async def handle_subscription_charged(db: Session, payload: dict):
         current_period_start=current_period_start,
         current_period_end=current_period_end,
     )
-    print(f"Renewed subscription {razorpay_subscription_id}")
 
 
 async def handle_subscription_pending(db: Session, payload: dict):
@@ -392,7 +389,6 @@ async def handle_subscription_pending(db: Session, payload: dict):
         db_subscription.status = "past_due"
         db_subscription.updated_at = datetime.utcnow()
         db.commit()
-    print(f"Subscription pending {razorpay_subscription_id}")
 
 
 async def handle_subscription_halted(db: Session, payload: dict):
@@ -407,7 +403,6 @@ async def handle_subscription_halted(db: Session, payload: dict):
         db=db,
         razorpay_subscription_id=razorpay_subscription_id,
     )
-    print(f"Subscription halted {razorpay_subscription_id}")
 
 
 async def handle_subscription_cancelled(db: Session, payload: dict):
@@ -423,7 +418,6 @@ async def handle_subscription_cancelled(db: Session, payload: dict):
         razorpay_subscription_id=razorpay_subscription_id,
         cancel_at_period_end=False,
     )
-    print(f"Cancelled subscription {razorpay_subscription_id}")
 
 
 async def handle_subscription_completed(db: Session, payload: dict):
@@ -439,7 +433,6 @@ async def handle_subscription_completed(db: Session, payload: dict):
         razorpay_subscription_id=razorpay_subscription_id,
         cancel_at_period_end=False,
     )
-    print(f"Completed subscription {razorpay_subscription_id}")
 
 
 async def handle_payment_failed(db: Session, payload: dict):
@@ -457,7 +450,6 @@ async def handle_payment_failed(db: Session, payload: dict):
         db=db,
         razorpay_subscription_id=subscription_id,
     )
-    print(f"Payment failed for subscription {subscription_id}")
 
 
 @router.post("/cancel-subscription")

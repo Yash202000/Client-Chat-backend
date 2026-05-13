@@ -65,14 +65,11 @@ async def send_whatsapp_message(
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()  # Raises an exception for 4XX/5XX responses
-            print(f"Successfully sent message to {recipient_phone_number}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
-            print(f"Error sending WhatsApp message: {e.response.text}")
             # Re-raise the exception so the caller can handle it
             raise e
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
             raise e
 
 async def send_whatsapp_interactive_message(
@@ -125,7 +122,6 @@ async def send_whatsapp_interactive_message(
 
     # Warn if more than 10 options (WhatsApp list max)
     if len(valid_options) > 10:
-        print(f"Warning: WhatsApp supports max 10 list options. Truncating from {len(valid_options)} to 10.")
         valid_options = valid_options[:10]
 
     # Determine message type based on option count
@@ -202,13 +198,10 @@ async def send_whatsapp_interactive_message(
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             msg_type = "list" if len(valid_options) > 3 else "button"
-            print(f"Successfully sent {msg_type} interactive message to {recipient_phone_number}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
-            print(f"Error sending WhatsApp interactive message: {e.response.text}")
             raise e
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
             raise e
 
 
@@ -261,7 +254,6 @@ async def download_whatsapp_media(
             if not download_url:
                 raise ValueError(f"No download URL returned for media ID: {media_id}")
 
-            print(f"[WhatsApp Media] Got download URL for media {media_id}, mime_type: {mime_type}")
 
             # Step 2: Download the actual file
             download_response = await client.get(download_url, headers=headers)
@@ -292,7 +284,6 @@ async def download_whatsapp_media(
             extension = extension_map.get(mime_type, "")
             file_name = f"whatsapp_media_{media_id}{extension}"
 
-            print(f"[WhatsApp Media] Downloaded {len(file_data)} bytes for {file_name}")
 
             return {
                 "data": file_data,
@@ -301,10 +292,8 @@ async def download_whatsapp_media(
             }
 
         except httpx.HTTPStatusError as e:
-            print(f"Error downloading WhatsApp media: {e.response.text}")
             raise e
         except Exception as e:
-            print(f"An unexpected error occurred downloading media: {e}")
             raise e
 
 
@@ -318,11 +307,8 @@ async def send_instagram_or_messenger_message(
     Sends a text message to an Instagram or Messenger user via the Meta Graph API.
     """
     credentials = integration_service.get_decrypted_credentials(integration)
-    print(f"[DEBUG] {platform} credentials keys: {credentials.keys() if credentials else 'None'}")
     page_access_token = credentials.get("page_access_token") or credentials.get("access_token")
     page_id = credentials.get("page_id")
-    print(f"[DEBUG] {platform} token length: {len(page_access_token) if page_access_token else 0}, first 20 chars: {page_access_token[:20] if page_access_token else 'None'}...")
-    print(f"[DEBUG] {platform} page_id: {page_id}")
 
     if not page_access_token:
         raise ValueError(f"{platform.capitalize()} credentials (page_access_token) are not configured for this integration.")
@@ -333,7 +319,6 @@ async def send_instagram_or_messenger_message(
     else:
         url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/me/messages"
 
-    print(f"[DEBUG] {platform} API URL: {url}")
     
     headers = {
         "Authorization": f"Bearer {page_access_token}",
@@ -350,13 +335,10 @@ async def send_instagram_or_messenger_message(
         try:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            print(f"Successfully sent {platform} message to {recipient_id}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
-            print(f"Error sending {platform} message: {e.response.text}")
             raise e
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
             raise e
 
 async def send_instagram_message(
@@ -391,8 +373,6 @@ async def send_gmail_message(
     """
     credentials = integration_service.get_decrypted_credentials(integration)
     # Actual implementation will require OAuth2 flow and Google API client
-    print(f"Simulating sending email to {recipient_email} with subject '{subject}'")
-    print(f"Message: {message_text}")
     return {"status": "simulated_success"}
 
 async def send_meeting_link(
@@ -460,13 +440,10 @@ async def send_telegram_message(
         try:
             response = await client.post(url, json=payload)
             response.raise_for_status()
-            print(f"Successfully sent Telegram message to {chat_id}. Response: {response.json()}")
             return response.json()
         except httpx.HTTPStatusError as e:
-            print(f"Error sending Telegram message: {e.response.text}")
             raise e
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
             raise e
 
 
@@ -684,7 +661,7 @@ async def fetch_whatsapp_profile_picture(
                             b64 = base64.b64encode(img_resp.content).decode()
                             return f"data:{ct};base64,{b64}"
                 except Exception:
-                    pass
+                    logger.exception("Unexpected error")
 
     except Exception as e:
         logger.debug(f"[WhatsApp] Could not fetch profile picture for {wa_id}: {e}")

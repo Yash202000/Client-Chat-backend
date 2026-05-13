@@ -101,18 +101,14 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
     2. Criteria-based targeting (target_criteria JSONB field)
     3. Manual selection (contact_ids/lead_ids in target_criteria)
     """
-    print(f"[TARGET] Getting targeted contacts for campaign {campaign_id}")
 
     campaign = get_campaign(db, campaign_id, company_id)
     if not campaign:
-        print(f"[TARGET] Campaign {campaign_id} not found")
         return []
 
-    print(f"[TARGET] Campaign: {campaign.name}, segment_id: {campaign.segment_id}, target_criteria: {campaign.target_criteria}")
 
     # Priority 1: If campaign has a segment_id, use segment-based targeting
     if campaign.segment_id:
-        print(f"[TARGET] Using segment-based targeting with segment_id: {campaign.segment_id}")
         return get_contacts_from_segment(db, campaign.segment_id, company_id, campaign_id)
 
     # Priority 2: Check target_criteria
@@ -120,13 +116,11 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
         return []
 
     criteria = campaign.target_criteria
-    print(f"[TARGET] Criteria type: {type(criteria)}, value: {criteria}")
 
     # Handle manual selection
     if criteria.get('manual_selection'):
         contact_ids = criteria.get('contact_ids', [])
         lead_ids = criteria.get('lead_ids', [])
-        print(f"[TARGET] Manual selection - contact_ids: {contact_ids}, lead_ids: {lead_ids}")
 
         contacts = []
         if contact_ids:
@@ -134,7 +128,6 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
                 Contact.id.in_(contact_ids),
                 Contact.company_id == company_id
             ).all()
-            print(f"[TARGET] Found {len(contacts)} contacts from contact_ids")
 
         # Also get contacts from leads
         if lead_ids:
@@ -144,14 +137,12 @@ def get_targeted_contacts(db: Session, campaign_id: int, company_id: int) -> Lis
                 Lead.id.in_(lead_ids),
                 Contact.company_id == company_id
             ).all()
-            print(f"[TARGET] Found {len(lead_contacts)} contacts from lead_ids")
             # Merge without duplicates
             existing_ids = {c.id for c in contacts}
             for lc in lead_contacts:
                 if lc.id not in existing_ids:
                     contacts.append(lc)
 
-        print(f"[TARGET] Returning {len(contacts)} total contacts for manual selection")
         return contacts
 
     # Standard criteria-based targeting
@@ -232,7 +223,6 @@ def get_contacts_from_segment(db: Session, segment_id: int, company_id: int, cam
     """
     Get contacts from a segment (dynamic or static).
     """
-    print(f"[SEGMENT] Getting contacts from segment {segment_id} for company {company_id}")
 
     segment = db.query(Segment).filter(
         Segment.id == segment_id,
@@ -240,16 +230,13 @@ def get_contacts_from_segment(db: Session, segment_id: int, company_id: int, cam
     ).first()
 
     if not segment:
-        print(f"[SEGMENT] Segment {segment_id} not found")
         return []
 
-    print(f"[SEGMENT] Found segment: {segment.name}, type: {segment.segment_type}, criteria: {segment.criteria}")
 
     contacts = []
 
     # Handle static segments
     if segment.segment_type == SegmentType.STATIC:
-        print(f"[SEGMENT] Static segment - contact_ids: {segment.static_contact_ids}, lead_ids: {segment.static_lead_ids}")
         contact_ids = segment.static_contact_ids or []
         lead_ids = segment.static_lead_ids or []
 
@@ -329,9 +316,7 @@ def get_contacts_from_segment(db: Session, segment_id: int, company_id: int, cam
         query = query.filter(Contact.do_not_contact == False)
 
         contacts = query.all()
-        print(f"[SEGMENT] Dynamic segment query returned {len(contacts)} contacts")
 
-    print(f"[SEGMENT] Total contacts before exclusion: {len(contacts)}")
 
     # Exclude contacts already enrolled in the campaign (if campaign_id provided)
     if campaign_id and contacts:
@@ -340,10 +325,8 @@ def get_contacts_from_segment(db: Session, segment_id: int, company_id: int, cam
                 CampaignContact.campaign_id == campaign_id
             ).all()
         )
-        print(f"[SEGMENT] Already enrolled contact IDs: {enrolled_ids}")
         contacts = [c for c in contacts if c.id not in enrolled_ids]
 
-    print(f"[SEGMENT] Final contacts to enroll: {len(contacts)}")
     return contacts
 
 
@@ -496,14 +479,12 @@ def update_campaign_metrics(db: Session, campaign_id: int, company_id: int):
             CampaignContact.status == EnrollmentStatus.COMPLETED
         ).scalar()
 
-        print(f"[CAMPAIGN METRICS] Campaign {campaign_id}: total={total_contacts}, active/pending={active_or_pending}, completed={completed_enrollments}")
 
         if active_or_pending == 0:
             # All enrollments are done (completed or failed)
             campaign.status = CampaignStatus.COMPLETED
             if not campaign.end_date:
                 campaign.end_date = datetime.now(timezone.utc).replace(tzinfo=None)
-            print(f"[CAMPAIGN METRICS] Campaign {campaign_id} marked as COMPLETED")
 
     db.commit()
     db.refresh(campaign)

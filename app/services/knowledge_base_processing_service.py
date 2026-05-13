@@ -38,7 +38,6 @@ def process_and_store_text(db: Session, text: str, agent: dict, company_id: int,
     faiss_index_id = None
 
     if vector_store_type == "chroma":
-        print("Creating ChromaDB collection")
         # Get company-specific ChromaDB client (multi-tenant isolation)
         company_chroma_client = get_company_chroma_client(company_id)
         # Collection name is simpler now since tenant provides isolation
@@ -103,7 +102,6 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
     try:
         s3_client.put_object(Body=file_content, Bucket=BUCKET_NAME, Key=file_key)
     except Exception as e:
-        print(f"Error uploading to S3: {e}")
         raise
 
     # 3. Parse Document based on file type
@@ -151,7 +149,6 @@ def process_and_store_document(db: Session, file, agent: dict, company_id: int, 
     faiss_index_id = None
 
     if vector_store_type == "chroma":
-        print("Creating ChromaDB collection")
         # Get company-specific ChromaDB client (multi-tenant isolation)
         company_chroma_client = get_company_chroma_client(company_id)
         # Collection name is simpler now since tenant provides isolation

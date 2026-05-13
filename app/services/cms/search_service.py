@@ -10,6 +10,8 @@ from app.models.knowledge_base import KnowledgeBase
 from app.core.object_storage import get_company_chroma_client
 from app.llm_providers.nvidia_api_provider import NVIDIAEmbeddings
 from app.schemas.cms import ContentStatus, ContentVisibility, FieldType
+import logging
+logger = logging.getLogger(__name__)
 
 
 def get_searchable_text(content_type: ContentType, data: Dict[str, Any]) -> str:
@@ -65,7 +67,6 @@ def get_embeddings(texts: List[str]) -> List[List[float]]:
         embeddings = embeddings_client.embed_documents(texts)
         return embeddings
     except Exception as e:
-        print(f"Error generating embeddings: {e}")
         raise ValueError(f"Failed to generate embeddings: {str(e)}")
 
 
@@ -75,7 +76,6 @@ def get_query_embedding(query: str) -> List[float]:
         embeddings_client = NVIDIAEmbeddings()
         return embeddings_client.embed_query(query)
     except Exception as e:
-        print(f"Error generating query embedding: {e}")
         raise ValueError(f"Failed to generate query embedding: {str(e)}")
 
 
@@ -181,7 +181,6 @@ def index_content_item(
         return doc_id
 
     except Exception as e:
-        print(f"Error indexing content item {content_item.id}: {e}")
         return None
 
 
@@ -212,7 +211,7 @@ def remove_content_item_from_index(
                     collection.delete(ids=[chroma_doc_id])
                     return True
                 except Exception:
-                    pass  # Try CMS collection as fallback
+                    logger.exception("Unexpected error")
 
         # Try CMS-specific collection
         collection_name = get_cms_collection_name(knowledge_base_id)
@@ -224,7 +223,6 @@ def remove_content_item_from_index(
             return False
 
     except Exception as e:
-        print(f"Error removing content from index: {e}")
         return False
 
 
@@ -304,7 +302,6 @@ def search_content(
         return search_results
 
     except Exception as e:
-        print(f"Error performing search: {e}")
         raise ValueError(f"Search failed: {str(e)}")
 
 
@@ -342,7 +339,6 @@ def search_marketplace(
             )
             all_results.extend(results)
         except Exception as e:
-            print(f"Error searching company {company_id}: {e}")
             continue
 
     # Sort by score and limit
@@ -389,7 +385,6 @@ def reindex_content_type(
             else:
                 error_count += 1
         except Exception as e:
-            print(f"Error indexing item {item.id}: {e}")
             error_count += 1
 
     db.commit()
@@ -444,7 +439,6 @@ def reindex_all_content(
             else:
                 error_count += 1
         except Exception as e:
-            print(f"Error indexing item {item.id}: {e}")
             error_count += 1
 
     db.commit()

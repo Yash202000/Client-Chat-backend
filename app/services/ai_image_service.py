@@ -11,6 +11,8 @@ from app.schemas import ai_image as schemas_ai_image
 from app.services import credential_service
 from app.services.vault_service import vault_service
 from PIL import Image
+import logging
+logger = logging.getLogger(__name__)
 
 
 def _generate_proxy_url(key: str) -> str:
@@ -81,7 +83,6 @@ def _generate_with_gemini(api_key: str, prompt: str) -> bytes:
         raise ValueError("No image generated from Imagen")
 
     except Exception as e:
-        print(f"Imagen 3 failed: {e}, trying Gemini 2.0 Flash...")
 
         # Fallback to Gemini 2.0 Flash experimental
         import google.generativeai as genai
@@ -205,7 +206,7 @@ def _refresh_image_url(url: str) -> str:
 
                 return _generate_proxy_url(key)
     except Exception as e:
-        print(f"Error refreshing URL: {e}")
+        logger.exception(e)
 
     return url
 
@@ -226,6 +227,6 @@ def delete_ai_image(db: Session, image_id: int):
                         key = image.image_url[key_start:key_end]
                     s3_client.delete_object(Bucket=BUCKET_NAME, Key=key)
         except Exception as e:
-            print(f"Error deleting from MinIO: {e}")
+            logger.exception(e)
 
     return crud_ai_image.delete_ai_image(db=db, image_id=image_id)

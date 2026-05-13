@@ -160,7 +160,6 @@ async def generate_conversation_summary(
         return summary
 
     except Exception as e:
-        print(f"Error generating summary: {e}")
         raise
 
 

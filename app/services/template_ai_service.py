@@ -412,7 +412,7 @@ Respond in JSON format:
                 try:
                     return json.loads(obj_match.group(1))
                 except json.JSONDecodeError:
-                    pass
+                    logger.exception("Unexpected error")
 
             # Return as plain text if JSON parsing fails
             return {"body": content, "personalization_tokens": []}

@@ -13,6 +13,8 @@ from app.models.ticket_sprint import TicketSprint, SprintStatus
 from app.models.drive_item import DriveItem
 from app.schemas import ticket as schemas
 from app.services import drive_service
+import logging
+logger = logging.getLogger(__name__)
 
 
 # ── Default data seeding ──────────────────────────────────────────────────────
@@ -845,7 +847,7 @@ def execute_transition(db: Session, ticket_id: int, data: schemas.TicketTransiti
                 try:
                     setattr(ticket, fname, datetime.strptime(fval, "%Y-%m-%d").date())
                 except ValueError:
-                    pass
+                    logger.exception("Unexpected error")
             elif fname == "time_estimate" and fval is not None:
                 ticket.time_estimate = int(fval)
             else:

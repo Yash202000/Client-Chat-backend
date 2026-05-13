@@ -8,6 +8,8 @@ from app.schemas import user_settings as schemas_user_settings
 import datetime
 import asyncio
 from typing import Dict, Callable
+import logging
+logger = logging.getLogger(__name__)
 
 # Track pending offline tasks by user_id
 _pending_offline_tasks: Dict[int, asyncio.Task] = {}
@@ -104,7 +106,7 @@ async def schedule_offline_update(db_factory: Callable, user_id: int, grace_peri
         try:
             await _pending_offline_tasks[user_id]
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
 
     async def delayed_offline():
         try:
@@ -115,20 +117,17 @@ async def schedule_offline_update(db_factory: Callable, user_id: int, grace_peri
                 if user:
                     # Don't set offline if user is in a call
                     if user.presence_status == "in_call":
-                        print(f"[Presence] Skipping offline for user {user_id} - currently in_call")
                         return
                     # Don't set offline if user came back online
                     if user.presence_status == "online":
-                        print(f"[Presence] Skipping offline for user {user_id} - already online")
                         return
                     user.presence_status = "offline"
                     user.last_seen = datetime.datetime.now(datetime.UTC)
                     db.commit()
-                    print(f"[Presence] Set user {user_id} to offline after {grace_period}s grace period")
             finally:
                 db.close()
         except asyncio.CancelledError:
-            print(f"[Presence] Cancelled pending offline for user {user_id}")
+            logger.exception("Unexpected error")
         finally:
             _pending_offline_tasks.pop(user_id, None)
 
@@ -147,7 +146,6 @@ def cancel_pending_offline(user_id: int):
     if user_id in _pending_offline_tasks:
         _pending_offline_tasks[user_id].cancel()
         _pending_offline_tasks.pop(user_id, None)
-        print(f"[Presence] Cancelled pending offline for user {user_id} - reconnected")
 
 def delete_user(db: Session, user_id: int):
     """Delete or deactivate a user by ID.

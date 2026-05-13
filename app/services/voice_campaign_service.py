@@ -97,7 +97,6 @@ async def initiate_outbound_campaign_call(
         }
 
     except Exception as e:
-        print(f"[VOICE CAMPAIGN] Call initiation failed: {e}")
 
         # Record error
         activity = CampaignActivity(
@@ -218,7 +217,6 @@ def handle_call_status_callback(
     ).first()
 
     if not activity:
-        print(f"[VOICE CAMPAIGN] Activity not found for call {call_sid}")
         return
 
     # Update activity based on status

@@ -14,6 +14,8 @@ from app.core.dependencies import get_db, get_current_active_user
 from app.core.security import verify_password
 from app.core.audit import log_action
 from app.models.user import User
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -81,7 +83,7 @@ async def erase_my_data(
             {"uid": user_id},
         )
     except Exception:
-        pass
+        logger.exception("Unexpected error")
 
     # --- Anonymise conversation session assignments ---
     try:
@@ -90,7 +92,7 @@ async def erase_my_data(
             {"uid": user_id},
         )
     except Exception:
-        pass
+        logger.exception("Unexpected error")
 
     # --- Log the erasure itself (no user_id since user is being deleted) ---
     log_action(
@@ -190,13 +192,13 @@ async def erase_company_data(
             try:
                 db.execute(text(f"DELETE FROM {table} WHERE company_id = :cid"), {"cid": company_id})
             except Exception:
-                pass
+                logger.exception("Unexpected error")
 
     # Delete the company itself
     try:
         db.execute(text("DELETE FROM companies WHERE id = :cid"), {"cid": company_id})
     except Exception:
-        pass
+        logger.exception("Unexpected error")
 
     db.commit()
 

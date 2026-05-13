@@ -27,6 +27,7 @@ from app.services.connection_manager import manager
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import websocket as schemas_websocket, chat_message as schemas_chat_message
 from app.api.v1.endpoints.websocket_conversations import manager as session_ws_manager
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -39,16 +40,13 @@ async def verify_webhook(request: Request):
     challenge = request.query_params.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("Webhook verified successfully!")
         return Response(content=challenge, status_code=200)
     else:
-        print("Webhook verification failed.")
         raise HTTPException(status_code=403, detail="Invalid verification token")
 
 @router.post("")
 async def receive_message(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
-    print(f"Received webhook data: {data}")
 
     try:
         if "entry" in data and data["entry"]:
@@ -76,7 +74,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         # Use id (contains the key/value) instead of title (display text)
                         message_text = message_data["interactive"]["list_reply"]["id"]
                     else:
-                        print(f"Ignoring unknown interactive type: {interactive_type}")
                         return Response(status_code=200)
                 elif message_type in ["image", "document", "audio", "video"]:
                     # Handle media messages
@@ -84,7 +81,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     media_id = media_data.get("id")
 
                     if not media_id:
-                        print(f"No media ID found for {message_type} message")
                         return Response(status_code=200)
 
                     # Get caption if available (images/videos can have captions)
@@ -105,7 +101,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     longitude = location_data.get("longitude")
 
                     if latitude is None or longitude is None:
-                        print(f"Invalid location data received")
                         return Response(status_code=200)
 
                     # Create location attachment (same format as websocket)
@@ -118,14 +113,11 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         }
                     })
                     message_text = f"📍 Location ({latitude:.4f}, {longitude:.4f})"
-                    print(f"[WhatsApp] Received location: {latitude}, {longitude}")
                 else:
-                    print(f"Ignoring unsupported message type: {message_type}")
                     return Response(status_code=200)
 
                 integration = integration_service.get_integration_by_phone_number_id(db, phone_number_id=phone_number_id)
                 if not integration:
-                    print(f"Error: No active integration found for phone_number_id: {phone_number_id}")
                     return Response(status_code=200)
 
                 company_id = integration.company_id
@@ -137,7 +129,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 # Download and process media if this is a media message
                 if pending_media:
                     try:
-                        print(f"[WhatsApp] Downloading {pending_media['media_type']} media: {pending_media['media_id']}")
                         media_result = await messaging_service.download_whatsapp_media(
                             media_id=pending_media["media_id"],
                             integration=integration,
@@ -156,14 +147,12 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                         # Process attachments to upload to S3
                         attachment_text = process_attachments_for_storage(attachments)
-                        print(f"[WhatsApp] Processed attachment: {attachment_text}")
 
                         # If no caption was provided, use attachment text as message
                         if not message_text:
                             message_text = attachment_text
 
                     except Exception as e:
-                        print(f"[WhatsApp] Error downloading media: {e}")
                         # Continue processing without attachment if download fails
                         if not message_text:
                             message_text = f"[Media attachment - {pending_media['media_type']}]"
@@ -184,12 +173,10 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 # Reopen resolved sessions when a new message arrives
                 if session.status == 'resolved':
                     session = await conversation_session_service.reopen_resolved_session(db, session, company_id)
-                    print(f"Reopened resolved session {session.conversation_id} for incoming WhatsApp message")
 
                 # Check for restart command ("0", "restart", "start over", "cancel", "reset")
                 # Only check on original user input, not auto-generated attachment filenames
                 if original_user_input and conversation_session_service.is_restart_command(original_user_input):
-                    print(f"[WhatsApp] Restart command received from {sender_phone}")
 
                     # Reset workflow state
                     was_reset = await conversation_session_service.reset_session_workflow(db, session, company_id)
@@ -235,7 +222,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 )
 
                 if not session.is_ai_enabled:
-                    print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                     return Response(status_code=200)
 
                 # Check if a workflow is paused and waiting for input
@@ -243,7 +229,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     # Resume the paused workflow
                     workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                     if workflow:
-                        print(f"[WhatsApp] Resuming paused workflow {workflow.id} from step {session.next_step_id}")
                         workflow_exec_service = WorkflowExecutionService(db)
                         execution_result = await workflow_exec_service.execute_workflow(
                             user_message=message_text,
@@ -293,7 +278,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                                     integration=integration,
                                     db=db
                                 )
-                            print(f"[WhatsApp] Workflow paused for input in session {session.conversation_id}")
 
                         return Response(status_code=200)
 
@@ -309,7 +293,6 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                 if intent_match:
                     intent, confidence, entities, matched_method = intent_match
-                    print(f"✓ Intent detected: {intent.name} (confidence: {confidence:.2f}, method: {matched_method})")
 
                     if entities:
                         current_context = session.context or {}
@@ -331,14 +314,13 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                             }
                         )
                     except Exception as e:
-                        print(f"Warning: Could not broadcast intent detection: {e}")
+                        logger.exception(e)
 
                     if intent.trigger_workflow_id and intent.auto_trigger_enabled:
                         if confidence >= intent.min_confidence_auto_trigger:
                             intent_workflow = workflow_service.get_workflow(db, intent.trigger_workflow_id, company_id)
 
                             if intent_workflow and intent_workflow.is_active:
-                                print(f"✓ Auto-triggering workflow: {intent_workflow.name}")
                                 workflow_exec_service = WorkflowExecutionService(db)
                                 execution_result = await workflow_exec_service.execute_workflow(
                                     workflow_id=intent_workflow.id,
@@ -371,17 +353,16 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                                     return Response(status_code=200)
 
                                 elif execution_result.get("status") == "paused_for_input":
-                                    print(f"✓ Workflow paused, waiting for user input")
                                     return Response(status_code=200)
 
                                 elif execution_result.get("status") == "error":
-                                    print(f"✗ Intent workflow execution failed, falling through to trigger routing")
+                                    pass
                             else:
-                                print(f"✗ Workflow {intent.trigger_workflow_id} not found or inactive")
+                                pass
                         else:
-                            print(f"ℹ Confidence {confidence:.2f} below threshold {intent.min_confidence_auto_trigger}, skipping auto-trigger")
+                            pass
                     else:
-                        print(f"ℹ Intent '{intent.name}' has no workflow or auto-trigger disabled")
+                        pass
 
                 workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                     db=db,
@@ -393,10 +374,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
 
                 if not workflow:
                     # 2. No trigger match - try LLM-based routing (2nd priority)
-                    print(f"[WhatsApp] No trigger match, trying LLM-based routing")
                     agents = agent_service.get_agents(db, company_id=company_id, limit=1)
                     if not agents:
-                        print(f"Error: No agents found for company {company_id} to handle the response.")
                         return Response(status_code=200)
                     agent = agents[0]
 
@@ -407,16 +386,13 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     # Check if LLM decided to trigger a workflow (context-aware routing)
                     if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                         workflow_id = agent_response.get("workflow_id")
-                        print(f"[WhatsApp] LLM triggered workflow {workflow_id}")
                         workflow = workflow_service.get_workflow(db, workflow_id, company_id)
                         if not workflow:
-                            print(f"[WhatsApp] Workflow {workflow_id} not found")
                             return Response(status_code=200)
                         # Continue to workflow execution below
                     elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
                         # LLM routing failed - notify user and initiate handoff
                         reason = agent_response.get("reason", "AI routing unavailable")
-                        print(f"[WhatsApp] LLM failed, initiating handoff: {reason}")
                         error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
                         await messaging_service.send_whatsapp_message(
                             recipient_phone_number=sender_phone,
@@ -427,13 +403,11 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                         return Response(status_code=200)
                     else:
                         # 3. LLM returned text - try similarity search as last fallback
-                        print(f"[WhatsApp] LLM returned text, trying similarity search as fallback")
                         workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_text, agent_id=session.agent_id)
 
                         if not workflow:
                             # No workflow found anywhere - use LLM's text response
                             agent_response_text = agent_response if isinstance(agent_response, str) else str(agent_response)
-                            print(agent_response_text)
 
                             agent_message_schema = ChatMessageCreate(message=agent_response_text, message_type="text")
                             db_agent_message = chat_service.create_chat_message(db, agent_message_schema, agent.id, session.conversation_id, company_id, "agent")
@@ -500,9 +474,8 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                     )
                 
                 elif execution_result.get("status") == "paused_for_input":
-                    print(f"Workflow paused for input in session {session.conversation_id}")
+                    pass
 
-                print(f"Processed message from {sender_phone} for company {company_id} with workflow '{workflow.name}'")
 
     except (KeyError, IndexError) as e:
         logging.error(f"Error parsing WhatsApp webhook data: {e}\n{traceback.format_exc()}")

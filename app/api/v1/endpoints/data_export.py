@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_db, get_current_active_user
 from app.models.user import User
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -186,7 +188,7 @@ async def export_all_data(
             tickets_csv = buf.getvalue().encode("utf-8")
     except Exception:
         # Table does not exist yet — emit empty CSV with headers only
-        pass
+        logger.exception("Unexpected error")
 
     # ------------------------------------------------------------------
     # Templates

@@ -16,6 +16,8 @@ from app.models.integration import Integration
 from app.services import campaign_service, integration_service
 from app.services import messaging_service, email_service
 import asyncio
+import logging
+logger = logging.getLogger(__name__)
 
 
 def calculate_next_send_time(
@@ -58,7 +60,7 @@ def calculate_next_send_time(
                 next_time = next_time + timedelta(days=1)
                 next_time = next_time.replace(hour=start_hour, minute=start_min)
         except:
-            pass  # Invalid time format, use calculated time
+            logger.exception("Unexpected error")
 
     # Skip weekends if configured
     if message.send_on_weekdays_only:
@@ -115,7 +117,6 @@ async def send_email_message(
 
         # Validate contact has email
         if not contact.email:
-            print(f"[CAMPAIGN EXECUTION] Contact {contact.id} has no email address")
             return False
 
         # Personalize content
@@ -165,10 +166,8 @@ async def send_email_message(
 
         # SMTP config is required - no global fallback
         if not smtp_config:
-            print(f"[CAMPAIGN EXECUTION] ERROR: No SMTP configuration found for company {campaign.company_id}. Please configure SMTP in Settings > Email.")
             return False
 
-        print(f"[CAMPAIGN EXECUTION] Sending email to {contact.email} using company SMTP ({smtp_config.get('host')})")
 
         # Send via email service
         result = await email_service.send_email_smtp(
@@ -181,7 +180,6 @@ async def send_email_message(
             smtp_config=smtp_config
         )
 
-        print(f"[CAMPAIGN EXECUTION] Email sent to {contact.email}: {result}")
 
         # Record activity
         activity = CampaignActivity(
@@ -202,7 +200,6 @@ async def send_email_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Email send failed: {e}")
         # Record error activity
         activity = CampaignActivity(
             campaign_id=campaign.id,
@@ -232,7 +229,6 @@ async def send_sms_message(
 
         # Validate contact has phone number
         if not contact.phone_number:
-            print(f"[CAMPAIGN EXECUTION] Contact {contact.id} has no phone number")
             return False
 
         # Get Twilio credentials from campaign config or settings
@@ -248,7 +244,6 @@ async def send_sms_message(
         # Personalize message content
         body = personalize_message(message.body, contact, enrollment.lead)
 
-        print(f"[CAMPAIGN EXECUTION] Sending SMS to {contact.phone_number}")
 
         # Send via Twilio
         client = Client(account_sid, auth_token)
@@ -258,7 +253,6 @@ async def send_sms_message(
             to=contact.phone_number
         )
 
-        print(f"[CAMPAIGN EXECUTION] SMS sent to {contact.phone_number}, SID: {twilio_message.sid}")
 
         # Record activity
         activity = CampaignActivity(
@@ -280,7 +274,6 @@ async def send_sms_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] SMS send failed: {e}")
         # Record error activity
         activity = CampaignActivity(
             campaign_id=campaign.id,
@@ -313,7 +306,6 @@ async def send_whatsapp_message(
         ).first()
 
         if not integration:
-            print(f"[CAMPAIGN EXECUTION] No active WhatsApp integration found for company {campaign.company_id}")
             return False
 
         # Personalize content
@@ -326,7 +318,6 @@ async def send_whatsapp_message(
             integration=integration
         )
 
-        print(f"[CAMPAIGN EXECUTION] WhatsApp sent to {contact.phone_number}: {result}")
 
         # Record activity
         activity = CampaignActivity(
@@ -346,7 +337,6 @@ async def send_whatsapp_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] WhatsApp send failed: {e}")
         # Record error activity
         activity = CampaignActivity(
             campaign_id=campaign.id,
@@ -379,12 +369,10 @@ async def send_instagram_message(
         ).first()
 
         if not integration:
-            print(f"[CAMPAIGN EXECUTION] No active Instagram integration found for company {campaign.company_id}")
             return False
 
         # Check if contact has Instagram ID
         if not contact.instagram_id:
-            print(f"[CAMPAIGN EXECUTION] Contact {contact.id} has no Instagram ID")
             return False
 
         # Personalize content
@@ -397,7 +385,6 @@ async def send_instagram_message(
             integration=integration
         )
 
-        print(f"[CAMPAIGN EXECUTION] Instagram sent to {contact.instagram_id}: {result}")
 
         # Record activity
         activity = CampaignActivity(
@@ -418,7 +405,6 @@ async def send_instagram_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Instagram send failed: {e}")
         # Record error activity
         activity = CampaignActivity(
             campaign_id=campaign.id,
@@ -451,12 +437,10 @@ async def send_telegram_message(
         ).first()
 
         if not integration:
-            print(f"[CAMPAIGN EXECUTION] No active Telegram integration found for company {campaign.company_id}")
             return False
 
         # Check if contact has Telegram chat ID
         if not contact.telegram_chat_id:
-            print(f"[CAMPAIGN EXECUTION] Contact {contact.id} has no Telegram chat ID")
             return False
 
         # Personalize content
@@ -469,7 +453,6 @@ async def send_telegram_message(
             integration=integration
         )
 
-        print(f"[CAMPAIGN EXECUTION] Telegram sent to {contact.telegram_chat_id}: {result}")
 
         # Record activity
         activity = CampaignActivity(
@@ -490,7 +473,6 @@ async def send_telegram_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Telegram send failed: {e}")
         # Record error activity
         activity = CampaignActivity(
             campaign_id=campaign.id,
@@ -514,7 +496,6 @@ async def initiate_voice_call(
     """Initiate a voice call campaign message via Twilio."""
     try:
         from app.services import voice_campaign_service
-        print(f"[CAMPAIGN EXECUTION] Initiating voice call to {contact.phone_number}")
         result = await voice_campaign_service.initiate_outbound_campaign_call(
             db=db,
             campaign=campaign,
@@ -528,7 +509,6 @@ async def initiate_voice_call(
         return result.get('success', False)
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Voice call initiation failed: {e}")
         activity = CampaignActivity(
             campaign_id=campaign.id,
             contact_id=contact.id,
@@ -553,7 +533,6 @@ async def send_linkedin_dm_message(
     try:
         linkedin_urn = contact.linkedin_urn if hasattr(contact, 'linkedin_urn') else None
         if not linkedin_urn:
-            print(f"[CAMPAIGN EXECUTION] No LinkedIn URN for contact {contact.id}, skipping")
             return False
 
         integration = integration_service.get_integration_by_type_and_company(db, "linkedin", campaign.company_id)
@@ -585,7 +564,6 @@ async def send_linkedin_dm_message(
         return True
 
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] LinkedIn DM failed: {e}")
         activity = CampaignActivity(
             campaign_id=campaign.id,
             contact_id=contact.id,
@@ -660,7 +638,6 @@ async def send_campaign_message(
     else:
         msg_type = msg_type.value if hasattr(msg_type, 'value') else str(msg_type).lower()
 
-    print(f"[CAMPAIGN EXECUTION] Sending message type: {msg_type} to contact {contact.id} ({contact.email})")
 
     success = False
     if msg_type == "email":
@@ -678,7 +655,7 @@ async def send_campaign_message(
     elif msg_type == "linkedin_dm":
         success = await send_linkedin_dm_message(db, campaign, next_message, contact, enrollment)
     else:
-        print(f"[CAMPAIGN EXECUTION] Unknown message type: {msg_type}")
+        pass
 
     if success:
         # Update enrollment progress
@@ -701,7 +678,6 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
     """
     import traceback
 
-    print(f"[CAMPAIGN EXECUTION] Starting to process queue for campaign {campaign_id}")
     current_time = datetime.utcnow()
 
     # Get all active enrollments with messages due
@@ -716,23 +692,20 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
         )
     ).all()
 
-    print(f"[CAMPAIGN EXECUTION] Found {len(due_enrollments)} pending enrollments for campaign {campaign_id}")
 
     if len(due_enrollments) == 0:
         # Debug: check why no enrollments
         all_enrollments = db.query(CampaignContact).filter(
             CampaignContact.campaign_id == campaign_id
         ).all()
-        print(f"[CAMPAIGN EXECUTION] Total enrollments for campaign: {len(all_enrollments)}")
         for e in all_enrollments:
-            print(f"[CAMPAIGN EXECUTION]   - Enrollment {e.id}: status={e.status}, next_scheduled={e.next_scheduled_at}, current_step={e.current_step}")
+            pass
 
     # Send messages concurrently
     async def _send_one(enrollment):
         try:
             return await send_campaign_message(db, campaign_id, enrollment.id, company_id)
         except Exception as e:
-            print(f"[CAMPAIGN EXECUTION] Error processing enrollment {enrollment.id}: {e}")
             traceback.print_exc()
             return None
 
@@ -742,7 +715,7 @@ async def process_campaign_queue(db: Session, campaign_id: int, company_id: int)
     try:
         campaign_service.update_campaign_metrics(db, campaign_id, company_id)
     except Exception as e:
-        print(f"[CAMPAIGN EXECUTION] Error updating metrics: {e}")
+        logger.exception(e)
 
 
 def start_campaign(db: Session, campaign_id: int, company_id: int):
@@ -754,10 +727,8 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
     """
     campaign = campaign_service.get_campaign(db, campaign_id, company_id)
     if not campaign:
-        print(f"[CAMPAIGN START] Campaign {campaign_id} not found")
         return False
 
-    print(f"[CAMPAIGN START] Starting campaign {campaign_id}: {campaign.name}")
 
     # Update campaign status
     campaign.status = CampaignStatus.ACTIVE
@@ -774,18 +745,15 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
         if campaign_start.tzinfo is None:
             campaign_start = campaign_start.replace(tzinfo=timezone.utc)
 
-        print(f"[CAMPAIGN START] Comparing: campaign_start={campaign_start}, current_time={current_time}")
 
     # Use the user's start_date if it's set and in the future, otherwise use current time
     if campaign_start and campaign_start > current_time:
         effective_start_time = campaign.start_date  # Keep original for storage
-        print(f"[CAMPAIGN START] Campaign scheduled for future start: {campaign.start_date}")
     else:
         # Only set start_date if it wasn't set by user
         if not campaign.start_date:
             campaign.start_date = current_time.replace(tzinfo=None)  # Store as naive UTC
         effective_start_time = current_time.replace(tzinfo=None)
-        print(f"[CAMPAIGN START] Campaign starting immediately at {effective_start_time}")
 
     # Get all enrollments that need to be activated (PENDING or COMPLETED for re-launch)
     enrollments_to_activate = db.query(CampaignContact).filter(
@@ -793,7 +761,6 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
         CampaignContact.status.in_([EnrollmentStatus.PENDING, EnrollmentStatus.COMPLETED])
     ).all()
 
-    print(f"[CAMPAIGN START] Found {len(enrollments_to_activate)} enrollments to activate (pending or completed)")
 
     # Get first message
     first_message = db.query(CampaignMessage).filter(
@@ -803,7 +770,6 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
     ).first()
 
     if first_message:
-        print(f"[CAMPAIGN START] First message found: {first_message.name or first_message.id}, type: {first_message.message_type}")
         for enrollment in enrollments_to_activate:
             # Reset enrollment for fresh start
             enrollment.status = EnrollmentStatus.ACTIVE
@@ -812,16 +778,13 @@ def start_campaign(db: Session, campaign_id: int, company_id: int):
             enrollment.completed_at = None
             # Schedule based on the effective start time (user's start_date or now)
             enrollment.next_scheduled_at = calculate_next_send_time(enrollment, first_message, effective_start_time)
-            print(f"[CAMPAIGN START] Activated enrollment {enrollment.id} for contact {enrollment.contact_id}, scheduled at: {enrollment.next_scheduled_at}")
     else:
-        print(f"[CAMPAIGN START] WARNING: No first message (sequence_order=1) found for campaign {campaign_id}")
         # Check all messages for this campaign
         all_messages = db.query(CampaignMessage).filter(
             CampaignMessage.campaign_id == campaign_id
         ).all()
-        print(f"[CAMPAIGN START] Total messages in campaign: {len(all_messages)}")
         for msg in all_messages:
-            print(f"[CAMPAIGN START]   - Message {msg.id}: sequence={msg.sequence_order}, type={msg.message_type}, active={msg.is_active}")
+            pass
 
     campaign.last_run_at = datetime.utcnow()
     db.commit()
@@ -870,7 +833,6 @@ async def process_all_scheduled_campaigns(db: Session):
     import traceback
 
     current_time = datetime.now(timezone.utc)
-    print(f"[CAMPAIGN SCHEDULER] Running scheduled campaign processor at {current_time}")
 
     try:
         # Find all active campaigns
@@ -879,10 +841,8 @@ async def process_all_scheduled_campaigns(db: Session):
         ).all()
 
         if not active_campaigns:
-            print("[CAMPAIGN SCHEDULER] No active campaigns found")
             return
 
-        print(f"[CAMPAIGN SCHEDULER] Found {len(active_campaigns)} active campaigns")
 
         # Single query to find which campaigns have due enrollments (avoids N count queries)
         active_ids = [c.id for c in active_campaigns]
@@ -904,9 +864,7 @@ async def process_all_scheduled_campaigns(db: Session):
             try:
                 await process_campaign_queue(db, campaign.id, campaign.company_id)
             except Exception as e:
-                print(f"[CAMPAIGN SCHEDULER] Error processing campaign {campaign.id}: {e}")
                 traceback.print_exc()
 
     except Exception as e:
-        print(f"[CAMPAIGN SCHEDULER] Error in scheduler: {e}")
         traceback.print_exc()

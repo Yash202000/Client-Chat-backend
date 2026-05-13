@@ -19,13 +19,14 @@ from app.core.object_storage import s3_client, get_company_chroma_client
 from app.services.prompt_guard_service import scan_user_message, get_safe_system_prompt, prompt_guard
 from app.services import security_log_service
 from app.services import token_usage_service
+import logging
+logger = logging.getLogger(__name__)
 
 
 def _get_embeddings(agent: Agent, texts: list[str]):
     """
     Generates embeddings for a list of texts using the agent's configured embedding model.
     """
-    print(f"Generating embeddings for {len(texts)} texts using {agent.embedding_model}...")
     
     if agent.embedding_model == 'gemini':
         from concurrent.futures import ThreadPoolExecutor
@@ -37,7 +38,6 @@ def _get_embeddings(agent: Agent, texts: list[str]):
                 )
                 return result['embedding']
             except Exception as e:
-                print(f"Gemini embedding error: {e}")
                 return np.zeros(768)
 
         with ThreadPoolExecutor(max_workers=min(len(texts), 8)) as pool:
@@ -49,14 +49,11 @@ def _get_embeddings(agent: Agent, texts: list[str]):
             # Attempt to use local NVIDIA model
             return nvidia_provider.get_embeddings(texts)
         except Exception as e:
-            print(f"An error occurred while embedding text with local NVIDIA model: {e}")
-            print("Attempting to fallback to NVIDIA API for embeddings...")
             try:
                 # Fallback to NVIDIA API
                 client = nvidia_api_provider.NVIDIAEmbeddings()
                 return np.array(client.embed_documents(texts))
             except Exception as api_e:
-                print(f"Fallback to NVIDIA API also failed: {api_e}")
                 return np.array([np.zeros(1024) for _ in texts]) # Final fallback: placeholder
     
     elif agent.embedding_model == 'nvidia_api':
@@ -64,7 +61,6 @@ def _get_embeddings(agent: Agent, texts: list[str]):
             client = nvidia_api_provider.NVIDIAEmbeddings()
             return np.array(client.embed_documents(texts))
         except Exception as e:
-            print(f"An error occurred while embedding text with NVIDIA API: {e}")
             return np.array([np.zeros(1024) for _ in texts]) # Placeholder dimension for NVIDIA
             
     else:
@@ -106,7 +102,7 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
                     results = faiss_db.similarity_search(user_query, k=k)
                     all_retrieved_chunks.extend([doc.page_content for doc in results])
                 else:
-                    print(f"Error loading FAISS index from {faiss_db_path}")
+                    pass
 
             elif kb.type == "remote" and kb.provider == "chroma" and kb.connection_details:
                 # Query a user-provided, remote ChromaDB instance
@@ -118,7 +114,7 @@ def _get_rag_context(agent: Agent, user_query: str, knowledge_bases: list, k: in
                 )
                 all_retrieved_chunks.extend(results['documents'][0])
         except Exception as e:
-            print(f"Error querying knowledge base {kb.name} (ID: {kb.id}): {e}")
+            logger.exception(e)
 
     if not all_retrieved_chunks:
         return ""
@@ -164,7 +160,6 @@ def format_chat_history(chat_messages: list) -> list[dict[str, str]]:
             role = "assistant" if sender == "agent" else sender
             history.append({"role": role, "content": message})
         except (AttributeError, TypeError) as e:
-            print(f"Skipping malformed message in history: {msg}, error: {e}")
             continue
     return history
 
@@ -187,7 +182,6 @@ def _sanitize_schema_for_openai(schema: dict) -> dict:
     incompatible_keys = ['anyOf', 'oneOf', 'allOf', 'enum', 'not']
     for key in incompatible_keys:
         if key in sanitized:
-            print(f"[SCHEMA SANITIZATION] Removing '{key}' from schema for OpenAI compatibility")
             del sanitized[key]
 
     return sanitized
@@ -211,7 +205,6 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
         available_agents = agent_selection_service.list_available_agents_for_handoff(
             db, company_id, exclude_agent_id=agent.id
         )
-        print(f"[TOOLS DEBUG] Available agents for handoff (excluding {agent.id}): {available_agents}")
         if available_agents:
             agent_list = []
             for ag in available_agents:
@@ -219,7 +212,6 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
                 agent_list.append(f"- {ag['name']} (id: {ag['id']}): specializes in {', '.join(topics)}")
             available_agents_info = "\n\nAvailable agents for transfer/consultation:\n" + "\n".join(agent_list)
             available_agents_info += "\n\nIMPORTANT: Always use the target_agent_id parameter with the agent's ID for accurate routing."
-            print(f"[TOOLS DEBUG] Injecting available agents info into handoff tools: {available_agents_info}")
 
     for tool in agent.tools:
         if tool.tool_type == "builtin":
@@ -293,7 +285,7 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
                         },
                     })
             except Exception as e:
-                print(f"Error fetching tools from MCP server {tool.mcp_server_url}: {e}")
+                logger.exception(e)
 
     # Add workflows as callable functions (only workflows assigned to this agent)
     if db and company_id:
@@ -319,11 +311,9 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
                     }
                 }
                 tool_definitions.append(workflow_func)
-                print(f"[TOOLS] Added workflow function: start_workflow_{workflow.id} ({workflow.name})")
         except Exception as e:
-            print(f"Error adding workflow functions: {e}")
+            logger.exception(e)
 
-    print(f"Final tool definitions for LLM: {json.dumps(tool_definitions, indent=2)}")
     return tool_definitions
 
 async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str, _trace: dict = None):
@@ -343,7 +333,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     )
 
     if not is_allowed:
-        print(f"[SECURITY] Message blocked for session {boradcast_session_id}: {block_reason}")
 
         # Log the security event to database
         scan_result = prompt_guard.scan_message(user_message)
@@ -370,14 +359,11 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
 
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
-        print(f"Error: Agent not found for agent_id {agent_id}")
         return
 
-    print(f"DEBUG: Agent retrieved: {agent.name}, Tools: {agent.tools}")
 
     provider_module = PROVIDER_MAP.get(agent.llm_provider)
     if not provider_module:
-        print(f"Error: LLM provider '{agent.llm_provider}' not found.")
         return
 
     # Get RAG context
@@ -417,15 +403,9 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                     if reason:
                         handoff_context += f"Reason for transfer: {reason}\n"
             handoff_context += "Please acknowledge the transfer naturally and help the user with their request.\n[END HANDOFF CONTEXT]\n"
-            print(f"[AGENT EXECUTION] Agent received handoff - injecting context")
     except Exception as e:
-        print(f"[AGENT EXECUTION] Warning: Could not check for handoff context: {e}")
+        logger.exception(e)
 
-    print(f"[AGENT EXECUTION DEBUG] Session: {boradcast_session_id}")
-    print(f"[AGENT EXECUTION DEBUG] Formatted history length: {len(formatted_history)}")
-    print(f"[AGENT EXECUTION DEBUG] Is first message: {is_first_message}")
-    print(f"[AGENT EXECUTION DEBUG] History roles: {[msg.get('role') for msg in formatted_history]}")
-    print(f"[AGENT EXECUTION DEBUG] LLM Provider: {agent.llm_provider}")
 
     # Note: Typing indicator is now handled at the WebSocket endpoint level
     # to ensure it shows immediately after user message (not here which is later in the flow)
@@ -438,18 +418,16 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         if is_managed_mode():
             system_key = get_system_credential(agent.llm_provider)
             if system_key:
-                print(f"Using system-level credential for {agent.llm_provider} (managed mode).")
                 agent_api_key = system_key
             else:
-                print(f"Managed mode enabled but no system credential configured for {agent.llm_provider}.")
+                pass
         else:
             # Self-hosted mode: use vault credentials
             llm_credential = credential_service.get_credential_by_service_name(db, agent.llm_provider, company_id)
             if llm_credential:
-                print(f"Found {agent.llm_provider} credential in vault for company.")
                 agent_api_key = credential_service.get_decrypted_credential(db, llm_credential.id, company_id)
             else:
-                print(f"{agent.llm_provider} credential not found in vault for company. LLM will use provider's default or fail.")
+                pass
 
         # Build base system prompt with security hardening
         base_instructions = (
@@ -524,9 +502,8 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                 "type": "function",
                 "function": {"name": "get_contact_info"}
             }
-            print(f"[AGENT EXECUTION] First message detected - forcing get_contact_info tool call")
         elif is_first_message and not has_get_contact_info:
-            print(f"[AGENT EXECUTION] First message but get_contact_info tool not available for agent - skipping forced tool call")
+            pass
 
         # Call LLM provider asynchronously (disable streaming when using tools)
         llm_response = await provider_module.generate_response(
@@ -554,7 +531,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
                 request_type="chat"
             )
     except Exception as e:
-        print(f"LLM Provider Error: {e}")
         # Return handoff type so caller can initiate human agent handoff
         return {
             "type": "handoff",
@@ -573,7 +549,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         # Multiple tool calls - process the first one for now
         # TODO: Handle multiple tool calls in sequence
         llm_response = llm_response[0]
-        print(f"[Agent Execution] Warning: Multiple tool calls detected, processing first one only")
 
     if llm_response.get('type') == 'tool_call':
         tool_name = llm_response.get('tool_name')
@@ -583,7 +558,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         # Check if LLM decided to trigger a workflow
         if tool_name and tool_name.startswith("start_workflow_"):
             workflow_id = int(tool_name.replace("start_workflow_", ""))
-            print(f"[AGENT EXECUTION] LLM triggered workflow {workflow_id}")
             if _trace is not None:
                 _trace['workflow_id'] = workflow_id
             return {
@@ -611,7 +585,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         )
 
         if tool_result is None or "error" in tool_result and "not found" in tool_result.get("error", ""):
-            print(f"[AGENT EXECUTION] Tool '{tool_name}' not found or failed to execute.")
             return
         
         result_content = tool_result.get('result', tool_result.get('error', 'No output'))
@@ -620,8 +593,6 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         if 'formatted_response' in tool_result:
             # Use pre-formatted response directly, skip second LLM call
             final_agent_response_text = tool_result['formatted_response']
-            print(f"[AGENT EXECUTION] Using pre-formatted response from tool, skipping LLM call")
-            print(f"[AGENT EXECUTION] Formatted response: {final_agent_response_text}")
         else:
             # --- Get Final Response from LLM ---
             assistant_message = {"role": "assistant", "content": None, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(parameters)}}]}
@@ -699,9 +670,9 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     # --- Return Final Message ---
     # Note: Message saving and broadcasting is handled by the caller (e.g., public_voice.py)
     if final_agent_response_text and final_agent_response_text.strip():
-        print(f"[AgentResponse] Generated response text: {final_agent_response_text[:100]}...")
+        pass
     else:
-        print(f"[AgentResponse] Final agent response was empty.")
+        pass
 
     # Return response with call info if handoff tool was used
     if tool_name == "request_human_handoff" and tool_result.get('result', {}).get('status') == 'call_initiated':
@@ -747,7 +718,6 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
     )
 
     if not is_allowed:
-        print(f"[SECURITY] Streaming message blocked for session {boradcast_session_id}: {block_reason}")
 
         # Log the security event to database
         scan_result = prompt_guard.scan_message(user_message)
@@ -774,12 +744,10 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
 
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
-        print(f"Error: Agent not found for agent_id {agent_id}")
         return
 
     provider_module = PROVIDER_MAP.get(agent.llm_provider)
     if not provider_module:
-        print(f"Error: LLM provider '{agent.llm_provider}' not found.")
         return
 
     # Get RAG context
@@ -796,7 +764,6 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
 
     # If tools are present or it's first message (requires tool call), fall back to non-streaming
     if generic_tools or is_first_message:
-        print(f"[STREAMING] Tools detected or first message - falling back to non-streaming mode")
         # Call non-streaming version and yield the complete response
         response = await generate_agent_response(db, agent_id, session_id, boradcast_session_id, company_id, user_message)
         if response:
@@ -811,18 +778,16 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
         if is_managed_mode():
             system_key = get_system_credential(agent.llm_provider)
             if system_key:
-                print(f"Using system-level credential for {agent.llm_provider} (managed mode, streaming).")
                 agent_api_key = system_key
             else:
-                print(f"Managed mode enabled but no system credential configured for {agent.llm_provider} (streaming).")
+                pass
         else:
             # Self-hosted mode: use vault credentials
             llm_credential = credential_service.get_credential_by_service_name(db, agent.llm_provider, company_id)
             if llm_credential:
-                print(f"Found {agent.llm_provider} credential in vault for company (streaming).")
                 agent_api_key = credential_service.get_decrypted_credential(db, llm_credential.id, company_id)
             else:
-                print(f"{agent.llm_provider} credential not found in vault for company (streaming). LLM will use provider's default or fail.")
+                pass
 
         # Build system prompt with security hardening
         base_instructions = (
@@ -857,5 +822,4 @@ async def generate_agent_response_stream(db: Session, agent_id: int, session_id:
             yield json.dumps({"type": "complete", "content": content})
 
     except Exception as e:
-        print(f"LLM Streaming Error: {e}")
         yield json.dumps({"type": "error", "content": f"Error: {str(e)}"})

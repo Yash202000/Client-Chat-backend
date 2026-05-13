@@ -164,7 +164,7 @@ async def _run_dialer(session_id: int, db_factory):
                                 s["failed"] += 1
                             break
                     except Exception:
-                        pass
+                        logger.exception("Unexpected error")
                 else:
                     # timed out polling
                     if result["outcome"] == "dialing":

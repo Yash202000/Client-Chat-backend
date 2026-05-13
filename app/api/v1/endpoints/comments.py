@@ -7,6 +7,8 @@ from app.schemas import comment as schemas_comment
 from app.services import comment_service
 from app.core.dependencies import get_db, get_current_active_user
 from app.models import user as models_user
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -40,4 +42,4 @@ async def websocket_endpoint(
             # For simplicity, we will just broadcast the message to all clients
             await websocket.send_text(f"Message text was: {data}")
     except WebSocketDisconnect:
-        pass
+        logger.exception("Unexpected error")

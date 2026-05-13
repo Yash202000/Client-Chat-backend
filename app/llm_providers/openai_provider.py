@@ -66,14 +66,13 @@ async def generate_response(
 
                     except Exception as e:
                         error_str = str(e)
-                        print(f"OpenAI Streaming Error: {e}")
 
                         if "invalid_api_key" in error_str or "Incorrect API key" in error_str:
-                            print(f"⚠️ Invalid OpenAI API key. Please check your credentials.")
+                            pass
                         elif "rate_limit" in error_str:
-                            print(f"⚠️ OpenAI rate limit exceeded. Please try again later.")
+                            pass
                         elif "model_not_found" in error_str:
-                            print(f"⚠️ Model '{model_name}' not found. Available models: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo")
+                            pass
 
                         yield json.dumps({"type": "error", "content": f"LLM provider error: {e}"})
 
@@ -127,7 +126,6 @@ async def generate_response(
                         })
                         messages.append({"role": "system", "content": error_message})
 
-                        print(f"DEBUG: Invalid tool '{tool_name}'. Retrying... (Attempt {attempt+1}/{max_retries})")
                         break  # trigger retry
                     else:
                         tool_calls.append({
@@ -153,15 +151,14 @@ async def generate_response(
 
         except Exception as e:
             error_str = str(e)
-            print(f"OpenAI API Error: {e}")
 
             # Check for specific OpenAI errors
             if "invalid_api_key" in error_str or "Incorrect API key" in error_str:
-                print(f"⚠️ Invalid OpenAI API key. Please check your credentials.")
+                pass
             elif "rate_limit" in error_str:
-                print(f"⚠️ OpenAI rate limit exceeded. Please try again later.")
+                pass
             elif "model_not_found" in error_str:
-                print(f"⚠️ Model '{model_name}' not found. Available models: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo")
+                pass
 
             return {"type": "text", "content": f"LLM provider error: {e}"}
 

@@ -12,7 +12,6 @@ router = APIRouter()
 @router.get("/", response_model=schemas_user_settings.UserSettings)
 def read_user_settings(db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     settings = user_settings_service.get_user_settings(db, user_id=current_user.id, company_id=current_user.company_id)
-    print(settings.company,settings.owner)
     if not settings:
         # If no settings exist, create them with default values
         default_settings = schemas_user_settings.UserSettingsCreate()

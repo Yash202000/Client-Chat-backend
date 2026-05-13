@@ -39,7 +39,6 @@ def send_whatsapp_message_tool(db: Session, session: ConversationSession, recipi
         # ))
 
         # For now, returning a success message as the async call is complex from a sync function.
-        print(f"TOOL: Would send WhatsApp message to {recipient}: {message}")
         return {"status": "success", "message": "Message queued for sending."}
 
     except Exception as e:

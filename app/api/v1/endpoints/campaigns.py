@@ -344,7 +344,6 @@ def enroll_from_targeting_criteria(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    print(f"[ENROLL] Campaign {campaign_id}: segment_id={campaign.segment_id}, target_criteria={campaign.target_criteria}")
 
     # Get targeted contacts
     targeted_contacts = campaign_service.get_targeted_contacts(
@@ -353,7 +352,6 @@ def enroll_from_targeting_criteria(
         company_id=current_user.company_id
     )
 
-    print(f"[ENROLL] Found {len(targeted_contacts) if targeted_contacts else 0} targeted contacts")
 
     if not targeted_contacts:
         # Check if there are existing enrollments
@@ -369,7 +367,6 @@ def enroll_from_targeting_criteria(
 
     # Enroll them
     contact_ids = [c.id for c in targeted_contacts]
-    print(f"[ENROLL] Enrolling contact IDs: {contact_ids}")
 
     enrolled = campaign_service.enroll_contacts(
         db=db,
@@ -379,7 +376,6 @@ def enroll_from_targeting_criteria(
         enrolled_by_user_id=current_user.id
     )
 
-    print(f"[ENROLL] Successfully enrolled {len(enrolled)} contacts")
 
     # Get total enrolled (new + existing)
     total_enrolled = db.query(CampaignContactModel).filter(
@@ -459,7 +455,6 @@ async def start_campaign(
             campaign_start = campaign_start.replace(tzinfo=timezone.utc)
 
         if campaign_start and campaign_start > current_time:
-            print(f"[CAMPAIGN START] Campaign scheduled for {campaign.start_date}, not processing queue now")
             return {
                 "success": success,
                 "status": "scheduled",
@@ -475,7 +470,6 @@ async def start_campaign(
                 current_user.company_id
             )
         except Exception as e:
-            print(f"[CAMPAIGN START] Error processing queue: {e}")
             import traceback
             traceback.print_exc()
 
@@ -553,7 +547,6 @@ async def relaunch_campaign(
     if campaign.status != CampaignStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Only completed campaigns can be re-launched")
 
-    print(f"[RELAUNCH] Re-launching campaign {campaign_id}: {campaign.name}")
 
     # Reset all enrollments to pending status
     db.query(CampaignContactModel).filter(
@@ -575,7 +568,6 @@ async def relaunch_campaign(
     db.commit()
     db.refresh(campaign)
 
-    print(f"[RELAUNCH] Campaign {campaign_id} reset to draft with enrollments pending")
 
     return {
         "success": True,

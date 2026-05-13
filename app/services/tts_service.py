@@ -2,6 +2,8 @@
 import aiohttp
 from typing import AsyncGenerator
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 # --- OpenAI TTS Configuration ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -20,7 +22,7 @@ class VoiceEngineTTSService:
                 async for chunk in response.content.iter_any():
                     yield chunk
         except Exception as e:
-            print(f"Error streaming from Voice Engine: {e}")
+            logger.exception(e)
 
 # --- Service for Local AI ---
 LOCALAI_TTS_URL = os.getenv("LOCALAI_TTS_URL", "http://localhost:8082/tts")
@@ -35,7 +37,7 @@ class LocalAITTSService:
                 async for chunk in response.content.iter_any():
                     yield chunk
         except Exception as e:
-            print(f"Error streaming from Local AI: {e}")
+            logger.exception(e)
 
 
 # --- Service for OpenAI TTS ---
@@ -58,7 +60,6 @@ class OpenAITTSService:
             session: aiohttp client session
         """
         if not self.api_key:
-            print("Error: OpenAI API key not configured for TTS")
             return
 
         # Map common voice IDs or use the provided one
@@ -83,9 +84,9 @@ class OpenAITTSService:
                 async for chunk in response.content.iter_any():
                     yield chunk
         except aiohttp.ClientResponseError as e:
-            print(f"OpenAI TTS API error: {e.status} - {e.message}")
+            logger.exception(e)
         except Exception as e:
-            print(f"Error streaming from OpenAI TTS: {e}")
+            logger.exception(e)
 
     async def text_to_speech_pcm(
         self,
@@ -160,7 +161,6 @@ class TTSService:
             async for chunk in self.voice_engine_service.text_to_speech_stream(text, voice_id, session):
                 yield chunk
         else:
-            print(f"Unknown TTS provider: {provider}. Defaulting to openai.")
             async for chunk in self.openai_service.text_to_speech_stream(text, voice_id, session):
                 yield chunk
 

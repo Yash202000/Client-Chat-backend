@@ -17,6 +17,8 @@ from app.schemas.workflow import Workflow as WorkflowSchema
 from app.services import workflow_template_service
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.models.user import User
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,7 +45,7 @@ def _build_template_response(template, include_full: bool = True) -> dict:
             parsed = json.loads(visual_steps)
             node_count = len(parsed.get('nodes', []))
         except:
-            pass
+            logger.exception("Unexpected error")
 
     base_data = {
         "id": template.id,

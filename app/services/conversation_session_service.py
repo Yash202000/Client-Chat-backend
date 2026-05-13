@@ -73,16 +73,13 @@ def create_session(db: Session, session: ConversationSessionCreate) -> Conversat
     """
     Creates a new conversation session.
     """
-    print(f"Attempting to create session with data: {session.dict()}")
     db_session = ConversationSession(**session.dict())
     try:
         db.add(db_session)
         db.commit()
         db.refresh(db_session)
-        print(f"Session created and refreshed: {db_session.__dict__}")
     except Exception as e:
         db.rollback()
-        print(f"Error creating session: {e}")
         raise
     return db_session
 
@@ -209,9 +206,6 @@ async def update_session_connection_status(db: Session, conversation_id: str, is
 
         # Log the change
         if old_connection_status != is_connected or old_status != db_session.status:
-            print(f"[conversation_session_service] Updated session {conversation_id}:")
-            print(f"  - Connection: {old_connection_status} -> {is_connected}")
-            print(f"  - Status: {old_status} -> {db_session.status}")
 
             # Broadcast connection status change to all connected agents in the company
             status_update_message = json.dumps({
@@ -267,7 +261,6 @@ async def reopen_resolved_session(db: Session, session: ConversationSession, com
         })
     )
 
-    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} reopened from {old_status} → {session.status}")
 
     return session
 
@@ -348,7 +341,6 @@ async def reset_session_workflow(db: Session, session: ConversationSession, comp
     if agent_id:
         memory_service.delete_all_memories(db, agent_id=agent_id, session_id=session.conversation_id)
 
-    print(f"[conversation_session_service] 🔄 Session {session.conversation_id} workflow reset (agent_id={agent_id})")
 
     return True
 

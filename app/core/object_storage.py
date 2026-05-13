@@ -3,6 +3,8 @@ from botocore.client import Config
 import chromadb
 from chromadb.api.client import Client as ChromaClient
 from app.core.config import settings
+import logging
+logger = logging.getLogger(__name__)
 
 scheme = 'https' if settings.minio_secure else 'http'
 endpoint_url = f'{scheme}://{settings.minio_endpoint}'
@@ -24,13 +26,11 @@ try:
 except Exception:
     try:
         s3_client.create_bucket(Bucket=BUCKET_NAME)
-        print(f"Created MinIO bucket: {BUCKET_NAME}")
     except Exception as e:
-        print(f"Warning: could not create bucket '{BUCKET_NAME}': {e}")
+        logger.exception(e)
 
 # Default ChromaDB client (for backwards compatibility during migration)
 if settings.CHROMA_DB_HOST:
-    print(f"Connecting to ChromaDB at {settings.CHROMA_DB_HOST}:{settings.CHROMA_DB_PORT}")
     chroma_client = chromadb.HttpClient(host=settings.CHROMA_DB_HOST, port=settings.CHROMA_DB_PORT)
 else:
     chroma_client = ChromaClient()
@@ -80,14 +80,12 @@ def get_company_chroma_client(company_id: int):
                 admin_client.get_tenant(tenant_name)
             except Exception:
                 admin_client.create_tenant(tenant_name)
-                print(f"Created ChromaDB tenant: {tenant_name}")
 
             # Create database if not exists
             try:
                 admin_client.get_database(database_name, tenant=tenant_name)
             except Exception:
                 admin_client.create_database(database_name, tenant=tenant_name)
-                print(f"Created ChromaDB database: {database_name} for tenant: {tenant_name}")
 
             # Create tenant-specific client
             client = chromadb.HttpClient(
@@ -98,7 +96,6 @@ def get_company_chroma_client(company_id: int):
             )
         except Exception as e:
             # Fallback to default client if multi-tenancy not supported
-            print(f"Warning: ChromaDB multi-tenancy failed ({e}), using default client")
             client = chromadb.HttpClient(
                 host=settings.CHROMA_DB_HOST,
                 port=settings.CHROMA_DB_PORT
@@ -131,9 +128,8 @@ def delete_company_tenant(company_id: int):
         collections = client.list_collections()
         for collection in collections:
             client.delete_collection(collection.name)
-            print(f"Deleted collection: {collection.name} from tenant: {tenant_name}")
     except Exception as e:
-        print(f"Error cleaning up tenant {tenant_name}: {e}")
+        logger.exception(e)
 
     # Remove from cache
     if company_id in _company_chroma_clients:

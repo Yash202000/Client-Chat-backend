@@ -108,7 +108,6 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
 
         # Handle knowledge_base_ids separately
         knowledge_base_ids = update_data.pop("knowledge_base_ids", None)
-        print(knowledge_base_ids)
         if knowledge_base_ids is not None:
             db_agent.knowledge_bases.clear() # Clear existing knowledge bases
             for kb_id in knowledge_base_ids:
@@ -116,10 +115,8 @@ def update_agent(db: Session, agent_id: int, agent: schemas_agent.AgentUpdate, c
                     models_knowledge_base.KnowledgeBase.id == kb_id,
                     models_knowledge_base.KnowledgeBase.company_id == company_id
                 ).first()
-                print(kb)
                 if kb:
                     db_agent.knowledge_bases.append(kb)
-        print("updated knowledge bases:", db_agent.knowledge_bases)
 
         # Handle credential_id separately for "One API Key per Agent per Service" constraint
         if "credential_id" in update_data and update_data["credential_id"] is not None:

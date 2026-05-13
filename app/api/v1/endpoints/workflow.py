@@ -12,6 +12,8 @@ from app.services.workflow_intent_service import WorkflowIntentService
 from app.services.workflow_ai_service import workflow_ai_chat
 from app.services.workflow_simulation_service import simulate_workflow
 from app.models import user as models_user
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -637,7 +639,7 @@ async def simulate_workflow_endpoint(
             ).delete()
             db.commit()
         except Exception:
-            pass
+            logger.exception("Unexpected error")
 
     return WorkflowSimulateResponse(
         steps=[WorkflowSimulateStep(**s) for s in execution_trace],

@@ -7,19 +7,16 @@ def create_initial_data():
     db = SessionLocal()
     try:
         # Create global permissions and Super Admin role
-        print("Creating global permissions and Super Admin role...")
         role_service.create_global_permissions_and_super_admin(db)
 
         # Check if a default company exists, if not, create one
         default_company = company_service.get_companies(db, limit=1)
         if not default_company:
-            print("Creating default company HeyGenAlly...")
             company = company_service.create_company(db, schemas_company.CompanyCreate(name="HeyGenAlly"))
         else:
             company = default_company[0]
 
         # Create roles for the company
-        print("Creating default roles for the company...")
         role_service.create_initial_roles_for_company(db, company.id)
         
         # Get the Super Admin role
@@ -28,7 +25,6 @@ def create_initial_data():
         # Check if a default user exists, if not, create one
         default_user = user_service.get_user_by_email(db, "admin@heygenally.com")
         if not default_user:
-            print("Creating default admin user...")
             user_service.create_user(db, schemas_user.UserCreate(email="admin@heygenally.com", password="password"), company_id=company.id, role_id=super_admin_role.id, is_super_admin=True)
         else:
             # If user exists but has no role, assign super admin role
@@ -42,7 +38,6 @@ def create_initial_data():
         # Check if a default agent exists, if not, create one
         default_agent_list = agent_service.get_agents(db, company.id, limit=1)
         if not default_agent_list:
-            print("Creating default agent...")
             prompt = (
                 "You are a helpful assistant. You have access to a set of tools. "
             )
@@ -57,7 +52,6 @@ def create_initial_data():
             # Create the api_call tool if it doesn't exist
             api_call_tool = tool_service.get_tool_by_name(db, "API Call", company.id)
             if not api_call_tool:
-                print("Creating API Call tool...")
                 create_api_call_tool(db, company.id)
         else:
             agent = default_agent_list[0]
@@ -65,7 +59,6 @@ def create_initial_data():
         # Check if default widget settings exist, if not, create them
         default_widget_settings = widget_settings_service.get_widget_settings(db, agent_id=agent.id)
         if not default_widget_settings:
-            print("Creating default widget settings...")
             widget_settings_service.create_widget_settings(db, schemas_widget_settings.WidgetSettingsCreate(agent_id=agent.id))
 
     finally:

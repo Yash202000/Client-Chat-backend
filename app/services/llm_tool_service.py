@@ -64,7 +64,6 @@ class LLMToolService:
             if relevant_chunks:
                 context = "\n\nContext:\n" + "\n".join(relevant_chunks)
                 augmented_prompt = f"{user_prompt}{context}"
-                print(f"DEBUG: Augmented prompt with KB context.")
 
         # Build user message content - support image attachments for vision models
         if attachments:
@@ -79,7 +78,6 @@ class LLMToolService:
                             "url": f"data:{file_type};base64,{attachment['file_data']}"
                         }
                     })
-                    print(f"DEBUG: Added image attachment to LLM request: {attachment.get('file_name')}")
             user_message = {"role": "user", "content": content}
         else:
             user_message = {"role": "user", "content": augmented_prompt}
@@ -107,9 +105,8 @@ class LLMToolService:
                             },
                         })
                 except Exception as e:
-                    print(f"ERROR: Failed to fetch tools from MCP server {tool.mcp_server_url}. Error: {e}")
+                    logger.exception(e)
         
-        print(f"DEBUG: Total formatted tools sent to LLM: {len(formatted_tools)}")
 
         # 4. --- Execute with Validation and Retry Loop ---
         provider_name, model_name = model.split('/')
@@ -157,7 +154,6 @@ class LLMToolService:
                 full_chat_history.append({"role": "assistant", "content": None, "tool_calls": [{"id": response.get('tool_call_id'), "type": "function", "function": {"name": tool_name, "arguments": json.dumps(response.get('parameters', {}))}}]})
                 full_chat_history.append({"role": "system", "content": error_message})
                 
-                print(f"DEBUG: Invalid tool '{tool_name}'. Retrying... (Attempt {attempt + 1}/{max_retries})")
                 continue  # Retry the call with the updated history
             
             else: # It's a text response, so we're done

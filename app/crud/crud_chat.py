@@ -260,11 +260,24 @@ def create_system_message(db: Session, channel_id: int, content: str, extra_data
 def get_channel_messages(db: Session, channel_id: int, skip: int = 0, limit: int = 100) -> List[InternalChatMessage]:
     # Only get top-level messages (not replies)
     # Fetch latest `limit` messages by ordering DESC, then reverse to return chronological order
-    rows = db.query(InternalChatMessage).filter(
-        InternalChatMessage.channel_id == channel_id,
-        InternalChatMessage.parent_message_id == None
-    ).order_by(InternalChatMessage.created_at.desc()).offset(skip).limit(limit).all()
-    return list(reversed(rows))
+    rows = (
+        db.query(InternalChatMessage)
+        .filter(
+            InternalChatMessage.channel_id == channel_id,
+            InternalChatMessage.parent_message_id == None,
+        )
+        .options(
+            selectinload(InternalChatMessage.attachments),
+            selectinload(InternalChatMessage.reactions),
+            joinedload(InternalChatMessage.sender),
+        )
+        .order_by(InternalChatMessage.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    rows = list(reversed(rows))
+    return rows
 
 def get_message_replies(db: Session, message_id: int, skip: int = 0, limit: int = 50) -> List[InternalChatMessage]:
     """Get all replies to a specific message"""

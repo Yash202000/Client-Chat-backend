@@ -12,6 +12,8 @@ from app.schemas import chat as chat_schema
 from app.schemas.websockets import WebSocketMessage
 from app.services.connection_manager import manager
 import json
+import logging
+logger = logging.getLogger(__name__)
 
 
 async def _broadcast_system_message(db_message, channel_id: int):
@@ -22,8 +24,8 @@ async def _broadcast_system_message(db_message, channel_id: int):
         message_data = chat_schema.InternalChatMessage.from_orm(db_message)
         ws_msg = WebSocketMessage(type="new_message", payload=message_data.model_dump())
         await manager.broadcast(ws_msg.model_dump_json(), str(channel_id))
-    except Exception as e:
-        print(f"[SYS_MSG] ERROR broadcasting system message: {e}")
+    except Exception:
+        logger.exception("Unexpected error")
 
 router = APIRouter()
 
@@ -70,11 +72,8 @@ async def initiate_video_call(
     # Only ring for true 1-on-1 DMs (type=DM AND exactly 2 members)
     is_dm = channel_type_str == 'DM' and len(channel_member_ids) == 2
 
-    print(f"[CALL_INITIATE] channel_id={channel_id} channel_type_str={channel_type_str!r} member_count={len(channel_member_ids)} member_ids={channel_member_ids} is_dm={is_dm}")
-
     # DM calls ring the other person; team/group calls go straight to active (silent join room)
     initial_status = "ringing" if is_dm else "active"
-    print(f"[CALL_INITIATE] initial_status={initial_status!r}")
     video_call = crud_video_call.create_video_call(db, obj_in=VideoCallCreate(channel_id=channel_id), created_by_id=current_user.id)
     crud_video_call.update_video_call_status(db, video_call_id=video_call.id, status=initial_status)
 
@@ -226,34 +225,27 @@ async def accept_video_call(
     current_user: User = Depends(get_current_user),
 ):
     """Accept/Join an incoming video call"""
-    print(f"[ACCEPT CALL] User {current_user.id} ({current_user.email}) attempting to accept call {call_id}")
 
     video_call = crud_video_call.get_video_call_by_id(db, call_id=call_id)
     if not video_call:
-        print(f"[ACCEPT CALL] ERROR: Call {call_id} not found")
         raise HTTPException(status_code=404, detail="Video call not found")
 
-    print(f"[ACCEPT CALL] Call status: {video_call.status}")
 
     # Allow accepting/joining calls that are "ringing" or "active" (for group calls)
     if video_call.status not in ["ringing", "active"]:
-        print(f"[ACCEPT CALL] ERROR: Call status is {video_call.status}, not ringing/active")
         raise HTTPException(status_code=400, detail=f"Call is not available to join (status: {video_call.status})")
 
     # Check if this is the first person accepting (transitioning from ringing to active)
     is_first_accept = video_call.status == "ringing"
 
-    print(f"[ACCEPT CALL] is_first_accept: {is_first_accept}")
 
     # Update call status to active and add user to participants
     video_call = crud_video_call.accept_video_call(db, video_call_id=call_id, accepted_by_id=current_user.id)
-    print(f"[ACCEPT CALL] User {current_user.id} added to joined_users: {video_call.joined_users}")
 
     acceptor_name = current_user.first_name or current_user.email
 
     # Only create system message for the first accept (when call starts)
     if is_first_accept:
-        print(f"[ACCEPT CALL] Creating system message for first accept")
         system_message_content = f"📞 Video call started by {acceptor_name}"
         sys_msg = crud_chat.create_system_message(
             db=db,
@@ -267,7 +259,6 @@ async def accept_video_call(
 
     # Broadcast acceptance/join to all channel members
     broadcast_type = "call_accepted" if is_first_accept else "user_joined_call"
-    print(f"[ACCEPT CALL] Broadcasting {broadcast_type} to channel {video_call.channel_id}")
 
     accept_payload = json.dumps({
         "type": broadcast_type,
@@ -284,7 +275,6 @@ async def accept_video_call(
     # Also notify company-wide so AppLayout can dismiss the ring modal on all devices
     await manager.broadcast(accept_payload, str(current_user.company_id))
 
-    print(f"[ACCEPT CALL] Success! Returning token for room {video_call.room_name}")
 
     return {
         "status": "accepted",
@@ -300,37 +290,27 @@ async def end_video_call(
     current_user: User = Depends(get_current_user),
 ):
     """Leave or end a video call"""
-    print(f"[END CALL] Endpoint hit - call_id: {call_id}, user: {current_user.id} ({current_user.email})")
 
     video_call = crud_video_call.get_video_call_by_id(db, call_id=call_id)
     if not video_call:
-        print(f"[END CALL] ERROR: Video call {call_id} not found in database")
         raise HTTPException(status_code=404, detail="Video call not found")
 
     # Already ended — return early so concurrent /end requests don't duplicate messages
     if video_call.status == "completed":
-        print(f"[END CALL] Call {call_id} already completed, skipping")
         return {"status": "completed"}
 
-    print(f"[END CALL] Found call - status: {video_call.status}, channel: {video_call.channel_id}, room: {video_call.room_name}")
 
     # Get current participants in the call
     joined_users = video_call.joined_users if video_call.joined_users else []
-    print(f"[END CALL] Current joined_users: {joined_users} (type: {type(joined_users)})")
-    print(f"[END CALL] Current user leaving: {current_user.id} ({current_user.email})")
-    print(f"[END CALL] Is current user in joined_users: {current_user.id in joined_users}")
 
     # Calculate how many users will remain after this user leaves
     remaining_users = [uid for uid in joined_users if uid != current_user.id]
     remaining_count = len(remaining_users)
-    print(f"[END CALL] Remaining users after {current_user.id} leaves: {remaining_users}")
-    print(f"[END CALL] Remaining count: {remaining_count}")
 
     user_name = current_user.first_name or current_user.email
 
     # Keep call alive as long as at least 1 other user remains; end only when last person leaves
     if remaining_count >= 1:
-        print(f"[END CALL] Other users still in call - removing {current_user.id} from participants")
 
         # Remove this user from joined_users
         video_call = crud_video_call.remove_participant_from_video_call(db, video_call_id=call_id, user_id=current_user.id)
@@ -345,29 +325,24 @@ async def end_video_call(
             "left_by_name": user_name,
             "participant_count": remaining_count,
         }
-        print(f"[END CALL] Broadcasting user_left_call to channel {video_call.channel_id}: {broadcast_data}")
 
         await manager.broadcast(
             json.dumps(broadcast_data),
             str(video_call.channel_id)
         )
-        print(f"[END CALL] Broadcast complete - user left")
 
         return {"status": "left", "participant_count": remaining_count}
 
     # This is the last user - end the call completely
-    print(f"[END CALL] Last user leaving - ending call completely")
 
     # Update call status to completed
     video_call = crud_video_call.end_video_call(db, video_call_id=call_id)
-    print(f"[END CALL] Updated call status to: {video_call.status}, ended_at: {video_call.ended_at}")
 
     # Calculate duration if answered_at exists
     duration_seconds = None
     if video_call.answered_at and video_call.ended_at:
         duration_seconds = int((video_call.ended_at - video_call.answered_at).total_seconds())
 
-    print(f"[END CALL] Duration calculated: {duration_seconds} seconds")
 
     # Create system message in chat
     if duration_seconds:
@@ -385,7 +360,6 @@ async def end_video_call(
         extra_data={"call_id": call_id, "call_status": "completed", "duration_seconds": duration_seconds}
     )
     await _broadcast_system_message(sys_msg, video_call.channel_id)
-    print(f"[END CALL] System message created: {system_message_content}")
 
     # Broadcast call end to all channel members
     broadcast_data = {
@@ -396,13 +370,11 @@ async def end_video_call(
         "ended_by_id": current_user.id,
         "duration_seconds": duration_seconds,
     }
-    print(f"[END CALL] Broadcasting to channel {video_call.channel_id}: {broadcast_data}")
 
     end_payload = json.dumps(broadcast_data)
     await manager.broadcast(end_payload, str(video_call.channel_id))
     # Also notify company-wide so AppLayout can dismiss any stale ring modals
     await manager.broadcast(end_payload, str(current_user.company_id))
-    print(f"[END CALL] Broadcast complete")
 
     return {"status": "completed", "duration_seconds": duration_seconds}
 

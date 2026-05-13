@@ -95,7 +95,6 @@ async def send_email_smtp(
         # Close connection
         server.quit()
 
-        print(f"[EMAIL SERVICE] Successfully sent email to {to_email}")
 
         return {
             "message_id": msg['Message-ID'] if 'Message-ID' in msg else None,
@@ -105,15 +104,12 @@ async def send_email_smtp(
         }
 
     except smtplib.SMTPAuthenticationError as e:
-        print(f"[EMAIL SERVICE] SMTP Authentication failed: {e}")
         raise ValueError(f"SMTP authentication failed. Please check SMTP credentials.")
 
     except smtplib.SMTPException as e:
-        print(f"[EMAIL SERVICE] SMTP error: {e}")
         raise Exception(f"Failed to send email: {str(e)}")
 
     except Exception as e:
-        print(f"[EMAIL SERVICE] Unexpected error: {e}")
         raise Exception(f"Failed to send email: {str(e)}")
 
 

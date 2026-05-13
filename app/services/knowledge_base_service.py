@@ -14,6 +14,8 @@ import shutil
 import os
 from io import BytesIO
 from pypdf import PdfReader
+import logging
+logger = logging.getLogger(__name__)
 
 async def generate_qna_from_knowledge_base(db: Session, knowledge_base_id: int, company_id: int, prompt: str) -> str:
     kb = get_knowledge_base(db, knowledge_base_id, company_id)
@@ -137,8 +139,7 @@ def delete_knowledge_base(db: Session, knowledge_base_id: int, company_id: int):
                     Key=db_knowledge_base.storage_details.get('key')
                 )
             except Exception as e:
-                print(f"Error deleting file from S3: {e}")
-                # Decide if you want to raise an exception or just log the error
+                logger.exception(e)
 
         if db_knowledge_base.chroma_collection_name:
             try:
@@ -146,15 +147,14 @@ def delete_knowledge_base(db: Session, knowledge_base_id: int, company_id: int):
                 company_chroma_client = get_company_chroma_client(company_id)
                 company_chroma_client.delete_collection(name=db_knowledge_base.chroma_collection_name)
             except Exception as e:
-                print(f"Error deleting chroma collection: {e}")
+                logger.exception(e)
 
         if db_knowledge_base.faiss_index_id:
             try:
                 if os.path.exists(db_knowledge_base.faiss_index_id):
                     shutil.rmtree(db_knowledge_base.faiss_index_id)
-                    print(f"FAISS index deleted from: {db_knowledge_base.faiss_index_id}")
             except Exception as e:
-                print(f"Error deleting FAISS index: {e}")
+                logger.exception(e)
 
         db.delete(db_knowledge_base)
         db.commit()
@@ -265,7 +265,7 @@ def find_relevant_chunks(
                     try:
                         result["metadata"]["structured_data"] = json.loads(structured_data_str)
                     except (json.JSONDecodeError, TypeError):
-                        pass
+                        logger.exception("Unexpected error")
 
             processed.append(result)
 
@@ -331,7 +331,6 @@ def find_relevant_chunks(
                     retrieved_results = results['documents'][0]
 
     except Exception as e:
-        print(f"Error querying knowledge base {kb.name} (ID: {kb.id}): {e}")
         return []
 
     return retrieved_results
@@ -365,7 +364,6 @@ def get_knowledge_base_content(db: Session, knowledge_base_id: int, company_id: 
                         text += page.extract_text() or ""
                     return text
                 except Exception as e:
-                    print(f"Error parsing PDF file from S3: {e}")
                     return "Could not extract text from PDF file."
             else: # Assume text file for others
                 try:
@@ -374,7 +372,6 @@ def get_knowledge_base_content(db: Session, knowledge_base_id: int, company_id: 
                     return "File content could not be displayed (not valid UTF-8 text)."
 
         except Exception as e:
-            print(f"Error fetching file from S3: {e}")
             return None
     
     return db_knowledge_base.content
@@ -395,7 +392,6 @@ def get_knowledge_base_download_url(db: Session, knowledge_base_id: int, company
                 ExpiresIn=3600  # URL expires in 1 hour
             )
         except Exception as e:
-            print(f"Error generating presigned URL: {e}")
             return None
     
     return None

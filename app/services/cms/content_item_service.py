@@ -14,6 +14,8 @@ from app.schemas.cms import (
 )
 from app.services.cms import content_type_service
 import re
+import logging
+logger = logging.getLogger(__name__)
 
 
 def _index_if_published(db: Session, content_item, content_type):
@@ -26,7 +28,7 @@ def _index_if_published(db: Session, content_item, content_type):
                 content_item.chroma_doc_id = doc_id
                 db.commit()
         except Exception as e:
-            print(f"Warning: Failed to index content item {content_item.id}: {e}")
+            logger.exception(e)
 
 
 def validate_field_value(field_def: Dict[str, Any], value: Any) -> Tuple[bool, str]:
@@ -425,7 +427,7 @@ def _remove_from_index(db: Session, content_item: ContentItem) -> None:
                 db=db  # Pass db for KB collection lookup
             )
         except Exception as e:
-            print(f"Warning: Failed to remove content item {content_item.id} from index: {e}")
+            logger.exception(e)
 
 
 def delete_content_item(db: Session, item_id: int, company_id: int) -> bool:

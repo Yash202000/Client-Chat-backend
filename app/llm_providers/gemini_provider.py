@@ -9,6 +9,8 @@ import os
 import uuid
 import json
 from typing import AsyncGenerator, Union, Dict, List
+import logging
+logger = logging.getLogger(__name__)
 
 genai.configure(api_key=settings.GOOGLE_API_KEY)
 
@@ -70,7 +72,6 @@ async def generate_response(
                 yield json.dumps({"type": "stream_end", "full_content": full_content})
 
             except Exception as e:
-                print(f"Gemini Streaming Error: {e}")
                 yield json.dumps({"type": "error", "content": f"LLM provider error: {e}"})
 
         return stream_response()
@@ -88,7 +89,7 @@ async def generate_response(
                 "total_tokens": response.usage_metadata.total_token_count or 0
             }
     except (AttributeError, TypeError):
-        pass
+        logger.exception("Unexpected error")
 
     try:
         function_call = response.candidates[0].content.parts[0].function_call
@@ -100,7 +101,7 @@ async def generate_response(
                 "usage": usage_data
             }
     except (ValueError, AttributeError, IndexError):
-        pass
+        logger.exception("Unexpected error")
 
     return {"type": "text", "content": response.text, "usage": usage_data}
 
@@ -161,7 +162,6 @@ def generate_image(db: Session, company_id: int, prompt: str, api_key: str = Non
             raise ValueError("No image generated")
 
     except Exception as e:
-        print(f"Imagen 3 failed: {e}, trying Gemini 2.0 Flash...")
 
         # Fallback to Gemini 2.0 Flash experimental
         try:

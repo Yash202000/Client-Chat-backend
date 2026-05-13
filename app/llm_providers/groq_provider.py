@@ -6,6 +6,8 @@ from app.services import credential_service
 from app.services.vault_service import vault_service
 from app.core.config import settings
 from typing import AsyncGenerator, Union, Dict, List
+import logging
+logger = logging.getLogger(__name__)
 
 
 def _parse_failed_generation(failed_gen: str, available_tools: list) -> dict | None:
@@ -94,10 +96,9 @@ async def generate_response(
 
                     except Exception as e:
                         error_str = str(e)
-                        print(f"Groq Streaming Error: {e}")
 
                         if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
-                            print(f"⚠️ Tool calling failed with current Groq model.")
+                            pass
 
                         yield json.dumps({"type": "error", "content": f"LLM provider error: {e}"})
 
@@ -140,7 +141,6 @@ async def generate_response(
                         })
                         messages.append({"role": "system", "content": error_message})
 
-                        print(f"DEBUG: Invalid tool '{tool_name}'. Retrying... (Attempt {attempt+1}/{max_retries})")
                         break  # trigger retry
                     else:
                         tool_calls.append({
@@ -162,25 +162,20 @@ async def generate_response(
             # Check if content contains malformed function syntax (model hallucinating tool calls)
             content = response_message.content or ""
             if content and ("<function=" in content or "</function>" in content):
-                print(f"⚠️ Groq model generated malformed function syntax in text. Model: {model_name}")
                 if tools:
                     recovered = _parse_failed_generation(content, tools)
                     if recovered:
                         recovered["usage"] = usage_data
-                        print(f"✅ Recovered tool call '{recovered['tool_name']}' from text content.")
                         return recovered
-                print(f"⚠️ Consider switching to llama-3.3-70b-versatile for proper function calling support.")
                 return {"type": "text", "content": "I apologize, but I'm having technical difficulties processing your request. Could you please try again?", "usage": usage_data}
 
             return {"type": "text", "content": content, "usage": usage_data}
 
         except Exception as e:
             error_str = str(e)
-            print(f"Groq API Error: {e}")
 
             # Tool use failed — try to recover by parsing the failed_generation field
             if "tool_use_failed" in error_str or "Failed to call a function" in error_str:
-                print(f"⚠️ Tool calling failed with current Groq model. Attempting to recover from failed_generation...")
                 try:
                     body = getattr(e, 'body', None)
                     if isinstance(body, dict):
@@ -194,12 +189,10 @@ async def generate_response(
                     if failed_gen and tools:
                         recovered = _parse_failed_generation(failed_gen, tools)
                         if recovered:
-                            print(f"✅ Recovered tool call '{recovered['tool_name']}' from failed_generation.")
                             return recovered
                 except Exception as parse_err:
-                    print(f"Failed to recover from failed_generation: {parse_err}")
+                    logger.exception(parse_err)
 
-                print(f"⚠️ Could not recover. Consider using llama-3.3-70b-versatile or llama-3.1-70b-versatile for better function calling support.")
 
             return {"type": "text", "content": f"LLM provider error: {e}"}
 

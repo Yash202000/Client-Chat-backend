@@ -7,6 +7,8 @@ from jose import JWTError, jwt
 from app.core.config import settings
 from typing import Optional
 import json
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,20 +45,16 @@ async def websocket_endpoint(
 ):
     # Convert company_id to string for consistent channel naming
     channel_id = str(company_id)
-    print(f"[ws_updates] 🔌 Connecting to channel: '{channel_id}' (type: {type(channel_id).__name__})")
 
     # Accept connection first
     await manager.connect(websocket, channel_id, "user")
-    print(f"[ws_updates] ✅ WebSocket connection established for company_id: {company_id} (channel: '{channel_id}')")
 
     # Then authenticate (will close connection if auth fails)
     current_user = await authenticate_websocket_user(websocket, token)
     if not current_user:
         return
 
-    print(f"[ws_updates] 📡 Authenticated user: {current_user.email}")
     if current_user.company_id != company_id:
-        print(f"[ws_updates] ❌ Connection rejected: User company_id ({current_user.company_id}) does not match path company_id ({company_id})")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Company mismatch")
         return
 
@@ -67,7 +65,6 @@ async def websocket_endpoint(
     db = SessionLocal()
     try:
         user_service.update_user_presence(db, user_id=current_user.id, status="online")
-        print(f"[ws_updates] ✅ Updated presence status to 'online' for user: {current_user.email}")
 
         # Broadcast presence update to all company users
         presence_update = json.dumps({
@@ -81,7 +78,6 @@ async def websocket_endpoint(
     finally:
         db.close()
 
-    print(f"[ws_updates] 📊 Current active channels: {list(manager.active_connections.keys())}")
 
     try:
         while True:
@@ -93,14 +89,11 @@ async def websocket_endpoint(
                 if message.get("type") == "ping":
                     # Respond to heartbeat ping with pong
                     await websocket.send_text(json.dumps({"type": "pong"}))
-                    print(f"[ws_updates] 💓 Heartbeat ping received, sent pong")
                     continue
             except json.JSONDecodeError:
-                # Not a JSON message, just log it
-                print(f"[ws_updates] 📨 Received non-JSON data from client: {data[:100]}")
+                logger.exception("Unexpected error")
 
     except WebSocketDisconnect:
-        print(f"[ws_updates] 🔌 Client disconnected from channel '{channel_id}'")
         manager.disconnect(websocket, channel_id)
 
         # Mark user as inactive in DB so schedule_offline_update won't skip the "online" check
@@ -112,7 +105,6 @@ async def websocket_endpoint(
 
         # Schedule delayed offline update (allows reconnection within grace period)
         await user_service.schedule_offline_update(SessionLocal, current_user.id)
-        print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (5s grace period)")
 
         # Broadcast inactive (not offline/red) — corrected to online if user reconnects
         presence_update = json.dumps({
@@ -124,10 +116,7 @@ async def websocket_endpoint(
         })
         await manager.broadcast(presence_update, channel_id)
 
-        print(f"[ws_updates] ❌ WebSocket connection closed for company_id: {company_id}")
-        print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")
     except Exception as e:
-        print(f"[ws_updates] ⚠️ Error in WebSocket: {e}")
         manager.disconnect(websocket, channel_id)
 
         # Schedule delayed offline update on error (allows reconnection within grace period)
@@ -139,7 +128,6 @@ async def websocket_endpoint(
                 db.close()
 
             await user_service.schedule_offline_update(SessionLocal, current_user.id)
-            print(f"[ws_updates] ⏳ Scheduled offline for user: {current_user.email} (due to error, 5s grace period)")
 
             presence_update = json.dumps({
                 "type": "presence_update",
@@ -150,6 +138,5 @@ async def websocket_endpoint(
             })
             await manager.broadcast(presence_update, channel_id)
         except Exception as broadcast_error:
-            print(f"[ws_updates] ⚠️ Failed to schedule offline on error: {broadcast_error}")
+            logger.exception(broadcast_error)
 
-        print(f"[ws_updates] 📊 Remaining channels: {list(manager.active_connections.keys())}")

@@ -5,6 +5,8 @@ from datetime import datetime
 from app.models.workflow import Workflow
 from app.models.intent import Intent, IntentMatch
 from app.services.intent_service import generate_llm_response
+import logging
+logger = logging.getLogger(__name__)
 
 
 class WorkflowIntentService:
@@ -36,21 +38,17 @@ class WorkflowIntentService:
         """
 
         if not self.workflow_has_intents_enabled(workflow):
-            print(f"Intent detection not enabled for workflow {workflow.id}")
             return None
 
         trigger_intents = workflow.intent_config.get("trigger_intents", [])
         if not trigger_intents:
-            print(f"No trigger intents configured for workflow {workflow.id}")
             return None
 
-        print(f"Checking message against {len(trigger_intents)} workflow intents...")
 
         # Stage 1: Keyword matching (very fast)
         keyword_match = self._keyword_match(message, trigger_intents)
         if keyword_match:
             if keyword_match[1] >= 0.5:  # At least 50% of keywords matched
-                print(f"✓ Keyword match: {keyword_match[0]['name']} ({keyword_match[1]:.2f})")
                 return await self._finalize_intent_match(
                     keyword_match[0], message, conversation_id, keyword_match[1], "keyword", workflow, company_id
                 )
@@ -59,7 +57,6 @@ class WorkflowIntentService:
         phrase_match = self._phrase_similarity_match(message, trigger_intents)
         if phrase_match:
             if phrase_match[1] >= 0.6:  # At least 60% phrase overlap
-                print(f"✓ Phrase similarity match: {phrase_match[0]['name']} ({phrase_match[1]:.2f})")
                 return await self._finalize_intent_match(
                     phrase_match[0], message, conversation_id, phrase_match[1], "similarity", workflow, company_id
                 )
@@ -70,12 +67,10 @@ class WorkflowIntentService:
             intent_dict, confidence = llm_match
             intent_threshold = intent_dict.get("confidence_threshold", 0.7)
             if confidence >= intent_threshold:
-                print(f"✓ LLM match: {intent_dict['name']} ({confidence:.2f})")
                 return await self._finalize_intent_match(
                     intent_dict, message, conversation_id, confidence, "llm", workflow, company_id
                 )
 
-        print(f"✗ No workflow intent matched for message: '{message[:50]}...'")
         return None
 
     def _keyword_match(self, message: str, intents: List[Dict]) -> Optional[Tuple[Dict, float]]:
@@ -192,7 +187,7 @@ Respond with JSON in this exact format (no markdown, just raw JSON):
                     return (matched_intent, confidence)
 
         except Exception as e:
-            print(f"Error in LLM intent classification: {e}")
+            logger.exception(e)
 
         return None
 
@@ -257,16 +252,14 @@ Respond with JSON in this exact format (no markdown, just raw JSON):
                     match = re.search(validation_regex, message)
                     if match:
                         extracted[entity_name] = match.group(0)
-                        print(f"✓ Extracted entity '{entity_name}': {match.group(0)} (regex)")
                 except Exception as e:
-                    print(f"Regex extraction error for {entity_name}: {e}")
+                    logger.exception(e)
 
             elif extraction_method == "llm":
                 # LLM extraction
                 value = await self._llm_extract_entity(message, entity_config)
                 if value:
                     extracted[entity_name] = value
-                    print(f"✓ Extracted entity '{entity_name}': {value} (llm)")
 
         return extracted
 
@@ -305,7 +298,6 @@ Response (just the value or NOT_FOUND):"""
             return response
 
         except Exception as e:
-            print(f"Error extracting entity {entity_name}: {e}")
             return None
 
     def update_intent_match_execution_status(

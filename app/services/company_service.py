@@ -19,13 +19,11 @@ def create_company(db: Session, company: schemas_company.CompanyCreate):
     db.refresh(company)
     
     # Create roles for the company
-    print("Creating default roles for the company...")
     role_service.create_initial_roles_for_company(db, company.id)
     
     # Check if a default agent exists, if not, create one
     default_agent_list = agent_service.get_agents(db, company.id, limit=1)
     if not default_agent_list:
-        print("Creating default agent...")
         prompt = (
             "You are a helpful assistant."
         )
@@ -40,7 +38,6 @@ def create_company(db: Session, company: schemas_company.CompanyCreate):
         # Create the api_call tool if it doesn't exist
         api_call_tool = tool_service.get_tool_by_name(db, "API Call", company.id)
         if not api_call_tool:
-            print("Creating API Call tool...")
             create_api_call_tool(db, company.id)
     else:
         agent = default_agent_list[0]
@@ -48,7 +45,6 @@ def create_company(db: Session, company: schemas_company.CompanyCreate):
     # Check if default widget settings exist, if not, create them
     default_widget_settings = widget_settings_service.get_widget_settings(db, agent_id=agent.id)
     if not default_widget_settings:
-        print("Creating default widget settings...")
         widget_settings_service.create_widget_settings(db, schemas_widget_settings.WidgetSettingsCreate(agent_id=agent.id))
 
     return company

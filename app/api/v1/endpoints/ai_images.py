@@ -41,7 +41,6 @@ def serve_image_file(filename: str):
     except s3_client.exceptions.NoSuchKey:
         raise HTTPException(status_code=404, detail="Image not found")
     except Exception as e:
-        print(f"Error serving image: {e}")
         raise HTTPException(status_code=500, detail="Failed to serve image")
 
 @router.post("/", response_model=schemas_ai_image.AIImage, dependencies=[Depends(require_permission("image:create"))])

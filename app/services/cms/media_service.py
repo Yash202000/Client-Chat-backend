@@ -11,6 +11,8 @@ import io
 import mimetypes
 from PIL import Image
 from datetime import datetime
+import logging
+logger = logging.getLogger(__name__)
 
 # Media type mappings
 MEDIA_TYPE_MAP = {
@@ -121,7 +123,6 @@ def generate_thumbnail(file_content: bytes, filename: str) -> Optional[bytes]:
 
         return thumb_io.getvalue()
     except Exception as e:
-        print(f"Error generating thumbnail: {e}")
         return None
 
 
@@ -131,7 +132,6 @@ def get_image_dimensions(file_content: bytes) -> Tuple[Optional[int], Optional[i
         img = Image.open(io.BytesIO(file_content))
         return img.width, img.height
     except Exception as e:
-        print(f"Error getting image dimensions: {e}")
         return None, None
 
 
@@ -156,10 +156,8 @@ def get_audio_duration(file_content: bytes, filename: str) -> Optional[int]:
 
         return None
     except ImportError:
-        print("mutagen not installed, skipping audio duration extraction")
         return None
     except Exception as e:
-        print(f"Error getting audio duration: {e}")
         return None
 
 
@@ -207,7 +205,6 @@ def get_video_info(file_content: bytes, filename: str) -> Tuple[Optional[int], O
 
         return None, None, None
     except Exception as e:
-        print(f"Error getting video info: {e}")
         return None, None, None
 
 
@@ -310,7 +307,7 @@ async def upload_media(
                 )
                 thumbnail_s3_key = thumbnail_key
             except Exception as e:
-                print(f"Error uploading thumbnail: {e}")
+                logger.exception(e)
 
     elif media_type == 'audio':
         duration = get_audio_duration(file_content, file.filename)
@@ -390,7 +387,7 @@ def delete_media(db: Session, media_id: int, company_id: int) -> bool:
         if db_media.thumbnail_s3_key:
             s3_client.delete_object(Bucket=BUCKET_NAME, Key=db_media.thumbnail_s3_key)
     except Exception as e:
-        print(f"Error deleting files from S3: {e}")
+        logger.exception(e)
 
     # Delete from database
     db.delete(db_media)
@@ -408,7 +405,6 @@ def get_media_url(db_media: ContentMedia, expires_in: int = 3600) -> str:
             ExpiresIn=expires_in
         )
     except Exception as e:
-        print(f"Error generating presigned URL: {e}")
         return ""
 
 
@@ -424,7 +420,6 @@ def get_thumbnail_url(db_media: ContentMedia, expires_in: int = 3600) -> Optiona
             ExpiresIn=expires_in
         )
     except Exception as e:
-        print(f"Error generating thumbnail URL: {e}")
         return None
 
 

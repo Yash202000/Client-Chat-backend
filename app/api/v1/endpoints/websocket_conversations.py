@@ -23,6 +23,8 @@ from contextlib import contextmanager
 from jose import JWTError, jwt
 from app.core.config import settings
 from app.core.object_storage import s3_client, BUCKET_NAME
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,10 +46,8 @@ def upload_attachment_to_s3(file_data_base64: str, file_name: str, file_type: st
         # Build URL based on MinIO endpoint
         scheme = 'https' if settings.minio_secure else 'http'
         file_url = f"{scheme}://{settings.minio_endpoint}/{BUCKET_NAME}/{key}"
-        print(f"[S3 Upload] Successfully uploaded {file_name} to {file_url}")
         return file_url
     except Exception as e:
-        print(f"[S3 Upload] Failed to upload {file_name}: {e}")
         return None
 
 def process_attachments_for_storage(attachments: List[Dict[str, Any]]) -> str:
@@ -127,13 +127,11 @@ async def heartbeat_handler(websocket: WebSocket, session_id: str):
             try:
                 await websocket.send_text(json.dumps({"type": "ping"}))
             except Exception as e:
-                print(f"[heartbeat] Error sending ping to session {session_id}: {e}")
                 break
     except asyncio.CancelledError:
-        print(f"[heartbeat] Heartbeat task cancelled for session {session_id}")
         raise
     except Exception as e:
-        print(f"[heartbeat] Unexpected error in heartbeat for session {session_id}: {e}")
+        logger.exception(e)
 
 
 @router.websocket("/wschat/{channel_id}")
@@ -142,7 +140,6 @@ async def internal_chat_websocket_endpoint(
     channel_id: int,
     token: Optional[str] = Query(None)
 ):
-    print(f"Attempting to connect to WebSocket for channel {channel_id}")
     channel_id_str = str(channel_id)
 
     # Accept connection first
@@ -275,7 +272,6 @@ async def voice_websocket_endpoint(
                             if transcript and message.get("is_final", False):
                                 await transcript_queue.put(transcript)
                     except Exception as e:
-                        print(f"Error receiving from STT service: {e}")
                         break
             await stt_service.close()
         # Groq does not use a persistent connection for transcription
@@ -295,9 +291,9 @@ async def voice_websocket_endpoint(
                     audio_buffer.extend(audio_chunk)
 
         except WebSocketDisconnect:
-            pass
+            logger.exception("Unexpected error")
         except Exception as e:
-            print(f"Error receiving audio from client: {e}")
+            logger.exception(e)
 
     async def process_groq_buffer():
         nonlocal audio_buffer, last_audio_time
@@ -312,7 +308,7 @@ async def voice_websocket_endpoint(
                     if transcript:
                         await transcript_queue.put(transcript)
                 except Exception as e:
-                    print(f"Error during Groq transcription: {e}")
+                    logger.exception(e)
                 finally:
                     audio_buffer.clear()
                     last_audio_time = None
@@ -345,7 +341,6 @@ async def voice_websocket_endpoint(
                     ).first()
 
                     if session_obj and not session_obj.is_ai_enabled:
-                        print(f"AI is disabled for session {session_id}. No voice response will be generated.")
                         transcript_queue.task_done()
                         continue
 
@@ -367,9 +362,9 @@ async def voice_websocket_endpoint(
                 transcript_queue.task_done()
 
     except WebSocketDisconnect:
-        print(f"Client in voice session #{session_id} disconnected")
+        logger.exception("Unexpected error")
     except Exception as e:
-        print(f"Error in main voice processing loop: {e}")
+        logger.exception(e)
     finally:
         # Cancel tasks and wait for them to finish
         transcription_task.cancel()
@@ -381,20 +376,19 @@ async def voice_websocket_endpoint(
         try:
             await transcription_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
         try:
             await client_audio_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
         if groq_buffer_task:
             try:
                 await groq_buffer_task
             except asyncio.CancelledError:
-                pass
+                logger.exception("Unexpected error")
 
         await tts_service.close()
         manager.disconnect(websocket, session_id)
-        print(f"Cleaned up resources for voice session #{session_id}")
 
 
 
@@ -447,7 +441,6 @@ async def internal_voice_websocket_endpoint(
                             if transcript and message.get("is_final", False):
                                 await transcript_queue.put(transcript)
                     except Exception as e:
-                        print(f"Error receiving from STT service: {e}")
                         break
             await stt_service.close()
         # Groq does not use a persistent connection for transcription
@@ -467,9 +460,9 @@ async def internal_voice_websocket_endpoint(
                     audio_buffer.extend(audio_chunk)
 
         except WebSocketDisconnect:
-            pass
+            logger.exception("Unexpected error")
         except Exception as e:
-            print(f"Error receiving audio from client: {e}")
+            logger.exception(e)
 
     async def process_groq_buffer():
         nonlocal audio_buffer, last_audio_time
@@ -484,7 +477,7 @@ async def internal_voice_websocket_endpoint(
                     if transcript:
                         await transcript_queue.put(transcript)
                 except Exception as e:
-                    print(f"Error during Groq transcription: {e}")
+                    logger.exception(e)
                 finally:
                     audio_buffer.clear()
                     last_audio_time = None
@@ -526,9 +519,9 @@ async def internal_voice_websocket_endpoint(
                 transcript_queue.task_done()
 
     except WebSocketDisconnect:
-        print(f"Agent in voice session #{session_id} disconnected")
+        logger.exception("Unexpected error")
     except Exception as e:
-        print(f"Error in internal voice processing loop: {e}")
+        logger.exception(e)
     finally:
         # Cancel tasks and wait for them to finish
         transcription_task.cancel()
@@ -540,20 +533,19 @@ async def internal_voice_websocket_endpoint(
         try:
             await transcription_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
         try:
             await client_audio_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
         if groq_buffer_task:
             try:
                 await groq_buffer_task
             except asyncio.CancelledError:
-                pass
+                logger.exception("Unexpected error")
 
         await tts_service.close()
         manager.disconnect(websocket, session_id)
-        print(f"Cleaned up resources for internal voice session #{session_id}")
 
 
 
@@ -566,11 +558,9 @@ async def websocket_endpoint(
     user_type: str = Query(...), # 'user' or 'agent'
     token: Optional[str] = Query(None)
 ):
-    print(f"[websocket_conversations] Attempting WebSocket connection for session: {session_id}")
 
     # Accept connection first
     await manager.connect(websocket, session_id, user_type)
-    print(f"[websocket_conversations] WebSocket connection established for session: {session_id}")
 
     # Then authenticate (will close connection if auth fails)
     current_user = await authenticate_ws_user(websocket, token)
@@ -578,7 +568,6 @@ async def websocket_endpoint(
         return
 
     company_id = current_user.company_id # Get company_id from authenticated user
-    print(f"[websocket_conversations] Authenticated user: {current_user.email}, company_id: {company_id}")
 
     # Update session status to active when user connects (use temporary DB session)
     if user_type == "user":
@@ -597,7 +586,6 @@ async def websocket_endpoint(
             # Update activity timestamp
             manager.update_activity(session_id, websocket)
 
-            print(f"[websocket_conversations] Received data from frontend: {data}")
             if not data:
                 continue
 
@@ -613,7 +601,6 @@ async def websocket_endpoint(
                     ]
                     log_data['attachments_count'] = len(message_data['attachments'])
                     log_data['has_file_data'] = any('file_data' in att for att in message_data['attachments'])
-                print(f"[websocket_conversations] 📥 RAW MESSAGE RECEIVED: {log_data}")
 
                 # Handle ping/pong messages
                 if message_data.get('type') == 'pong':
@@ -638,7 +625,6 @@ async def websocket_endpoint(
                             }),
                             "agent"
                         )
-                        print(f"[websocket_conversations] Agent typing event: is_typing={is_typing}, session={typing_session_id}")
                     continue
 
                 user_message = message_data.get('message')
@@ -648,29 +634,24 @@ async def websocket_endpoint(
 
                 # Log attachment info
                 if attachments:
-                    print(f"[websocket_conversations] 📎 Received {len(attachments)} attachment(s) from session #{session_id}")
                     for i, att in enumerate(attachments):
                         if att.get('location'):
                             loc = att['location']
-                            print(f"[websocket_conversations]   - Attachment {i+1}: 📍 Location ({loc.get('latitude')}, {loc.get('longitude')})")
                         else:
-                            print(f"[websocket_conversations]   - Attachment {i+1}: {att.get('file_name')} ({att.get('file_type')}, {att.get('file_size')} bytes)")
+                            pass
                 else:
-                    print(f"[websocket_conversations] No attachments in message from session #{session_id}")
+                    pass
 
             except (json.JSONDecodeError, AttributeError):
-                print(f"[websocket_conversations] Received invalid data from session #{session_id}: {data}")
                 continue
 
             # Allow messages with attachments even if text is empty
             if (not user_message and not attachments) or not sender:
-                print(f"[websocket_conversations] Missing user_message/attachments or sender: user_message={user_message}, attachments={len(attachments)}, sender={sender}")
                 continue
 
             # Process attachments: upload to S3 and build display text
             attachment_text = ""
             if attachments:
-                print(f"[websocket_conversations] 📎 Processing {len(attachments)} attachment(s)")
                 attachment_text = process_attachments_for_storage(attachments)
 
             # Build message for storage
@@ -694,7 +675,6 @@ async def websocket_endpoint(
                 # Determine assignee_id: if agent is sending, use current_user.id
                 assignee_id = current_user.id if sender == 'agent' else None
                 db_message = chat_service.create_chat_message(db, chat_message, agent_id, session_id, company_id, sender, assignee_id, attachments=attachments if attachments else None)
-                print(f"[websocket_conversations] Created chat message: {db_message.id}")
 
                 # Enrich message with assignee name for broadcast
                 message_dict = schemas_chat_message.ChatMessage.model_validate(db_message).model_dump(mode='json')
@@ -714,7 +694,6 @@ async def websocket_endpoint(
                     message_dict['attachments'] = attachments
 
                 await manager.broadcast_to_session(session_id, json.dumps(message_dict), sender)
-                print(f"[websocket_conversations] Broadcasted message to session: {session_id}")
 
                 # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
                 # This happens before workflow/AI processing to show immediate feedback
@@ -735,7 +714,6 @@ async def websocket_endpoint(
                                 "agent"
                             )
                             typing_indicator_sent = True
-                            print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
 
                 # If agent sends message, check session channel and send to external platform
                 if sender == 'agent':
@@ -760,7 +738,6 @@ async def websocket_endpoint(
                                 phone_number_id = whatsapp_credentials.get("phone_number_id")
 
                                 if not api_token or not phone_number_id:
-                                    print(f"[websocket_conversations] WhatsApp credentials missing for company {company_id}. api_token: {bool(api_token)}, phone_number_id: {bool(phone_number_id)}")
                                     continue  # Changed from return to continue
 
                                 await messaging_service.send_whatsapp_message(
@@ -769,9 +746,8 @@ async def websocket_endpoint(
                                     integration=whatsapp_integration,
                                     db=db
                                 )
-                                print(f"[websocket_conversations] Sent message to WhatsApp for session {session_id}")
                             except Exception as e:
-                                print(f"[websocket_conversations] Error sending to WhatsApp: {e}")
+                                logger.exception(e)
 
                 # 2. If the message is from the user, execute the workflow
                 if sender == 'user':
@@ -782,7 +758,6 @@ async def websocket_endpoint(
                     ).first()
 
                     if session_obj and not session_obj.is_ai_enabled:
-                        print(f"AI is disabled for session {session_id}. No response will be generated.")
                         continue
 
                     execution_result = None
@@ -792,7 +767,6 @@ async def websocket_endpoint(
                         execution_result = None
 
                         # 1. Try trigger-based workflow finding first
-                        print(f"[websocket_conversations] Calling trigger service for company_id={company_id}, channel=WEBSOCKET")
                         try:
                             workflow = await workflow_trigger_service.find_workflow_for_channel_message(
                                 db=db,
@@ -801,16 +775,13 @@ async def websocket_endpoint(
                                 message=user_message,
                                 session_data={"session_id": session_id, "agent_id": agent_id}
                             )
-                            print(f"[websocket_conversations] Trigger service returned: {workflow.name if workflow else None}")
                         except Exception as trigger_error:
-                            print(f"[websocket_conversations] ERROR in trigger service: {trigger_error}")
                             import traceback
                             traceback.print_exc()
                             workflow = None
 
                         # If trigger found workflow, execute it
                         if workflow:
-                            print(f"[websocket_conversations] 🚀 Executing trigger-matched workflow with {len(attachments)} attachment(s)")
                             execution_result = await workflow_exec_service.execute_workflow(
                                 user_message=user_message,
                                 conversation_id=session_id,
@@ -821,7 +792,6 @@ async def websocket_endpoint(
                             )
                         else:
                             # 2. No trigger match - try LLM-based routing (2nd priority)
-                            print(f"[websocket_conversations] No trigger match, trying LLM-based routing")
 
                             # Check if streaming is enabled
                             should_stream = settings.LLM_STREAMING_ENABLED
@@ -832,7 +802,6 @@ async def websocket_endpoint(
                                 # STREAMING MODE: Stream tokens as they arrive
                                 # Note: In streaming mode, we can't easily check for workflow triggers mid-stream
                                 # So we stream first, then check similarity as fallback
-                                print(f"[websocket_conversations] Using streaming mode for session: {session_id}")
                                 full_response = ""
                                 async for token_json in agent_execution_service.generate_agent_response_stream(
                                     db, agent_id, session_id, session_id, company_id, message_data['message']
@@ -848,17 +817,15 @@ async def websocket_endpoint(
                                         elif token_data.get('type') in ['stream_end', 'complete']:
                                             full_response = token_data.get('full_content', full_response) or token_data.get('content', full_response)
                                     except:
-                                        pass
+                                        logger.exception("Unexpected error")
 
                                 # Save the complete message to database
                                 if full_response:
                                     agent_message = schemas_chat_message.ChatMessageCreate(message=full_response, message_type="message")
                                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
-                                    print(f"[websocket_conversations] Saved streamed response to database for session: {session_id}")
                                 continue
                             else:
                                 # NON-STREAMING MODE: Can check LLM response for workflow trigger
-                                print(f"[websocket_conversations] Using non-streaming mode for session: {session_id}")
                                 agent_response = await agent_execution_service.generate_agent_response(
                                     db, agent_id, session_id, session_id, company_id, message_data['message']
                                 )
@@ -866,7 +833,6 @@ async def websocket_endpoint(
                                 # Check if LLM decided to trigger a workflow (context-aware routing)
                                 if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                                     workflow_id = agent_response.get("workflow_id")
-                                    print(f"[websocket_conversations] LLM triggered workflow {workflow_id}")
                                     workflow = workflow_service.get_workflow(db, workflow_id, company_id)
                                     if workflow:
                                         execution_result = await workflow_exec_service.execute_workflow(
@@ -879,12 +845,10 @@ async def websocket_endpoint(
                                         )
                                         # execution_result will be handled below
                                     else:
-                                        print(f"[websocket_conversations] Workflow {workflow_id} not found")
                                         continue
                                 elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
                                     # LLM routing failed - initiate human handoff
                                     reason = agent_response.get("reason", "AI routing unavailable")
-                                    print(f"[websocket_conversations] LLM failed, initiating handoff: {reason}")
                                     error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
                                     agent_message = schemas_chat_message.ChatMessageCreate(message=error_msg, message_type="message")
                                     db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
@@ -892,13 +856,11 @@ async def websocket_endpoint(
                                     continue
                                 else:
                                     # LLM returned normal text - try similarity search as 3rd fallback
-                                    print(f"[websocket_conversations] LLM returned text, trying similarity search as fallback")
                                     similar_workflow = workflow_service.find_similar_workflow(
                                         db, company_id=company_id, query=user_message, agent_id=agent_id
                                     )
 
                                     if similar_workflow:
-                                        print(f"[websocket_conversations] 🚀 Found similar workflow '{similar_workflow.name}'")
                                         execution_result = await workflow_exec_service.execute_workflow(
                                             user_message=user_message,
                                             conversation_id=session_id,
@@ -914,7 +876,6 @@ async def websocket_endpoint(
                                         agent_message = schemas_chat_message.ChatMessageCreate(message=agent_response_text, message_type="message")
                                         db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                                         await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                                        print(f"[websocket_conversations] Broadcasted agent response to session: {session_id}")
                                         continue
                     finally:
                         # Turn off typing indicator after workflow/AI processing completes
@@ -924,7 +885,6 @@ async def websocket_endpoint(
                                 json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
                                 "agent"
                             )
-                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
 
                     if not execution_result:
                         continue
@@ -935,7 +895,6 @@ async def websocket_endpoint(
                         agent_message = schemas_chat_message.ChatMessageCreate(message=str(agent_response_text), message_type="message")
                         db_agent_message = chat_service.create_chat_message(db, agent_message, agent_id, session_id, company_id, "agent", assignee_id=None)
                         await manager.broadcast_to_session(session_id, schemas_chat_message.ChatMessage.model_validate(db_agent_message).model_dump_json(), "agent")
-                        print(f"[websocket_conversations] Broadcasted workflow completion to session: {session_id}")
 
                     elif execution_result.get("status") == "paused_for_prompt":
                         # The workflow is paused and wants to prompt the user.
@@ -957,7 +916,6 @@ async def websocket_endpoint(
                         message_dict['options'] = options
                         message_dict['allow_text_input'] = allow_text_input
                         await manager.broadcast_to_session(session_id, json.dumps(message_dict), "agent")
-                        print(f"[websocket_conversations] Saved and broadcasted prompt to session: {session_id}")
 
                     elif execution_result.get("status") == "paused_for_form":
                         form_data = execution_result.get("form", {})
@@ -971,7 +929,6 @@ async def websocket_endpoint(
                             "company_id": company_id,
                         }
                         await manager.broadcast_to_session(session_id, json.dumps(form_message), "agent")
-                        print(f"[websocket_conversations] Broadcasted form to session: {session_id}")
 
                     elif execution_result.get("status") == "paused_for_input":
                         # Broadcast input constraint to widget so it knows what input type is expected
@@ -982,11 +939,9 @@ async def websocket_endpoint(
                             "sender": "agent"
                         }
                         await manager.broadcast_to_session(session_id, json.dumps(input_constraint_message), "agent")
-                        print(f"[websocket_conversations] Broadcasted input constraint ({expected_input_type}) to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
-        print(f"Client in session #{session_id} disconnected")
 
         # Update session status to inactive when user disconnects
         # Only if there are no more user connections
@@ -1001,7 +956,7 @@ async def websocket_endpoint(
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
-                pass
+                logger.exception("Unexpected error")
 
 
 @router.websocket("/public/{company_id}/{agent_id}/{session_id}")
@@ -1044,7 +999,6 @@ async def public_websocket_endpoint(
                         ]
                     }
                     await websocket.send_text(json.dumps(history_payload))
-                    print(f"[websocket] Sent {len(history_messages)} history messages to session {session_id}")
 
     # Update session status to active when user connects
     if user_type == "user":
@@ -1078,21 +1032,18 @@ async def public_websocket_endpoint(
 
             # Log attachment info
             if attachments:
-                print(f"[websocket_conversations] 📎 PUBLIC: Received {len(attachments)} attachment(s) from session #{session_id}")
                 for i, att in enumerate(attachments):
-                    print(f"[websocket_conversations]   - Attachment {i+1}: {att.get('file_name')} ({att.get('file_type')}, {att.get('file_size')} bytes)")
+                    pass
             else:
-                print(f"[websocket_conversations] PUBLIC: No attachments in message from session #{session_id}")
+                pass
 
             # Allow messages with attachments even if text is empty
             if (not user_message and not attachments) or not sender:
-                print(f"[websocket_conversations] PUBLIC: Missing user_message/attachments or sender")
                 continue
 
             # Process attachments: upload to S3 and build display text
             attachment_text = ""
             if attachments:
-                print(f"[websocket_conversations] 📎 PUBLIC: Processing {len(attachments)} attachment(s)")
                 attachment_text = process_attachments_for_storage(attachments)
 
             # Use temporary DB session for each message
@@ -1112,13 +1063,11 @@ async def public_websocket_endpoint(
 
                 # Broadcast new session creation to all company users
                 if is_new_session:
-                    print(f"[websocket_conversations] 🆕 New session created: {session_id}. Broadcasting to company {company_id}")
                     session_update_schema = schemas_websocket.WebSocketSessionUpdate.model_validate(session)
                     await manager.broadcast_to_company(
                         company_id,
                         json.dumps({"type": "new_session", "session": session_update_schema.model_dump(by_alias=True)})
                     )
-                    print(f"[websocket_conversations] ✅ Broadcasted new session to company {company_id}")
 
                 # Check if session was resolved and reopen it when client sends message
                 if session.status == 'resolved' and sender == 'user':
@@ -1188,7 +1137,6 @@ async def public_websocket_endpoint(
                         })
                     )
 
-                    print(f"[websocket_conversations] 🔄 Session {session_id} reopened from resolved → {session.status} (Reopen #{session.reopen_count}, Assignee: {session.assignee_id or 'None'})")
 
                 # Handle form data: convert dict to JSON string for storage
                 message_for_storage = user_message
@@ -1202,13 +1150,11 @@ async def public_websocket_endpoint(
                 # OPTIMIZATION: Check and send typing indicator IMMEDIATELY for user messages
                 # This happens before any database operations to minimize delay
                 typing_indicator_sent = False
-                print(f"[DEBUG] Checking typing indicator - sender: {sender}")
                 if sender == 'user':
                     # Quick check for typing indicator setting (single DB query, cached)
                     widget_settings = widget_settings_service.get_widget_settings(db, agent_id)
-                    print(f"[DEBUG] Widget settings: {widget_settings}")
                     if widget_settings:
-                        print(f"[DEBUG] Widget settings exists, typing_indicator_enabled: {widget_settings.typing_indicator_enabled}")
+                        pass
                     if widget_settings and widget_settings.typing_indicator_enabled:
                         # Send typing indicator IMMEDIATELY before any other processing
                         await manager.broadcast_to_session(
@@ -1217,9 +1163,8 @@ async def public_websocket_endpoint(
                             "agent"
                         )
                         typing_indicator_sent = True
-                        print(f"[websocket_conversations] ⚡ Typing indicator ON (immediate) for session: {session_id}")
                     else:
-                        print(f"[DEBUG] Typing indicator NOT sent - widget_settings: {widget_settings}, enabled: {widget_settings.typing_indicator_enabled if widget_settings else 'N/A'}")
+                        pass
 
                 # Now, create and broadcast the chat message
                 chat_message = schemas_chat_message.ChatMessageCreate(message=message_for_storage, message_type=message_data.get('message_type', 'message'))
@@ -1246,11 +1191,9 @@ async def public_websocket_endpoint(
 
                 if sender == 'user':
                     # The session is already guaranteed to exist, so we can proceed
-                    print(f"DEBUG [Websocket Loop]: Checking session status. ID: {session.id}, Status: '{session.status}', Workflow ID: {session.workflow_id}")
 
                     # Check if AI is enabled for this session
                     if not session.is_ai_enabled:
-                        print(f"AI is disabled for session {session.conversation_id}. No response will be generated.")
                         continue
 
                     execution_result = None
@@ -1260,14 +1203,12 @@ async def public_websocket_endpoint(
                             # A workflow is already in progress, so we resume it.
                             workflow = workflow_service.get_workflow(db, session.workflow_id, company_id)
                             if workflow:
-                                 print(f"[websocket_conversations] 🚀 PUBLIC: Resuming workflow with {len(attachments)} attachment(s), option_key={option_key}")
                                  execution_result = await workflow_exec_service.execute_workflow(
                                     user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
                         else:
                             # No workflow is in progress, so we find a new one.
                             # Priority: 1) Triggers, 2) LLM decision, 3) Similarity search
-                            print(f"[websocket_conversations] Looking for workflow - company_id={company_id}")
 
                             # 1. Try trigger-based workflow finding first
                             try:
@@ -1278,15 +1219,12 @@ async def public_websocket_endpoint(
                                     message=message_for_storage,
                                     session_data={"session_id": session_id, "agent_id": agent_id}
                                 )
-                                print(f"[websocket_conversations] Trigger service returned: {workflow.name if workflow else None}")
                             except Exception as trigger_error:
-                                print(f"[websocket_conversations] ERROR in trigger service: {trigger_error}")
                                 import traceback
                                 traceback.print_exc()
                                 workflow = None
 
                             if workflow:
-                                print(f"[websocket_conversations] 🚀 PUBLIC: Starting workflow from trigger with {len(attachments)} attachment(s)")
                                 execution_result = await workflow_exec_service.execute_workflow(
                                     user_message=message_for_storage, company_id=company_id, workflow=workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                 )
@@ -1298,7 +1236,6 @@ async def public_websocket_endpoint(
                                 # Check if LLM decided to trigger a workflow (context-aware routing)
                                 if isinstance(agent_response, dict) and agent_response.get("type") == "workflow_trigger":
                                     workflow_id = agent_response.get("workflow_id")
-                                    print(f"[websocket_conversations] PUBLIC: LLM triggered workflow {workflow_id}")
                                     workflow = workflow_service.get_workflow(db, workflow_id, company_id)
                                     if workflow:
                                         execution_result = await workflow_exec_service.execute_workflow(
@@ -1310,12 +1247,11 @@ async def public_websocket_endpoint(
                                             option_key=option_key
                                         )
                                     else:
-                                        print(f"[websocket_conversations] Workflow {workflow_id} not found")
+                                        pass
 
                                 # Handle handoff response (LLM failed)
                                 elif isinstance(agent_response, dict) and agent_response.get("type") == "handoff":
                                     reason = agent_response.get("reason", "AI routing unavailable")
-                                    print(f"[websocket_conversations] PUBLIC: LLM failed, initiating handoff: {reason}")
                                     error_msg = "I'm experiencing some technical difficulties. Let me connect you with a human agent who can help."
                                     agent_response_text = error_msg
                                     call_initiated = False
@@ -1330,10 +1266,8 @@ async def public_websocket_endpoint(
 
                                 # 3. Last fallback: similarity search (only if LLM didn't trigger workflow)
                                 if not execution_result and not (isinstance(agent_response, dict) and agent_response.get("type") in ["workflow_trigger", "handoff"]):
-                                    print(f"[websocket_conversations] PUBLIC: Trying similarity search as last fallback")
                                     similar_workflow = workflow_service.find_similar_workflow(db, company_id=company_id, query=message_for_storage, agent_id=agent_id)
                                     if similar_workflow:
-                                        print(f"[websocket_conversations] 🚀 PUBLIC: Found similar workflow '{similar_workflow.name}'")
                                         execution_result = await workflow_exec_service.execute_workflow(
                                             user_message=message_for_storage, company_id=company_id, workflow=similar_workflow, conversation_id=session_id, attachments=attachments, option_key=option_key
                                         )
@@ -1372,7 +1306,7 @@ async def public_websocket_endpoint(
                                                 try:
                                                     openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
                                                 except Exception as e:
-                                                    print(f"[TTS] Failed to get OpenAI key: {e}")
+                                                    logger.exception(e)
 
                                             tts_service = TTSService(openai_api_key=openai_api_key)
                                             audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
@@ -1381,9 +1315,8 @@ async def public_websocket_endpoint(
                                             await tts_service.close()
                                             # Send audio_end marker
                                             await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
-                                            print(f"[websocket_conversations] TTS audio sent for chat_and_voice mode in session: {session_id}")
                                         except Exception as tts_error:
-                                            print(f"[websocket_conversations] TTS error in chat_and_voice mode: {tts_error}")
+                                            logger.exception(tts_error)
                     finally:
                         # Turn off typing indicator after AI processing completes
                         if typing_indicator_sent:
@@ -1392,7 +1325,6 @@ async def public_websocket_endpoint(
                                 json.dumps({"message_type": "typing", "is_typing": False, "sender": "agent"}),
                                 "agent"
                             )
-                            print(f"[websocket_conversations] Typing indicator OFF for session: {session_id}")
 
                     if not execution_result:
                         continue
@@ -1415,7 +1347,7 @@ async def public_websocket_endpoint(
                                     try:
                                         openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
                                     except Exception:
-                                        pass
+                                        logger.exception("Unexpected error")
                                 tts_service = TTSService(openai_api_key=openai_api_key)
                                 audio_stream = tts_service.text_to_speech_stream(agent_response_text, voice_id, tts_provider)
                                 async for audio_chunk in audio_stream:
@@ -1423,9 +1355,8 @@ async def public_websocket_endpoint(
                                 await tts_service.close()
                                 # Send audio_end marker
                                 await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
-                                print(f"[websocket_conversations] TTS audio sent for workflow completion in session: {session_id}")
                             except Exception as tts_error:
-                                print(f"[websocket_conversations] TTS error: {tts_error}")
+                                logger.exception(tts_error)
 
                     elif execution_result.get("status") == "paused_for_prompt":
                         prompt_data = execution_result.get("prompt", {})
@@ -1447,7 +1378,6 @@ async def public_websocket_endpoint(
                         message_dict['options'] = options
                         message_dict['allow_text_input'] = allow_text_input
                         await manager.broadcast_to_session(str(session_id), json.dumps(message_dict), "agent")
-                        print(f"[websocket_conversations] PUBLIC: Saved and broadcasted prompt to session: {session_id}")
 
                         # Generate TTS for chat_and_voice mode (prompt)
                         if widget_settings and widget_settings.communication_mode == 'chat_and_voice' and prompt_text:
@@ -1475,7 +1405,7 @@ async def public_websocket_endpoint(
                                     try:
                                         openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
                                     except Exception:
-                                        pass
+                                        logger.exception("Unexpected error")
                                 tts_service = TTSService(openai_api_key=openai_api_key)
                                 audio_stream = tts_service.text_to_speech_stream(tts_text, voice_id, tts_provider)
                                 async for audio_chunk in audio_stream:
@@ -1483,9 +1413,8 @@ async def public_websocket_endpoint(
                                 await tts_service.close()
                                 # Send audio_end marker
                                 await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
-                                print(f"[websocket_conversations] TTS audio sent for prompt in session: {session_id}")
                             except Exception as tts_error:
-                                print(f"[websocket_conversations] TTS error: {tts_error}")
+                                logger.exception(tts_error)
 
                     elif execution_result.get("status") == "paused_for_form":
                         form_data = execution_result.get("form", {})
@@ -1516,7 +1445,7 @@ async def public_websocket_endpoint(
                                     try:
                                         openai_api_key = credential_service.get_decrypted_credential(db, openai_credential.id, company_id)
                                     except Exception:
-                                        pass
+                                        logger.exception("Unexpected error")
                                 tts_service = TTSService(openai_api_key=openai_api_key)
                                 audio_stream = tts_service.text_to_speech_stream(tts_text, voice_id, tts_provider)
                                 async for audio_chunk in audio_stream:
@@ -1524,9 +1453,8 @@ async def public_websocket_endpoint(
                                 await tts_service.close()
                                 # Send audio_end marker
                                 await manager.broadcast_to_session(str(session_id), json.dumps({"type": "audio_end"}), "agent")
-                                print(f"[websocket_conversations] TTS audio sent for form in session: {session_id}")
                             except Exception as tts_error:
-                                print(f"[websocket_conversations] TTS error: {tts_error}")
+                                logger.exception(tts_error)
 
                     elif execution_result.get("status") == "paused_for_input":
                         # Broadcast input constraint to widget so it knows what input type is expected
@@ -1537,11 +1465,9 @@ async def public_websocket_endpoint(
                             "sender": "agent"
                         }
                         await manager.broadcast_to_session(str(session_id), json.dumps(input_constraint_message), "agent")
-                        print(f"[websocket_conversations] Broadcasted input constraint ({expected_input_type}) to session: {session_id}")
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
-        print(f"Client in session #{session_id} disconnected")
 
         # Update session status to inactive when user disconnects
         # Only if there are no more user connections
@@ -1556,5 +1482,5 @@ async def public_websocket_endpoint(
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
-                pass
+                logger.exception("Unexpected error")
 

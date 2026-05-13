@@ -86,7 +86,6 @@ async def execute_translate_tool(
     if not target_language:
         return {"error": "Target language is required."}
 
-    print(f"[TRANSLATE TOOL] Text: '{text[:50]}...', Target: {target_language}, Provider: {provider}, Model: {llm_model or 'default'}")
 
     try:
         if provider == "google":
@@ -95,7 +94,6 @@ async def execute_translate_tool(
             return await _translate_with_llm(db, text, target_language, source_language, company_id, llm_model)
 
     except Exception as e:
-        print(f"[TRANSLATE TOOL] Error: {e}")
         return {
             "error": "An error occurred while translating text.",
             "details": str(e),
@@ -168,7 +166,6 @@ async def _translate_with_llm(
     else:
         translated_text = str(response)
 
-    print(f"[TRANSLATE TOOL] LLM translation completed: '{translated_text[:50]}...'")
 
     return {
         "result": translated_text,
@@ -196,7 +193,6 @@ async def _translate_with_google(
 
     if not credential:
         # Fallback to LLM if Google Translate credential not found
-        print("[TRANSLATE TOOL] Google Translate API key not found, falling back to LLM")
         return await _translate_with_llm(db, text, target_language, source_language, company_id)
 
     api_key = vault_service.decrypt(credential.encrypted_credentials)
@@ -229,7 +225,6 @@ async def _translate_with_google(
             translated_text = translation.get("translatedText", "")
             detected_source = translation.get("detectedSourceLanguage", source_language)
 
-            print(f"[TRANSLATE TOOL] Google translation completed: '{translated_text[:50]}...'")
 
             return {
                 "result": translated_text,
@@ -241,13 +236,10 @@ async def _translate_with_google(
 
     except httpx.HTTPStatusError as e:
         error_detail = e.response.text if e.response else str(e)
-        print(f"[TRANSLATE TOOL] Google API error: {error_detail}")
 
         # Fallback to LLM on Google API error
-        print("[TRANSLATE TOOL] Falling back to LLM translation")
         return await _translate_with_llm(db, text, target_language, source_language, company_id)
 
     except Exception as e:
-        print(f"[TRANSLATE TOOL] Google API exception: {e}")
         # Fallback to LLM
         return await _translate_with_llm(db, text, target_language, source_language, company_id)

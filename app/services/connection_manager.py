@@ -2,6 +2,8 @@ import json
 import time
 from typing import Any, Dict, List, Tuple
 from fastapi import WebSocket
+import logging
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -22,10 +24,8 @@ class ConnectionManager:
         ws_id = id(websocket)
         self.last_activity[session_id][ws_id] = time.time()
 
-        print(f"Connected: {user_type} ({connection_type}) to session {session_id}. Total connections for session: {len(self.active_connections[session_id])}")
 
     def disconnect(self, websocket: WebSocket, session_id: str):
-        print(f"[disconnect] Attempting to disconnect from channel '{session_id}'")
         if session_id in self.active_connections:
             connection_to_remove = next((c for c in self.active_connections[session_id] if c["websocket"] == websocket), None)
             if connection_to_remove:
@@ -36,59 +36,45 @@ class ConnectionManager:
                 if session_id in self.last_activity and ws_id in self.last_activity[session_id]:
                     del self.last_activity[session_id][ws_id]
 
-                print(f"[disconnect] ✅ Disconnected {connection_to_remove['user_type']} from channel '{session_id}'. Remaining: {len(self.active_connections.get(session_id, []))}")
                 if not self.active_connections[session_id]:
                     del self.active_connections[session_id]
                     if session_id in self.last_activity:
                         del self.last_activity[session_id]
-                    print(f"[disconnect] 🗑️ Removed empty channel '{session_id}'")
-                print(f"[disconnect] 📊 Active channels after disconnect: {list(self.active_connections.keys())}")
         else:
-            print(f"[disconnect] ⚠️ Channel '{session_id}' not found in active connections")
+            pass
 
     async def broadcast_to_session(self, session_id: str, message: str, sender_type: str):
-        print(f"[ConnectionManager] Broadcasting to session {session_id}. Message: {message[:50]}...")
         if session_id in self.active_connections:
             message_data = json.loads(message)
             if message_data.get('message_type') == 'note':
                 connections_to_send = [c for c in self.active_connections[session_id] if c["user_type"] == "agent"]
-                print(f"[ConnectionManager] Sending note to {len(connections_to_send)} agent connections in session {session_id}")
             else:
                 connections_to_send = self.active_connections[session_id]
-                print(f"[ConnectionManager] Sending message to {len(connections_to_send)} connections in session {session_id}")
             
             failed_connections = []
 
             for connection in connections_to_send:
                 try:
                     await connection["websocket"].send_text(message)
-                    print(f"[ConnectionManager] Sent message to websocket: {connection["websocket"]}")
                 except Exception as e:
-                    print(f"[ConnectionManager] Error sending message to websocket: {e}")
                     failed_connections.append(connection)
 
             # Clean up dead connections after iteration
             for failed_conn in failed_connections:
                 try:
                     self.active_connections[session_id].remove(failed_conn)
-                    print(f"[ConnectionManager] 🗑️ Removed dead connection from session {session_id}")
                 except ValueError:
-                    pass  # Already removed
+                    logger.exception("Unexpected error")
 
             # Clean up empty session
             if session_id in self.active_connections and not self.active_connections[session_id]:
                 del self.active_connections[session_id]
-                print(f"[ConnectionManager] 🗑️ Removed empty session '{session_id}'")
         else:
-            print(f"[ConnectionManager] No active connections for session {session_id}")
+            pass
     
     async def broadcast(self, message: str, channel_id: str):
-        print(f"[broadcast] Attempting to broadcast to channel '{channel_id}' (type: {type(channel_id).__name__})")
-        print(f"[broadcast] Active connection keys: {list(self.active_connections.keys())}")
-        print(f"[broadcast] Active connection key types: {[type(k).__name__ for k in self.active_connections.keys()]}")
 
         if channel_id in self.active_connections:
-            print(f"[broadcast] ✅ Found {len(self.active_connections[channel_id])} connections for channel {channel_id}")
 
             # Track connections that fail so we can remove them after iteration
             failed_connections = []
@@ -96,9 +82,7 @@ class ConnectionManager:
             for connection in self.active_connections[channel_id]:
                 try:
                     await connection["websocket"].send_text(message)
-                    print(f"[broadcast] Sent to {connection['user_type']} via {connection['websocket']}")
                 except Exception as e:
-                    print(f"[broadcast] ⚠️ Failed to send to {connection['user_type']}: {e}")
                     failed_connections.append(connection)
 
             # Clean up dead connections after iteration
@@ -106,16 +90,14 @@ class ConnectionManager:
                 try:
                     if channel_id in self.active_connections:
                         self.active_connections[channel_id].remove(failed_conn)
-                        print(f"[broadcast] 🗑️ Removed dead connection for {failed_conn['user_type']}")
                 except ValueError:
-                    pass  # Already removed
+                    logger.exception("Unexpected error")
 
             # Clean up empty channel
             if channel_id in self.active_connections and not self.active_connections[channel_id]:
                 del self.active_connections[channel_id]
-                print(f"[broadcast] 🗑️ Removed empty channel '{channel_id}'")
         else:
-            print(f"[broadcast] ❌ No connections found for channel '{channel_id}'")
+            pass
 
     async def broadcast_bytes_to_session(self, session_id: str, data: bytes):
         """
@@ -129,7 +111,6 @@ class ConnectionManager:
         if session_id in self.active_connections:
             # Filter for voice connections only
             voice_connections = [c for c in self.active_connections[session_id] if c.get("connection_type") == "voice"]
-            print(f"[broadcast_bytes_to_session] Sending audio to {len(voice_connections)} voice connections in session {session_id}")
 
             failed_connections = []
 
@@ -137,18 +118,16 @@ class ConnectionManager:
                 try:
                     await connection["websocket"].send_bytes(data)
                 except Exception as e:
-                    print(f"[broadcast_bytes_to_session] Error sending audio to websocket: {e}")
                     failed_connections.append(connection)
 
             # Clean up dead connections after iteration
             for failed_conn in failed_connections:
                 try:
                     self.active_connections[session_id].remove(failed_conn)
-                    print(f"[broadcast_bytes_to_session] Removed dead voice connection from session {session_id}")
                 except ValueError:
-                    pass
+                    logger.exception("Unexpected error")
         else:
-            print(f"[broadcast_bytes_to_session] No active connections for session {session_id}")
+            pass
 
     def register(self, websocket: WebSocket, session_id: str, user_type: str, connection_type: str = "notifications"):
         """Register an already-accepted WebSocket without calling accept() again."""
@@ -161,7 +140,6 @@ class ConnectionManager:
             "connection_type": connection_type,
         })
         self.last_activity[session_id][id(websocket)] = time.time()
-        print(f"[register] {user_type} ({connection_type}) registered to session '{session_id}'")
 
     async def broadcast_to_company(self, company_id: int, message: str):
         """
@@ -169,7 +147,6 @@ class ConnectionManager:
         This is an alias for broadcast() with company_id converted to string.
         """
         channel_id = str(company_id)
-        print(f"[broadcast_to_company] Broadcasting to company {company_id} (channel: '{channel_id}')")
         await self.broadcast(message, channel_id)
 
     async def broadcast_to_user(self, user_id: int, message: str):
@@ -182,19 +159,16 @@ class ConnectionManager:
             message: The message to send
         """
         user_channel = f"user_{user_id}"
-        print(f"[broadcast_to_user] Broadcasting to user {user_id} (channel: '{user_channel}')")
         await self.broadcast(message, user_channel)
 
     async def disconnect_all(self):
-        print("[ConnectionManager] Disconnecting all clients...")
         for session_id in list(self.active_connections.keys()):
             for connection in self.active_connections[session_id]:
                 try:
                     await connection["websocket"].close(code=1000)
                 except Exception as e:
-                    print(f"Error closing websocket for session {session_id}: {e}")
+                    logger.exception(e)
         self.active_connections.clear()
-        print("[ConnectionManager] All clients disconnected.")
 
     def has_user_connection(self, session_id: str) -> bool:
         """

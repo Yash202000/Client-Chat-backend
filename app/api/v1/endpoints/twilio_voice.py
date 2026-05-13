@@ -803,7 +803,7 @@ async def twilio_media_stream(
                     try:
                         await timeout_task
                     except asyncio.CancelledError:
-                        pass
+                        logger.exception("Unexpected error")
 
                     realtime_success = await handle_realtime_mode(
                         websocket=websocket,
@@ -895,7 +895,7 @@ async def twilio_media_stream(
         try:
             await timeout_task
         except asyncio.CancelledError:
-            pass
+            logger.exception("Unexpected error")
 
         # Reset VAD state
         vad_service.reset()

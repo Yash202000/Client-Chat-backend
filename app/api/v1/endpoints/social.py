@@ -282,7 +282,7 @@ async def linkedin_exchange(
                     b64 = base64.b64encode(pic_resp.content).decode()
                     avatar_url = f"data:{content_type};base64,{b64}"
             except Exception:
-                pass  # fall back to raw URL
+                logger.exception("Unexpected error")
 
     account_name = profile.get("name") or (
         f"{profile.get('given_name', '')} {profile.get('family_name', '')}".strip()

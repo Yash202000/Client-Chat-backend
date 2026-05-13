@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from app.services.prompt_guard_service import prompt_guard
 from app.services import credential_service
 from app.services.vault_service import vault_service
+import logging
+logger = logging.getLogger(__name__)
 
 
 class ValidationMode(Enum):
@@ -418,7 +420,7 @@ Respond with JSON only (no markdown):
                     return (matched_key, confidence, reasoning)
 
         except Exception as e:
-            print(f"Error in LLM option matching: {e}")
+            logger.exception(e)
 
         return None
 
@@ -489,7 +491,6 @@ Respond with JSON only (no markdown):
             return (is_relevant, reason, hint)
 
         except Exception as e:
-            print(f"Error in LLM relevance check: {e}")
             return (True, "", "")  # Default to accepting on error
 
     async def _llm_validate_relevance(
@@ -571,7 +572,6 @@ Respond with JSON only (no markdown):
             return (is_valid, reason, hint, extracted_value)
 
         except Exception as e:
-            print(f"Error in LLM validation: {e}")
             return (True, "", "", None)
 
     def _generate_options_hint(self, options: List[Dict]) -> str:
@@ -633,11 +633,9 @@ Respond with JSON only (no markdown):
             elif provider == "google":
                 return await self._call_google(db, company_id, prompt, model, temperature, max_tokens)
             else:
-                print(f"Unknown provider '{provider}', falling back to Groq")
                 return await self._call_groq(db, company_id, prompt, model, temperature, max_tokens)
 
         except Exception as e:
-            print(f"Error generating LLM response for validation ({provider}): {e}")
             return ""
 
     async def _call_groq(self, db: Session, company_id: int, prompt: str, model: str, temperature: float, max_tokens: int) -> str:
@@ -647,12 +645,10 @@ Respond with JSON only (no markdown):
         # Get API key from vault
         credential = credential_service.get_credential_by_service_name(db, service_name="groq", company_id=company_id)
         if not credential:
-            print(f"Please configure Groq API key in vault for LLM validation (company_id: {company_id})")
             return ""
 
         api_key = vault_service.decrypt(credential.encrypted_credentials)
         if not api_key:
-            print(f"Failed to decrypt Groq API key from vault (company_id: {company_id})")
             return ""
 
         client = AsyncGroq(api_key=api_key, timeout=10.0)
@@ -671,12 +667,10 @@ Respond with JSON only (no markdown):
         # Get API key from vault
         credential = credential_service.get_credential_by_service_name(db, service_name="openai", company_id=company_id)
         if not credential:
-            print(f"Please configure OpenAI API key in vault for LLM validation (company_id: {company_id})")
             return ""
 
         api_key = vault_service.decrypt(credential.encrypted_credentials)
         if not api_key:
-            print(f"Failed to decrypt OpenAI API key from vault (company_id: {company_id})")
             return ""
 
         client = AsyncOpenAI(api_key=api_key, timeout=10.0)
@@ -695,12 +689,10 @@ Respond with JSON only (no markdown):
         # Get API key from vault
         credential = credential_service.get_credential_by_service_name(db, service_name="gemini", company_id=company_id)
         if not credential:
-            print(f"Please configure Gemini API key in vault for LLM validation (company_id: {company_id})")
             return ""
 
         api_key = vault_service.decrypt(credential.encrypted_credentials)
         if not api_key:
-            print(f"Failed to decrypt Gemini API key from vault (company_id: {company_id})")
             return ""
 
         genai.configure(api_key=api_key)
@@ -732,5 +724,4 @@ Respond with JSON only (no markdown):
 
             return json.loads(cleaned.strip())
         except json.JSONDecodeError as e:
-            print(f"JSON parse error: {e}, response: {response[:100]}")
             return None

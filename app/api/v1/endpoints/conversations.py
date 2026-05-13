@@ -218,7 +218,6 @@ def get_all_sessions(
 
         # If real-time status differs from DB, update DB
         if real_time_connected != s.is_client_connected:
-            print(f"[get_all_sessions] Syncing connection status for {s.conversation_id}: DB={s.is_client_connected} -> Real-time={real_time_connected}")
             s.is_client_connected = real_time_connected
             db.commit()
 

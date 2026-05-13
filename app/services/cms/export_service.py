@@ -10,6 +10,8 @@ from app.core.object_storage import s3_client, BUCKET_NAME
 import json
 import csv
 import io
+import logging
+logger = logging.getLogger(__name__)
 
 
 def create_export_request(
@@ -250,7 +252,6 @@ def get_export_download_url(db: Session, export_id: int, company_id: int, expire
             ExpiresIn=expires_in
         )
     except Exception as e:
-        print(f"Error generating export download URL: {e}")
         return None
 
 
@@ -265,7 +266,7 @@ def delete_export(db: Session, export_id: int, company_id: int) -> bool:
         try:
             s3_client.delete_object(Bucket=BUCKET_NAME, Key=export_record.s3_key)
         except Exception as e:
-            print(f"Error deleting export file from S3: {e}")
+            logger.exception(e)
 
     db.delete(export_record)
     db.commit()
@@ -288,7 +289,7 @@ def cleanup_expired_exports(db: Session) -> int:
             try:
                 s3_client.delete_object(Bucket=BUCKET_NAME, Key=export_record.s3_key)
             except Exception:
-                pass
+                logger.exception("Unexpected error")
         db.delete(export_record)
         count += 1
 

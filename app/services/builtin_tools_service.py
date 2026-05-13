@@ -252,7 +252,6 @@ def seed_builtin_tools(db: Session) -> None:
                 configuration=None
             )
             db.add(new_tool)
-            print(f"[BUILTIN TOOLS] Created built-in tool: {tool_data['name']}")
         else:
             # Update the description/parameters/follow_up_config if they've changed
             if existing_tool.description != tool_data["description"]:
@@ -261,10 +260,8 @@ def seed_builtin_tools(db: Session) -> None:
                 existing_tool.parameters = tool_data["parameters"]
             if existing_tool.follow_up_config != tool_data.get("follow_up_config"):
                 existing_tool.follow_up_config = tool_data.get("follow_up_config")
-            print(f"[BUILTIN TOOLS] Built-in tool already exists: {tool_data['name']}")
 
     db.commit()
-    print("[BUILTIN TOOLS] Built-in tools seeding complete.")
 
 
 def get_builtin_tools(db: Session) -> list:
