@@ -65,7 +65,7 @@ class Ticket(Base):
 
     issue_type_id = Column(Integer, ForeignKey("ticket_issue_types.id"), nullable=True)
     status_id = Column(Integer, ForeignKey("ticket_statuses.id"), nullable=True, index=True)
-    priority = Column(Enum(TicketPriority), default=TicketPriority.MEDIUM, nullable=False, index=True)
+    priority = Column(Enum(TicketPriority, values_callable=lambda obj: [e.value for e in obj]), default=TicketPriority.MEDIUM, nullable=False, index=True)
 
     assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     reporter_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
@@ -165,7 +165,7 @@ class TicketActivity(Base):
     ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
     actor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    action = Column(Enum(TicketActivityAction), nullable=False)
+    action = Column(Enum(TicketActivityAction, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
     field_name = Column(String, nullable=True)
     old_value = Column(Text, nullable=True)
     new_value = Column(Text, nullable=True)
@@ -183,7 +183,7 @@ class TicketLink(Base):
     id = Column(Integer, primary_key=True, index=True)
     source_ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
     target_ticket_id = Column(Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
-    link_type = Column(Enum(TicketLinkType), nullable=False)
+    link_type = Column(Enum(TicketLinkType, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

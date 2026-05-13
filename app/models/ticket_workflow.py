@@ -43,7 +43,7 @@ class TicketStatus(Base):
 
     name = Column(String, nullable=False)
     color = Column(String(7), nullable=False, default="#6366f1")
-    category = Column(Enum(StatusCategory), nullable=False, default=StatusCategory.TODO)
+    category = Column(Enum(StatusCategory, values_callable=lambda obj: [e.value for e in obj]), nullable=False, default=StatusCategory.TODO)
     position = Column(Integer, nullable=False, default=0)
     is_default = Column(Boolean, default=False, nullable=False)
 
