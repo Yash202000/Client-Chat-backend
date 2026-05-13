@@ -106,7 +106,7 @@ async def schedule_offline_update(db_factory: Callable, user_id: int, grace_peri
         try:
             await _pending_offline_tasks[user_id]
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
 
     async def delayed_offline():
         try:
@@ -127,7 +127,7 @@ async def schedule_offline_update(db_factory: Callable, user_id: int, grace_peri
             finally:
                 db.close()
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
         finally:
             _pending_offline_tasks.pop(user_id, None)
 

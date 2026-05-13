@@ -376,16 +376,16 @@ async def voice_websocket_endpoint(
         try:
             await transcription_task
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
         try:
             await client_audio_task
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
         if groq_buffer_task:
             try:
                 await groq_buffer_task
             except asyncio.CancelledError:
-                logger.exception("Unexpected error")
+                pass
 
         await tts_service.close()
         manager.disconnect(websocket, session_id)
@@ -533,16 +533,16 @@ async def internal_voice_websocket_endpoint(
         try:
             await transcription_task
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
         try:
             await client_audio_task
         except asyncio.CancelledError:
-            logger.exception("Unexpected error")
+            pass
         if groq_buffer_task:
             try:
                 await groq_buffer_task
             except asyncio.CancelledError:
-                logger.exception("Unexpected error")
+                pass
 
         await tts_service.close()
         manager.disconnect(websocket, session_id)
@@ -956,7 +956,7 @@ async def websocket_endpoint(
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
-                logger.exception("Unexpected error")
+                pass
 
 
 @router.websocket("/public/{company_id}/{agent_id}/{session_id}")
@@ -1482,5 +1482,5 @@ async def public_websocket_endpoint(
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
-                logger.exception("Unexpected error")
+                pass
 
