@@ -33,6 +33,9 @@ class TokenRequest(BaseModel):
     room_name: str
     participant_name: str
 
+class InviteUsersBody(BaseModel):
+    user_ids: list[int]
+
 class PublicTokenRequest(BaseModel):
     room_name: str
     participant_name: str
@@ -100,6 +103,21 @@ async def initiate_video_call(
 
     # Broadcast company-wide so users on other pages get notified too
     await manager.broadcast(call_data, str(current_user.company_id))
+
+    # Create incoming_call notification for each callee so it appears in the bell
+    if is_dm:
+        caller_name = current_user.first_name or current_user.email
+        for member_id in channel_member_ids:
+            if member_id != current_user.id:
+                crud_notification.create_notification(
+                    db=db,
+                    user_id=member_id,
+                    notification_type="incoming_call",
+                    title=f"Incoming call from {caller_name}",
+                    message=f"{caller_name} is calling you",
+                    related_channel_id=channel_id,
+                    actor_id=current_user.id,
+                )
 
     return {
         "call_id": video_call.id,
@@ -190,8 +208,9 @@ async def reject_video_call(
     )
     await _broadcast_system_message(sys_msg, video_call.channel_id)
 
-    # Notify the caller if callee declined
     if not is_caller_cancelling:
+        # Callee explicitly declined — mark their incoming_call as read + notify the caller
+        crud_notification.mark_incoming_call_read(db, user_id=current_user.id, channel_id=video_call.channel_id)
         crud_notification.create_notification(
             db=db,
             user_id=video_call.created_by_id,
@@ -199,8 +218,17 @@ async def reject_video_call(
             title=f"{user_name} declined your call",
             message=f"Your video call was declined by {user_name}",
             related_channel_id=video_call.channel_id,
-            actor_id=current_user.id
+            actor_id=current_user.id,
         )
+    else:
+        # Caller cancelled — convert each callee's incoming_call → missed_call
+        caller_name = current_user.first_name or current_user.email
+        channel_members = crud_chat.get_channel_members(db, channel_id=video_call.channel_id)
+        for member in channel_members:
+            if member.id != current_user.id:
+                crud_notification.convert_incoming_to_missed(
+                    db, user_id=member.id, channel_id=video_call.channel_id, caller_name=caller_name
+                )
 
     reject_payload = json.dumps({
         "type": "call_rejected",
@@ -243,6 +271,9 @@ async def accept_video_call(
     video_call = crud_video_call.accept_video_call(db, video_call_id=call_id, accepted_by_id=current_user.id)
 
     acceptor_name = current_user.first_name or current_user.email
+
+    # Mark incoming_call notification as read — they answered it
+    crud_notification.mark_incoming_call_read(db, user_id=current_user.id, channel_id=video_call.channel_id)
 
     # Only create system message for the first accept (when call starts)
     if is_first_accept:
@@ -409,3 +440,95 @@ def get_call_history(
         })
 
     return history
+
+
+@router.post("/channels/{channel_id}/invite")
+async def invite_users_to_call(
+    channel_id: int,
+    body: InviteUsersBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Invite users to join an active call on a channel.
+
+    If the original channel is a DM, a new GROUP channel is created for the
+    call so that the DM history stays private and all participants can chat.
+    """
+    video_call = crud_video_call.get_active_video_call_by_channel(db, channel_id=channel_id)
+    if not video_call:
+        raise HTTPException(status_code=404, detail="No active call on this channel")
+
+    inviter_name = current_user.first_name or current_user.email
+    channel = crud_chat.get_channel(db, channel_id=channel_id)
+
+    # If original channel is a DM, spin up a dedicated GROUP channel for the call
+    chat_channel_id = channel_id
+    if channel and str(getattr(channel.channel_type, 'value', channel.channel_type)).upper() == 'DM':
+        existing_members = [m.id for m in crud_chat.get_channel_members(db, channel_id=channel_id)]
+        all_participant_ids = list(set(existing_members + body.user_ids))
+
+        from app.schemas.chat import ChatChannelCreate
+        group_channel = crud_chat.create_channel(
+            db=db,
+            channel=ChatChannelCreate(
+                name=f"Call with {inviter_name}",
+                channel_type="MEETING",
+                member_ids=[uid for uid in all_participant_ids if uid != current_user.id],
+            ),
+            creator_id=current_user.id,
+            company_id=current_user.company_id,
+        )
+        chat_channel_id = group_channel.id
+
+        # Move the active call to the new group channel
+        video_call.channel_id = chat_channel_id
+        db.commit()
+
+        # Notify existing DM members about the new group channel
+        upgrade_payload = json.dumps({
+            "type": "call_channel_upgraded",
+            "old_channel_id": channel_id,
+            "new_channel_id": chat_channel_id,
+            "call_id": video_call.id,
+        })
+        await manager.broadcast(upgrade_payload, str(current_user.company_id))
+
+    channel_name = f"Call with {inviter_name}"
+
+    invite_payload = json.dumps({
+        "type": "video_call_initiated",
+        "call_id": video_call.id,
+        "room_name": video_call.room_name,
+        "livekit_url": settings.LIVEKIT_URL,
+        "channel_id": chat_channel_id,
+        "channel_type": "GROUP",
+        "channel_member_ids": body.user_ids + [current_user.id],
+        "caller_id": current_user.id,
+        "caller_name": inviter_name,
+        "caller_avatar": current_user.profile_picture_url,
+        "is_direct_invite": True,
+    })
+
+    # Broadcast company-wide — frontend filters by channel_member_ids so only invited users ring
+    await manager.broadcast(invite_payload, str(current_user.company_id))
+
+    notified = 0
+    for uid in body.user_ids:
+        invited_user = db.query(User).filter(
+            User.id == uid,
+            User.company_id == current_user.company_id,
+        ).first()
+        if not invited_user:
+            continue
+        crud_notification.create_notification(
+            db=db,
+            user_id=uid,
+            notification_type="incoming_call",
+            title=f"Incoming call from {inviter_name}",
+            message=f"{inviter_name} invited you to join a call",
+            related_channel_id=chat_channel_id,
+            actor_id=current_user.id,
+        )
+        notified += 1
+
+    return {"notified": notified, "chat_channel_id": chat_channel_id}

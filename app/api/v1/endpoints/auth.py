@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core import security
 from app.core.config import settings
 from app.core.dependencies import get_db, get_current_active_user
+from app.core.audit import log_action
 from app.schemas import user as schemas_user, token as schemas_token, company as schemas_company
 from app.services import user_service, company_service, company_subscription_service, role_service
 from app.models import user as models_user
@@ -43,6 +44,11 @@ def login_for_access_token(
 ):
     user = user_service.get_user_by_email(db, email=form_data.username)
     if not user or not security.verify_password(form_data.password, user.hashed_password):
+        if user:
+            log_action(db, company_id=user.company_id, user_id=user.id,
+                       action="auth.login_failed", entity_type="user",
+                       entity_id=user.id, entity_name=user.email)
+            db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -58,6 +64,11 @@ def login_for_access_token(
 
     # Update user presence status to online
     user_service.update_user_presence(db, user.id, "online")
+
+    log_action(db, company_id=user.company_id, user_id=user.id,
+               action="auth.login", entity_type="user",
+               entity_id=user.id, entity_name=user.email)
+    db.commit()
 
     access_token_expires = timedelta(minutes=60 * 24 * 7) # 7 days
     access_token = security.create_access_token(
@@ -86,6 +97,10 @@ def logout(
 ):
     # Update user presence status to offline
     user_service.update_user_presence(db, current_user.id, "offline")
+    log_action(db, company_id=current_user.company_id, user_id=current_user.id,
+               action="auth.logout", entity_type="user",
+               entity_id=current_user.id, entity_name=current_user.email)
+    db.commit()
     return {"message": "Successfully logged out"}
 
 

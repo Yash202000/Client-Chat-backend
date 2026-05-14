@@ -229,6 +229,45 @@ def create_missed_call_notification(
     )
 
 
+def mark_incoming_call_read(db: Session, user_id: int, channel_id: int) -> None:
+    """Mark unread incoming_call notifications as read for a user in a channel."""
+    db.query(Notification).filter(
+        Notification.user_id == user_id,
+        Notification.related_channel_id == channel_id,
+        Notification.notification_type == "incoming_call",
+        Notification.is_read == False,
+    ).update({"is_read": True, "read_at": datetime.utcnow()})
+    db.commit()
+    _broadcast_unread_count(db, user_id)
+
+
+def convert_incoming_to_missed(db: Session, user_id: int, channel_id: int, caller_name: str) -> None:
+    """Convert an unread incoming_call notification to missed_call for a user."""
+    notification = db.query(Notification).filter(
+        Notification.user_id == user_id,
+        Notification.related_channel_id == channel_id,
+        Notification.notification_type == "incoming_call",
+        Notification.is_read == False,
+    ).first()
+    if notification:
+        notification.notification_type = "missed_call"
+        notification.title = f"Missed call from {caller_name}"
+        notification.message = f"You missed a video call from {caller_name}"
+        db.commit()
+        _broadcast_unread_count(db, user_id)
+    else:
+        # No incoming_call found — create a missed_call directly
+        create_notification(
+            db=db,
+            user_id=user_id,
+            notification_type="missed_call",
+            title=f"Missed call from {caller_name}",
+            message=f"You missed a video call from {caller_name}",
+            related_channel_id=channel_id,
+            actor_id=None,
+        )
+
+
 def create_handoff_call_notification(
     db: Session,
     agent_user_id: int,

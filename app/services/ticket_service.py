@@ -779,8 +779,8 @@ def update_ticket(db: Session, ticket_id: int, data: schemas.TicketUpdate, compa
         if field == "assignee_id":
             old_user = db.query(UserModel).filter(UserModel.id == old_val).first() if old_val else None
             new_user = db.query(UserModel).filter(UserModel.id == new_val).first() if new_val else None
-            display_old = (old_user.full_name or old_user.email) if old_user else None
-            display_new = (new_user.full_name or new_user.email) if new_user else None
+            display_old = (' '.join(filter(None, [old_user.first_name, old_user.last_name])) or old_user.email) if old_user else None
+            display_new = (' '.join(filter(None, [new_user.first_name, new_user.last_name])) or new_user.email) if new_user else None
 
         # Format datetime values
         if hasattr(old_val, 'strftime'):

@@ -48,3 +48,8 @@ class User(Base):
 
     # Skills-based routing (Phase 2)
     skills = Column(JSONB, nullable=True)  # e.g. ["billing", "technical", "spanish"]
+
+    @property
+    def full_name(self) -> str | None:
+        parts = [p for p in [self.first_name, self.last_name] if p]
+        return ' '.join(parts) if parts else None

@@ -10,6 +10,9 @@ from app.core.dependencies import get_db, get_current_active_user
 from app.models.user import User
 from app.models.form_builder import CaptureForm, FormSubmission
 from app.models.contact import Contact
+from app.models.lead import Lead
+from app.services import lead_service
+from app.schemas.lead import LeadCreate
 
 router = APIRouter()
 
@@ -291,10 +294,23 @@ def submit_form(
     settings = form.settings or {}
     contact_id = None
 
+    contact = None
     if settings.get("create_contact", True):
         contact = _upsert_contact(db, form.company_id, payload)
         if contact:
             contact_id = contact.id
+
+    if contact and settings.get("create_lead", True):
+        existing_lead = db.query(Lead).filter(
+            Lead.contact_id == contact.id,
+            Lead.company_id == form.company_id,
+        ).first()
+        if not existing_lead:
+            lead_service.create_lead(
+                db=db,
+                lead=LeadCreate(contact_id=contact.id, source="form"),
+                company_id=form.company_id,
+            )
 
     ip = request.client.host if request.client else None
     submission = FormSubmission(

@@ -8,6 +8,7 @@ from app.core.dependencies import get_db, get_current_active_user
 from app.models.user import User as UserModel
 from app.models.calendar_event import CalendarEvent
 from app.schemas.calendar_event import CalendarEventCreate, CalendarEventUpdate, CalendarEventOut
+from app.crud import crud_notification
 
 router = APIRouter()
 
@@ -105,6 +106,27 @@ def create_event(
 
     db.commit()
     db.refresh(event)
+
+    # Notify attendees (looked up by email within the same company)
+    if event.attendees:
+        organiser_name = current_user.first_name or current_user.email
+        start_str = event.start_time.strftime("%b %d, %H:%M")
+        attendee_users = db.query(UserModel).filter(
+            UserModel.email.in_(event.attendees),
+            UserModel.company_id == current_user.company_id,
+            UserModel.id != current_user.id,
+        ).all()
+        for attendee in attendee_users:
+            crud_notification.create_notification(
+                db=db,
+                user_id=attendee.id,
+                notification_type="meeting_invite",
+                title=f"Meeting: {event.title}",
+                message=f"{organiser_name} invited you to '{event.title}' on {start_str}",
+                related_channel_id=event.channel_id,
+                actor_id=current_user.id,
+            )
+
     return event
 
 
@@ -308,11 +330,21 @@ async def invite_to_meeting(
     }
     msg = WebSocketMessage(type="meeting_invite", payload=payload).model_dump_json()
 
+    start_str = event.start_time.strftime("%b %d, %H:%M")
     notified = 0
     for uid in body.user_ids:
         user = db.query(U).filter(U.id == uid, U.company_id == current_user.company_id).first()
         if user:
             await manager.broadcast_to_user(uid, msg)
+            crud_notification.create_notification(
+                db=db,
+                user_id=uid,
+                notification_type="meeting_invite",
+                title=f"Meeting invite: {event.title}",
+                message=f"{inviter_name} invited you to join '{event.title}' at {start_str}",
+                related_channel_id=event.channel_id,
+                actor_id=current_user.id,
+            )
             notified += 1
 
     return {"notified": notified}

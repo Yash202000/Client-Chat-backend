@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.booking_link import BookingLink, BookingSlot, BookingSlotStatus
 from app.models.calendar_event import CalendarEvent
 from app.models.contact import Contact
+from app.models.lead import Lead
 
 
 DEFAULT_AVAILABILITY = {
@@ -214,6 +215,20 @@ def create_booking(
         )
         db.add(contact)
         db.flush()
+
+    # Auto-create a lead if one doesn't exist for this contact
+    existing_lead = db.query(Lead).filter(
+        Lead.contact_id == contact.id,
+        Lead.company_id == link.company_id,
+    ).first()
+    if not existing_lead:
+        from app.services import lead_service
+        from app.schemas.lead import LeadCreate
+        lead_service.create_lead(
+            db=db,
+            lead=LeadCreate(contact_id=contact.id, source="booking_link"),
+            company_id=link.company_id,
+        )
 
     # Create CalendarEvent for the host
     event = CalendarEvent(
