@@ -14,6 +14,7 @@ from app.api.v1.endpoints import campaign_sequence
 from app.api.v1.endpoints import audit_logs
 from app.api.v1.endpoints import data_export
 from app.api.v1.endpoints import gdpr
+from app.api.v1.endpoints import data_deletion
 from app.api.v1.endpoints import compliance
 from app.api.v1.endpoints import tickets
 from app.api.v1.endpoints import custom_fields
@@ -177,6 +178,9 @@ api_router.include_router(data_export.router, prefix="/export", tags=["export"])
 
 # GDPR — Right to Erasure
 api_router.include_router(gdpr.router, prefix="/gdpr", tags=["gdpr"])
+
+# Public Data Deletion (Facebook callback + web form)
+api_router.include_router(data_deletion.router, prefix="/data-deletion", tags=["data-deletion"])
 
 # Compliance — Vanta / Drata integration + sub-processor list
 api_router.include_router(compliance.router, prefix="/compliance", tags=["compliance"])

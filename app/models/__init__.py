@@ -50,6 +50,7 @@ from app.models.intent import Intent, IntentMatch, Entity, ConversationTag
 from app.models.account import Account
 from app.models.email_tracking import EmailTrackingToken, TrackingTokenType
 from app.models.booking_link import BookingLink, BookingSlot, BookingSlotStatus
+from app.models.data_deletion_request import DataDeletionRequest
 from app.models.pipeline import Pipeline, DealStage
 from app.models.deal import Deal, DealStatus
 from app.models.lead import Lead
