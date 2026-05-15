@@ -80,6 +80,7 @@ def create_booking_link(db: Session, data: dict, user_id: int, company_id: int) 
         buffer_before_minutes=data.get("buffer_before_minutes", 0),
         buffer_after_minutes=data.get("buffer_after_minutes", 0),
         availability=data.get("availability", DEFAULT_AVAILABILITY),
+        date_overrides=data.get("date_overrides", {}),
         timezone=data.get("timezone", "UTC"),
         max_advance_days=data.get("max_advance_days", 60),
         min_notice_hours=data.get("min_notice_hours", 1),
@@ -120,11 +121,20 @@ def delete_booking_link(db: Session, link_id: int, company_id: int) -> bool:
 def get_available_slots(db: Session, link: BookingLink, target_date: date) -> List[Dict]:
     """
     Returns list of {start, end} UTC datetimes available on target_date.
-    Respects availability windows, existing calendar events, buffers, and notice period.
+    Respects date_overrides first, then weekly availability windows, plus
+    existing calendar events, buffers, and notice period.
     """
     tz = _tz(link.timezone)
-    day_name = DAY_NAMES[target_date.weekday()]
-    windows = (link.availability or {}).get(day_name, [])
+    date_key = target_date.strftime("%Y-%m-%d")
+    overrides = link.date_overrides or {}
+
+    if date_key in overrides:
+        # explicit override for this date: [] = blocked, [...] = custom hours
+        windows = overrides[date_key]
+    else:
+        day_name = DAY_NAMES[target_date.weekday()]
+        windows = (link.availability or {}).get(day_name, [])
+
     if not windows:
         return []
 

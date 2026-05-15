@@ -44,6 +44,9 @@ class BookingLink(Base):
     buffer_after_minutes = Column(Integer, nullable=False, default=0)
 
     availability = Column(JSONB, nullable=False, default=dict)
+    # date_overrides: {"YYYY-MM-DD": [{"start": "HH:MM", "end": "HH:MM"}]}
+    # empty list  = date is blocked; list with windows = custom hours for that date
+    date_overrides = Column(JSONB, nullable=True, default=dict)
     timezone = Column(String(64), nullable=False, default="UTC")
 
     max_advance_days = Column(Integer, nullable=False, default=60)   # how far ahead bookers can schedule

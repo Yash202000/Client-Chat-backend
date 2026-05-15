@@ -32,6 +32,7 @@ class BookingLinkCreate(BaseModel):
     buffer_before_minutes: int = 0
     buffer_after_minutes: int = 0
     availability: Optional[dict] = None
+    date_overrides: Optional[dict] = None
     timezone: str = "UTC"
     max_advance_days: int = 60
     min_notice_hours: int = 1
@@ -47,6 +48,7 @@ class BookingLinkUpdate(BaseModel):
     buffer_before_minutes: Optional[int] = None
     buffer_after_minutes: Optional[int] = None
     availability: Optional[dict] = None
+    date_overrides: Optional[dict] = None
     timezone: Optional[str] = None
     max_advance_days: Optional[int] = None
     min_notice_hours: Optional[int] = None
@@ -64,6 +66,7 @@ class BookingLinkOut(BaseModel):
     buffer_before_minutes: int
     buffer_after_minutes: int
     availability: dict
+    date_overrides: Optional[dict] = None
     timezone: str
     max_advance_days: int
     min_notice_hours: int
@@ -111,7 +114,7 @@ def get_public_booking_link(slug: str, db: Session = Depends(get_db)):
         location=link.location, duration_minutes=link.duration_minutes,
         buffer_before_minutes=link.buffer_before_minutes,
         buffer_after_minutes=link.buffer_after_minutes,
-        availability=link.availability or {}, timezone=link.timezone,
+        availability=link.availability or {}, date_overrides=link.date_overrides or {}, timezone=link.timezone,
         max_advance_days=link.max_advance_days, min_notice_hours=link.min_notice_hours,
         color=link.color, is_active=link.is_active,
         owner_name=f"{link.owner.first_name or ''} {link.owner.last_name or ''}".strip() if link.owner else None,
@@ -172,7 +175,7 @@ def list_my_booking_links(
             location=l.location, duration_minutes=l.duration_minutes,
             buffer_before_minutes=l.buffer_before_minutes,
             buffer_after_minutes=l.buffer_after_minutes,
-            availability=l.availability or {}, timezone=l.timezone,
+            availability=l.availability or {}, date_overrides=l.date_overrides or {}, timezone=l.timezone,
             max_advance_days=l.max_advance_days, min_notice_hours=l.min_notice_hours,
             color=l.color, is_active=l.is_active,
             owner_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip(),
@@ -197,7 +200,7 @@ def create_booking_link(
         location=link.location, duration_minutes=link.duration_minutes,
         buffer_before_minutes=link.buffer_before_minutes,
         buffer_after_minutes=link.buffer_after_minutes,
-        availability=link.availability or {}, timezone=link.timezone,
+        availability=link.availability or {}, date_overrides=link.date_overrides or {}, timezone=link.timezone,
         max_advance_days=link.max_advance_days, min_notice_hours=link.min_notice_hours,
         color=link.color, is_active=link.is_active,
         owner_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip(),
@@ -224,7 +227,7 @@ def update_booking_link(
         location=link.location, duration_minutes=link.duration_minutes,
         buffer_before_minutes=link.buffer_before_minutes,
         buffer_after_minutes=link.buffer_after_minutes,
-        availability=link.availability or {}, timezone=link.timezone,
+        availability=link.availability or {}, date_overrides=link.date_overrides or {}, timezone=link.timezone,
         max_advance_days=link.max_advance_days, min_notice_hours=link.min_notice_hours,
         color=link.color, is_active=link.is_active,
         owner_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip(),
