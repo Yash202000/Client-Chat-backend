@@ -15,7 +15,7 @@ from app.models.user import User
 from app.models.contact import Contact
 from app.models.conversation_session import ConversationSession
 from app.models.chat_message import ChatMessage
-from app.services import sms_service
+from app.services import sms_service, cod_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,6 +76,17 @@ async def twilio_sms_webhook(
         company_id = company.id
 
     try:
+        # COD reply intercept — check before normal SMS flow
+        if Body:
+            cod_consumed = await cod_service.handle_cod_reply(
+                db=db,
+                company_id=company_id,
+                sender_phone=From,
+                message_text=Body,
+            )
+            if cod_consumed:
+                return Response(content="<Response/>", media_type="application/xml")
+
         await sms_service.process_incoming_sms(
             db=db,
             from_number=From,

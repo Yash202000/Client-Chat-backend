@@ -194,6 +194,7 @@ peft==0.17.1
 pexpect==4.9.0
 pi_heif==1.1.0
 pillow==11.3.0
+pyotp==2.9.0
 pillow-avif-plugin==1.5.2
 platformdirs==4.4.0
 playwright==1.55.0

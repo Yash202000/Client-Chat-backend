@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     LIVEKIT_API_SECRET: str = ""
     LIVEKIT_URL: str = ""
     FRONTEND_URL: str
+    BACKEND_URL: str = ""  # Public URL of this backend (used for widget script URLs)
     WHATSAPP_VERIFY_TOKEN: str = ""
     MESSENGER_VERIFY_TOKEN: str = ""
     INSTAGRAM_VERIFY_TOKEN: str = ""

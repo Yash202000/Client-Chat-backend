@@ -5,6 +5,7 @@ import hashlib
 
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.services import contact_service, integration_service, messaging_service
+from app.services import opt_out_service
 from app.services.ticket_service import (
     get_crm_workflow, get_workflow_with_details, get_available_transitions, execute_entity_transition,
 )
@@ -91,7 +92,7 @@ def read_contacts(
             "profile_picture_url": _resolve_profile_picture(contact),
             "workflow_id": contact.workflow_id,
             "status_id": contact.status_id,
-            "wf_status": {"id": contact.status.id, "name": contact.status.name, "color": contact.status.color, "category": contact.status.category} if getattr(contact, 'status', None) else None,
+            "wf_status": {"id": contact.status.id, "name": contact.status.name, "color": contact.status.color, "category": contact.status.category, "position": contact.status.position} if getattr(contact, 'status', None) else None,
             "available_transitions": get_available_transitions(db, contact.workflow_id, contact.status_id) if contact.workflow_id and contact.status_id else [],
         }
         result.append(contact_dict)
@@ -160,6 +161,38 @@ async def refresh_contact_profile_picture(
         db.refresh(contact)
 
     return {"profile_picture_url": contact.profile_picture_url}
+
+
+@router.post("/{contact_id}/opt-out", dependencies=[Depends(require_permission("contact:update"))])
+def manual_opt_out(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Manually mark a contact as opted-out from broadcast messages."""
+    contact = contact_service.get_contact(db, contact_id=contact_id, company_id=current_user.company_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.phone_number:
+        raise HTTPException(status_code=400, detail="Contact has no phone number")
+    updated = opt_out_service.opt_out_contact(db, current_user.company_id, contact.phone_number)
+    return {"success": True, "updated": updated, "contact_id": contact_id}
+
+
+@router.post("/{contact_id}/opt-in", dependencies=[Depends(require_permission("contact:update"))])
+def manual_opt_in(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Manually re-subscribe a contact to broadcast messages."""
+    contact = contact_service.get_contact(db, contact_id=contact_id, company_id=current_user.company_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not contact.phone_number:
+        raise HTTPException(status_code=400, detail="Contact has no phone number")
+    updated = opt_out_service.opt_in_contact(db, current_user.company_id, contact.phone_number)
+    return {"success": True, "updated": updated, "contact_id": contact_id}
 
 
 @router.get("/by_session/{session_id}", response_model=Optional[schemas_contact.Contact], dependencies=[Depends(require_permission("contact:read"))])

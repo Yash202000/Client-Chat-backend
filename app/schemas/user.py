@@ -52,6 +52,7 @@ class User(BaseModel):
     presence_status: Optional[str] = "offline"
     last_seen: Optional[datetime.datetime] = None
     skills: Optional[List[str]] = None
+    totp_enabled: Optional[bool] = False
     subscription_plan_id: Optional[int] = None
     subscription_status: Optional[str] = None
     subscription_start_date: Optional[datetime.datetime] = None

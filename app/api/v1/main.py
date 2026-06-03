@@ -11,6 +11,11 @@ from app.api.v1.endpoints import contact_timeline
 from app.api.v1.endpoints import sequences
 from app.api.v1.endpoints import forms
 from app.api.v1.endpoints import campaign_sequence
+from app.api.v1.endpoints import ai_chat
+from app.api.v1.endpoints import ai_images
+from app.api.v1.endpoints import processing_templates
+from app.api.v1.endpoints import comments
+from app.api.v1.endpoints import published
 from app.api.v1.endpoints import audit_logs
 from app.api.v1.endpoints import data_export
 from app.api.v1.endpoints import gdpr
@@ -29,6 +34,8 @@ from app.api.v1.endpoints.cms import categories as cms_categories
 from app.api.v1.endpoints.cms import tags as cms_tags
 from app.api.v1.endpoints.cms import publishing as cms_publishing
 from app.api.v1.endpoints.cms import public as cms_public
+from app.api.v1.endpoints import verify, cod, whatsapp_widget, ctwa, broadcast, developer_api, wa_templates, comms_analytics, webhook_logs, catalog, social_widget, cts
+from app.api.v1.endpoints import short_links
 
 
 api_router = APIRouter()
@@ -69,6 +76,7 @@ api_router.include_router(roles.router, prefix="/roles", tags=["roles"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(knowledge_bases.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
+api_router.include_router(processing_templates.router, prefix="/processing-templates", tags=["knowledge-bases"])
 api_router.include_router(workflow.router, prefix="/workflows", tags=["workflows"])
 api_router.include_router(tools.router, prefix="/tools", tags=["tools"])
 api_router.include_router(calls.router, prefix="/calls", tags=["calls"])
@@ -105,6 +113,10 @@ api_router.include_router(websocket_router, prefix="/ws", tags=["WebSockets"])
 api_router.include_router(video_calls.router, prefix="/video-calls", tags=["video-calls"])
 api_router.include_router(agent_handoff.router, prefix="/handoff", tags=["handoff"])
 api_router.include_router(ai_tools.router, prefix="/ai-tools", tags=["ai-tools"])
+api_router.include_router(ai_chat.router, prefix="/ai-chat", tags=["ai-chat"])
+api_router.include_router(ai_images.router, prefix="/ai-images", tags=["ai-images"])
+api_router.include_router(comments.router, prefix="/comments", tags=["comments"])
+api_router.include_router(published.router, prefix="/published", tags=["published"])
 api_router.include_router(intents.router, prefix="/intents", tags=["intents"])
 
 # CRM routers
@@ -143,6 +155,21 @@ api_router.include_router(api_integrations.router, prefix="/api-integrations", t
 # SMS & Email outbound
 api_router.include_router(sms.router, prefix="/sms", tags=["sms"])
 api_router.include_router(email_outbound.router, prefix="/email", tags=["email"])
+api_router.include_router(verify.router, prefix="/verify", tags=["verify"])
+api_router.include_router(cod.router, prefix="/cod", tags=["cod"])
+api_router.include_router(whatsapp_widget.router, prefix="/wa-widget", tags=["whatsapp-widget"])
+api_router.include_router(whatsapp_widget.public_router, prefix="/public/wa-widget", tags=["whatsapp-widget-public"])
+api_router.include_router(social_widget.router, prefix="/social-widget", tags=["social-widget"])
+api_router.include_router(social_widget.public_router, prefix="/public/social-widget", tags=["social-widget-public"])
+api_router.include_router(ctwa.router, prefix="/ctwa", tags=["ctwa"])
+api_router.include_router(ctwa.public_router, prefix="/public/ctwa", tags=["ctwa-public"])
+api_router.include_router(cts.router, prefix="/cts", tags=["cts"])
+api_router.include_router(cts.public_router, prefix="/public/cts", tags=["cts-public"])
+api_router.include_router(broadcast.router, prefix="/broadcasts", tags=["broadcasts"])
+api_router.include_router(developer_api.router, prefix="/developer", tags=["developer-api"])
+api_router.include_router(wa_templates.router, prefix="/wa-templates", tags=["whatsapp-templates"])
+api_router.include_router(comms_analytics.router, prefix="/comms-analytics", tags=["comms-analytics"])
+api_router.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
 api_router.include_router(email_tracking.router, prefix="/tracking", tags=["tracking"])
 api_router.include_router(booking.router, prefix="/booking-links", tags=["booking"])
 api_router.include_router(sequences.router, prefix="/sequences", tags=["sequences"])
@@ -194,3 +221,10 @@ api_router.include_router(routing_rules.router, prefix="/routing-rules", tags=["
 # Hierarchy (Jurisdiction-based routing)
 api_router.include_router(hierarchy.router, prefix="/hierarchy", tags=["hierarchy"])
 api_router.include_router(departments.router, prefix="/departments", tags=["departments"])
+
+# Webhook Delivery Logs
+api_router.include_router(webhook_logs.router, prefix="/webhook-logs", tags=["webhook-logs"])
+
+# Link Shortener
+api_router.include_router(short_links.router, prefix="/short-links", tags=["short-links"])
+api_router.include_router(short_links.public_router, prefix="/s", tags=["short-links-public"])

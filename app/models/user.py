@@ -49,6 +49,10 @@ class User(Base):
     # Skills-based routing (Phase 2)
     skills = Column(JSONB, nullable=True)  # e.g. ["billing", "technical", "spanish"]
 
+    # Two-Factor Authentication (TOTP)
+    totp_secret = Column(String, nullable=True)
+    totp_enabled = Column(Boolean, default=False, nullable=False)
+
     @property
     def full_name(self) -> str | None:
         parts = [p for p in [self.first_name, self.last_name] if p]

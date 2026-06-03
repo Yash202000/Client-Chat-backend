@@ -24,6 +24,8 @@ from app.services.workflow_execution_service import WorkflowExecutionService
 from app.services.intent_service import IntentService
 from app.models.workflow_trigger import TriggerChannel
 from app.services.connection_manager import manager
+from app.services import cod_service, ctwa_service, webhook_delivery_service
+from app.services import opt_out_service
 from app.schemas.chat_message import ChatMessageCreate
 from app.schemas import websocket as schemas_websocket, chat_message as schemas_chat_message
 from app.api.v1.endpoints.websocket_conversations import manager as session_ws_manager
@@ -158,12 +160,49 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                             message_text = f"[Media attachment - {pending_media['media_type']}]"
 
                 wa_profile_name = change.get("value", {}).get("contacts", [{}])[0].get("profile", {}).get("name")
+
+                # COD reply intercept — check before normal chat flow
+                if message_text:
+                    cod_consumed = await cod_service.handle_cod_reply(
+                        db=db,
+                        company_id=company_id,
+                        sender_phone=sender_phone,
+                        message_text=message_text,
+                    )
+                    if cod_consumed:
+                        return Response(status_code=200)
+
+                # Opt-out / opt-in handling — must run before contact creation
+                if message_type == "text" and message_text:
+                    if opt_out_service.is_opt_out_message(message_text):
+                        opt_out_service.opt_out_contact(db, company_id, sender_phone)
+                        try:
+                            await messaging_service.send_whatsapp_message(
+                                recipient_phone_number=sender_phone,
+                                message_text="You've been unsubscribed from broadcast messages. Reply START to re-subscribe.",
+                                integration=integration,
+                                db=db,
+                            )
+                        except Exception:
+                            pass
+                        return Response(status_code=200)
+                    elif opt_out_service.is_opt_in_message(message_text):
+                        opt_out_service.opt_in_contact(db, company_id, sender_phone)
+
                 contact = contact_service.get_or_create_contact_for_channel(
                     db,
                     company_id=company_id,
                     channel='whatsapp',
                     channel_identifier=sender_phone,
                     name=wa_profile_name
+                )
+
+                # CTWA attribution — tag contact + trigger workflow if they came via a tracked link
+                await ctwa_service.attribute_ctwa_contact(
+                    db=db,
+                    company_id=company_id,
+                    sender_phone=sender_phone,
+                    contact=contact,
                 )
 
                 session = conversation_session_service.get_or_create_session(
@@ -476,6 +515,35 @@ async def receive_message(request: Request, db: Session = Depends(get_db)):
                 elif execution_result.get("status") == "paused_for_input":
                     pass
 
+
+        # Handle message status updates (delivered, read, failed)
+        if change.get("field") == "messages" and "statuses" in change.get("value", {}):
+            statuses = change["value"]["statuses"]
+            phone_number_id_val = change.get("value", {}).get("metadata", {}).get("phone_number_id")
+            for status_item in statuses:
+                msg_id = status_item.get("id")
+                recipient = status_item.get("recipient_id")
+                status_val = status_item.get("status")  # "sent", "delivered", "read", "failed"
+
+                if status_val in ("delivered", "read", "failed"):
+                    event_type = f"message.{status_val}"
+                    payload = {
+                        "event": event_type,
+                        "message_id": msg_id,
+                        "recipient": recipient,
+                        "timestamp": status_item.get("timestamp"),
+                    }
+                    # Find which company owns this phone_number_id
+                    wa_integration = integration_service.get_integration_by_phone_number_id(
+                        db, phone_number_id_val or ""
+                    )
+                    if wa_integration:
+                        import asyncio
+                        asyncio.create_task(
+                            webhook_delivery_service.fire_company_webhooks(
+                                db, wa_integration.company_id, event_type, payload
+                            )
+                        )
 
     except (KeyError, IndexError) as e:
         logging.error(f"Error parsing WhatsApp webhook data: {e}\n{traceback.format_exc()}")

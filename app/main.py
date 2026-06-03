@@ -7,7 +7,7 @@ import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.database import Base, engine, SessionLocal
-from app.models import role, permission, contact, comment # Import new models
+from app.models import role, permission, contact, comment, otp_verification, cod_verification, whatsapp_widget, ctwa_link, broadcast, webhook_delivery_log, api_key_log, short_link, social_widget, cts_link # Import new models
 from app.core.config import settings
 from app.api.v1.main import api_router, websocket_router
 from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, public_pages
@@ -102,6 +102,24 @@ async def run_social_post_scheduler():
         db.close()
 
 
+async def run_broadcast_scheduler():
+    """Fire any broadcasts whose scheduled_at has passed and status is SCHEDULED."""
+    from app.models.broadcast import Broadcast, BroadcastStatus
+    from app.services.broadcast_service import send_broadcast
+    from datetime import datetime
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        due = db.query(Broadcast).filter(
+            Broadcast.status == BroadcastStatus.SCHEDULED,
+            Broadcast.scheduled_at <= now,
+        ).all()
+        for b in due:
+            asyncio.create_task(send_broadcast(db, b.id, b.company_id))
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def on_startup():
     create_initial_data()
@@ -158,6 +176,16 @@ async def on_startup():
         replace_existing=True
     )
     print("[Startup] Social post scheduler started (interval: 1 min)")
+
+    # Broadcast scheduler — runs every minute to fire due scheduled broadcasts
+    scheduler.add_job(
+        run_broadcast_scheduler,
+        'interval',
+        minutes=1,
+        id='broadcast_scheduler',
+        replace_existing=True,
+    )
+    print("[Startup] Broadcast scheduler started (interval: 1 min)")
 
     # Calendar reminders — runs every minute to push WS notifications to users
     from app.services.calendar_reminder_service import run_calendar_reminder_scheduler

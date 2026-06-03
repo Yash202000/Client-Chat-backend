@@ -1,7 +1,10 @@
 from datetime import timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core import security
@@ -9,10 +12,34 @@ from app.core.config import settings
 from app.core.dependencies import get_db, get_current_active_user
 from app.core.audit import log_action
 from app.schemas import user as schemas_user, token as schemas_token, company as schemas_company
-from app.services import user_service, company_service, company_subscription_service, role_service
+from app.services import user_service, company_service, company_subscription_service, role_service, twofa_service
 from app.models import user as models_user
 
 router = APIRouter()
+
+_2FA_TOKEN_EXPIRE_MINUTES = 5
+_2FA_CLAIM = "2fa_pending"
+
+
+def _create_temp_token(email: str) -> str:
+    return security.create_access_token(
+        data={"sub": email, _2FA_CLAIM: True},
+        expires_delta=timedelta(minutes=_2FA_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def _decode_temp_token(token: str) -> str:
+    """Return email from a valid 2FA-pending token, or raise 401."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        if not payload.get(_2FA_CLAIM):
+            raise HTTPException(status_code=401, detail="Invalid 2FA token.")
+        email: Optional[str] = payload.get("sub")
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid 2FA token.")
+        return email
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired 2FA token.")
 
 
 @router.post("/signup", response_model=schemas_user.User)
@@ -62,6 +89,11 @@ def login_for_access_token(
             detail="Your account has been deactivated. Please contact your administrator.",
         )
 
+    # If 2FA is enabled, issue a short-lived pending token instead of a full session
+    if user.totp_enabled and user.totp_secret:
+        temp_token = _create_temp_token(user.email)
+        return {"requires_2fa": True, "temp_token": temp_token, "token_type": "bearer"}
+
     # Update user presence status to online
     user_service.update_user_presence(db, user.id, "online")
 
@@ -74,7 +106,7 @@ def login_for_access_token(
     access_token = security.create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
+    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id, "requires_2fa": False}
 
 
 @router.post("/refresh", response_model=schemas_token.Token)
@@ -123,3 +155,111 @@ def update_presence(
 
     updated_user = user_service.update_user_presence(db, current_user.id, presence_status)
     return {"presence_status": updated_user.presence_status, "last_seen": updated_user.last_seen}
+
+
+# ---------------------------------------------------------------------------
+# Two-Factor Authentication (TOTP)
+# ---------------------------------------------------------------------------
+
+class TwoFAVerifySetupRequest(BaseModel):
+    code: str
+
+class TwoFADisableRequest(BaseModel):
+    code: str
+
+class TwoFALoginRequest(BaseModel):
+    temp_token: str
+    code: str
+
+
+@router.post("/2fa/setup")
+def setup_2fa(
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Generate a new TOTP secret and return provisioning URI + QR code."""
+    if current_user.totp_enabled:
+        raise HTTPException(status_code=400, detail="2FA is already enabled.")
+    secret = twofa_service.generate_totp_secret()
+    current_user.totp_secret = secret
+    db.commit()
+
+    uri = twofa_service.get_provisioning_uri(secret, current_user.email)
+    qr_b64 = twofa_service.get_qr_code_base64(uri)
+    return {
+        "secret": secret,
+        "provisioning_uri": uri,
+        "qr_code": f"data:image/png;base64,{qr_b64}",
+    }
+
+
+@router.post("/2fa/verify-setup")
+def verify_2fa_setup(
+    body: TwoFAVerifySetupRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Confirm TOTP code is correct, then enable 2FA on the account."""
+    if current_user.totp_enabled:
+        raise HTTPException(status_code=400, detail="2FA is already enabled.")
+    if not current_user.totp_secret:
+        raise HTTPException(status_code=400, detail="Call /auth/2fa/setup first.")
+    if not twofa_service.verify_totp_code(current_user.totp_secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid code. Please try again.")
+
+    current_user.totp_enabled = True
+    log_action(db, company_id=current_user.company_id, user_id=current_user.id,
+               action="auth.2fa_enabled", entity_type="user",
+               entity_id=current_user.id, entity_name=current_user.email)
+    db.commit()
+    return {"message": "2FA enabled successfully."}
+
+
+@router.post("/2fa/disable")
+def disable_2fa(
+    body: TwoFADisableRequest,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    """Disable 2FA — requires a valid current TOTP code."""
+    if not current_user.totp_enabled:
+        raise HTTPException(status_code=400, detail="2FA is not enabled.")
+    if not twofa_service.verify_totp_code(current_user.totp_secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid code.")
+
+    current_user.totp_enabled = False
+    current_user.totp_secret = None
+    log_action(db, company_id=current_user.company_id, user_id=current_user.id,
+               action="auth.2fa_disabled", entity_type="user",
+               entity_id=current_user.id, entity_name=current_user.email)
+    db.commit()
+    return {"message": "2FA disabled."}
+
+
+@router.post("/2fa/verify")
+def verify_2fa_login(
+    body: TwoFALoginRequest,
+    db: Session = Depends(get_db),
+):
+    """Exchange a 2FA-pending temp token + TOTP code for a full session token."""
+    email = _decode_temp_token(body.temp_token)
+
+    user = user_service.get_user_by_email(db, email)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive.")
+    if not user.totp_enabled or not user.totp_secret:
+        raise HTTPException(status_code=400, detail="2FA not configured for this account.")
+    if not twofa_service.verify_totp_code(user.totp_secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid authenticator code.")
+
+    user_service.update_user_presence(db, user.id, "online")
+    log_action(db, company_id=user.company_id, user_id=user.id,
+               action="auth.login", entity_type="user",
+               entity_id=user.id, entity_name=user.email)
+    db.commit()
+
+    access_token = security.create_access_token(
+        data={"sub": user.email},
+        expires_delta=timedelta(minutes=60 * 24 * 7),
+    )
+    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
