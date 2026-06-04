@@ -18,20 +18,23 @@ def upgrade():
     conn = op.get_bind()
 
     # ── Enums ──────────────────────────────────────────────────────────────────
+    # Use a PL/pgSQL exception handler so CREATE is atomic — avoids races with
+    # create_all() that may have already created the type on app startup.
     for type_name, values in [
         ('broadcastchannel',       ['whatsapp', 'sms', 'email']),
         ('broadcaststatus',        ['draft', 'running', 'completed', 'failed', 'scheduled']),
         ('broadcastcontactstatus', ['pending', 'sent', 'failed', 'skipped']),
     ]:
-        exists = conn.execute(
-            sa.text("SELECT 1 FROM pg_type WHERE typname = :t"), {'t': type_name}
-        ).fetchone()
-        if exists is None:
-            vals = ', '.join(f"'{v}'" for v in values)
-            op.execute(f"CREATE TYPE {type_name} AS ENUM ({vals})")
-        else:
-            for v in values:
-                op.execute(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{v}'")
+        vals = ', '.join(f"'{v}'" for v in values)
+        op.execute(sa.text(f"""
+            DO $$ BEGIN
+                CREATE TYPE {type_name} AS ENUM ({vals});
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$;
+        """))
+        # Always attempt to add each value — safe no-op if already present
+        for v in values:
+            op.execute(sa.text(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{v}'"))
 
     # ── broadcasts table ───────────────────────────────────────────────────────
     table_exists = conn.execute(
