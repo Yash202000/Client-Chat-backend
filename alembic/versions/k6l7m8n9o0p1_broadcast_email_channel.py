@@ -15,11 +15,20 @@ depends_on = None
 
 
 def upgrade():
-    # Add 'email' to the broadcastchannel enum
-    op.execute("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'email'")
+    conn = op.get_bind()
+
+    # The enum may not exist if the table was bootstrapped via create_all rather than migrations.
+    # Create it from scratch if missing; otherwise just add the new value.
+    type_exists = conn.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = 'broadcastchannel'")
+    ).fetchone()
+
+    if type_exists is None:
+        op.execute("CREATE TYPE broadcastchannel AS ENUM ('whatsapp', 'sms', 'email')")
+    else:
+        op.execute("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'email'")
 
     # Add subject column to broadcasts (skip if already exists)
-    conn = op.get_bind()
     cols = [c['name'] for c in inspect(conn).get_columns('broadcasts')]
     if 'subject' not in cols:
         op.add_column('broadcasts', sa.Column('subject', sa.String(500), nullable=True))
