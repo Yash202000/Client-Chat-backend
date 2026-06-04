@@ -17,24 +17,26 @@ def upgrade():
     # ── Enum types ────────────────────────────────────────────────────────────
     # PL/pgSQL exception handler is atomic — safe whether create_all() already
     # created the type or not.
+    # SQLAlchemy stores enum NAMES (uppercase) in Postgres by default, not values.
     op.execute(sa.text("""
         DO $$ BEGIN
-            CREATE TYPE broadcastchannel AS ENUM ('whatsapp', 'sms', 'email');
+            CREATE TYPE broadcastchannel AS ENUM ('WHATSAPP', 'SMS', 'EMAIL');
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$;
     """))
-    op.execute(sa.text("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'email'"))
+    op.execute(sa.text("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'EMAIL'"))
 
     op.execute(sa.text("""
         DO $$ BEGIN
-            CREATE TYPE broadcaststatus AS ENUM ('draft', 'running', 'completed', 'failed', 'scheduled');
+            CREATE TYPE broadcaststatus AS ENUM ('DRAFT', 'RUNNING', 'COMPLETED', 'FAILED', 'SCHEDULED');
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$;
     """))
+    op.execute(sa.text("ALTER TYPE broadcaststatus ADD VALUE IF NOT EXISTS 'SCHEDULED'"))
 
     op.execute(sa.text("""
         DO $$ BEGIN
-            CREATE TYPE broadcastcontactstatus AS ENUM ('pending', 'sent', 'failed', 'skipped');
+            CREATE TYPE broadcastcontactstatus AS ENUM ('PENDING', 'SENT', 'FAILED', 'SKIPPED');
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$;
     """))
@@ -54,7 +56,7 @@ def upgrade():
             sent_count      INTEGER DEFAULT 0,
             failed_count    INTEGER DEFAULT 0,
             skipped_count   INTEGER DEFAULT 0,
-            status          broadcaststatus NOT NULL,
+            status          broadcaststatus NOT NULL DEFAULT 'DRAFT',
             scheduled_at    TIMESTAMP,
             started_at      TIMESTAMP,
             completed_at    TIMESTAMP,
