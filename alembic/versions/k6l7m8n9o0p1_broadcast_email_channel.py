@@ -17,21 +17,71 @@ depends_on = None
 def upgrade():
     conn = op.get_bind()
 
-    # The enum may not exist if the table was bootstrapped via create_all rather than migrations.
-    # Create it from scratch if missing; otherwise just add the new value.
-    type_exists = conn.execute(
-        sa.text("SELECT 1 FROM pg_type WHERE typname = 'broadcastchannel'")
+    # ── Enums ──────────────────────────────────────────────────────────────────
+    for type_name, values in [
+        ('broadcastchannel',       ['whatsapp', 'sms', 'email']),
+        ('broadcaststatus',        ['draft', 'running', 'completed', 'failed', 'scheduled']),
+        ('broadcastcontactstatus', ['pending', 'sent', 'failed', 'skipped']),
+    ]:
+        exists = conn.execute(
+            sa.text("SELECT 1 FROM pg_type WHERE typname = :t"), {'t': type_name}
+        ).fetchone()
+        if exists is None:
+            vals = ', '.join(f"'{v}'" for v in values)
+            op.execute(f"CREATE TYPE {type_name} AS ENUM ({vals})")
+        else:
+            for v in values:
+                op.execute(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{v}'")
+
+    # ── broadcasts table ───────────────────────────────────────────────────────
+    table_exists = conn.execute(
+        sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = 'broadcasts'")
     ).fetchone()
 
-    if type_exists is None:
-        op.execute("CREATE TYPE broadcastchannel AS ENUM ('whatsapp', 'sms', 'email')")
+    if table_exists is None:
+        op.create_table(
+            'broadcasts',
+            sa.Column('id', sa.Integer(), primary_key=True, index=True),
+            sa.Column('company_id', sa.Integer(), sa.ForeignKey('companies.id'), nullable=False, index=True),
+            sa.Column('name', sa.String(255), nullable=False),
+            sa.Column('channel', sa.Enum('whatsapp', 'sms', 'email', name='broadcastchannel'), nullable=False),
+            sa.Column('subject', sa.String(500), nullable=True),
+            sa.Column('message', sa.Text(), nullable=False),
+            sa.Column('segment_id', sa.Integer(), sa.ForeignKey('segments.id'), nullable=True),
+            sa.Column('total_contacts', sa.Integer(), default=0),
+            sa.Column('sent_count', sa.Integer(), default=0),
+            sa.Column('failed_count', sa.Integer(), default=0),
+            sa.Column('skipped_count', sa.Integer(), default=0),
+            sa.Column('status', sa.Enum('draft', 'running', 'completed', 'failed', 'scheduled', name='broadcaststatus'), nullable=False),
+            sa.Column('scheduled_at', sa.DateTime(), nullable=True),
+            sa.Column('started_at', sa.DateTime(), nullable=True),
+            sa.Column('completed_at', sa.DateTime(), nullable=True),
+            sa.Column('created_by_user_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=True),
+            sa.Column('created_at', sa.DateTime(), nullable=False),
+        )
     else:
-        op.execute("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'email'")
+        cols = [r[0] for r in conn.execute(
+            sa.text("SELECT column_name FROM information_schema.columns WHERE table_name = 'broadcasts'")
+        ).fetchall()]
+        if 'subject' not in cols:
+            op.add_column('broadcasts', sa.Column('subject', sa.String(500), nullable=True))
 
-    # Add subject column to broadcasts (skip if already exists)
-    cols = [c['name'] for c in inspect(conn).get_columns('broadcasts')]
-    if 'subject' not in cols:
-        op.add_column('broadcasts', sa.Column('subject', sa.String(500), nullable=True))
+    # ── broadcast_contacts table ───────────────────────────────────────────────
+    bc_exists = conn.execute(
+        sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = 'broadcast_contacts'")
+    ).fetchone()
+
+    if bc_exists is None:
+        op.create_table(
+            'broadcast_contacts',
+            sa.Column('id', sa.Integer(), primary_key=True, index=True),
+            sa.Column('broadcast_id', sa.Integer(), sa.ForeignKey('broadcasts.id', ondelete='CASCADE'), nullable=False, index=True),
+            sa.Column('contact_id', sa.Integer(), sa.ForeignKey('contacts.id'), nullable=False),
+            sa.Column('company_id', sa.Integer(), sa.ForeignKey('companies.id'), nullable=False),
+            sa.Column('status', sa.Enum('pending', 'sent', 'failed', 'skipped', name='broadcastcontactstatus'), nullable=False),
+            sa.Column('error_message', sa.Text(), nullable=True),
+            sa.Column('sent_at', sa.DateTime(), nullable=True),
+        )
 
 
 def downgrade():
