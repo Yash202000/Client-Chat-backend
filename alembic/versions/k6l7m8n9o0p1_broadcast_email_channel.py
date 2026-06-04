@@ -6,7 +6,6 @@ Create Date: 2026-05-23
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy import inspect
 
 revision = 'k6l7m8n9o0p1'
 down_revision = 'j5k6l7m8n9o0'
@@ -15,78 +14,77 @@ depends_on = None
 
 
 def upgrade():
-    conn = op.get_bind()
+    # ── Enum types ────────────────────────────────────────────────────────────
+    # PL/pgSQL exception handler is atomic — safe whether create_all() already
+    # created the type or not.
+    op.execute(sa.text("""
+        DO $$ BEGIN
+            CREATE TYPE broadcastchannel AS ENUM ('whatsapp', 'sms', 'email');
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
+    op.execute(sa.text("ALTER TYPE broadcastchannel ADD VALUE IF NOT EXISTS 'email'"))
 
-    # ── Enums ──────────────────────────────────────────────────────────────────
-    # Use a PL/pgSQL exception handler so CREATE is atomic — avoids races with
-    # create_all() that may have already created the type on app startup.
-    for type_name, values in [
-        ('broadcastchannel',       ['whatsapp', 'sms', 'email']),
-        ('broadcaststatus',        ['draft', 'running', 'completed', 'failed', 'scheduled']),
-        ('broadcastcontactstatus', ['pending', 'sent', 'failed', 'skipped']),
-    ]:
-        vals = ', '.join(f"'{v}'" for v in values)
-        op.execute(sa.text(f"""
-            DO $$ BEGIN
-                CREATE TYPE {type_name} AS ENUM ({vals});
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """))
-        # Always attempt to add each value — safe no-op if already present
-        for v in values:
-            op.execute(sa.text(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{v}'"))
+    op.execute(sa.text("""
+        DO $$ BEGIN
+            CREATE TYPE broadcaststatus AS ENUM ('draft', 'running', 'completed', 'failed', 'scheduled');
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
 
-    # ── broadcasts table ───────────────────────────────────────────────────────
-    table_exists = conn.execute(
-        sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = 'broadcasts'")
-    ).fetchone()
+    op.execute(sa.text("""
+        DO $$ BEGIN
+            CREATE TYPE broadcastcontactstatus AS ENUM ('pending', 'sent', 'failed', 'skipped');
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
 
-    if table_exists is None:
-        op.create_table(
-            'broadcasts',
-            sa.Column('id', sa.Integer(), primary_key=True, index=True),
-            sa.Column('company_id', sa.Integer(), sa.ForeignKey('companies.id'), nullable=False, index=True),
-            sa.Column('name', sa.String(255), nullable=False),
-            sa.Column('channel', sa.Enum('whatsapp', 'sms', 'email', name='broadcastchannel', create_type=False), nullable=False),
-            sa.Column('subject', sa.String(500), nullable=True),
-            sa.Column('message', sa.Text(), nullable=False),
-            sa.Column('segment_id', sa.Integer(), sa.ForeignKey('segments.id'), nullable=True),
-            sa.Column('total_contacts', sa.Integer(), default=0),
-            sa.Column('sent_count', sa.Integer(), default=0),
-            sa.Column('failed_count', sa.Integer(), default=0),
-            sa.Column('skipped_count', sa.Integer(), default=0),
-            sa.Column('status', sa.Enum('draft', 'running', 'completed', 'failed', 'scheduled', name='broadcaststatus', create_type=False), nullable=False),
-            sa.Column('scheduled_at', sa.DateTime(), nullable=True),
-            sa.Column('started_at', sa.DateTime(), nullable=True),
-            sa.Column('completed_at', sa.DateTime(), nullable=True),
-            sa.Column('created_by_user_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=True),
-            sa.Column('created_at', sa.DateTime(), nullable=False),
+    # ── broadcasts table ──────────────────────────────────────────────────────
+    # Raw SQL bypasses SQLAlchemy's automatic CREATE TYPE on op.create_table.
+    op.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS broadcasts (
+            id          SERIAL PRIMARY KEY,
+            company_id  INTEGER NOT NULL REFERENCES companies(id),
+            name        VARCHAR(255) NOT NULL,
+            channel     broadcastchannel NOT NULL,
+            subject     VARCHAR(500),
+            message     TEXT NOT NULL,
+            segment_id  INTEGER REFERENCES segments(id),
+            total_contacts  INTEGER DEFAULT 0,
+            sent_count      INTEGER DEFAULT 0,
+            failed_count    INTEGER DEFAULT 0,
+            skipped_count   INTEGER DEFAULT 0,
+            status          broadcaststatus NOT NULL,
+            scheduled_at    TIMESTAMP,
+            started_at      TIMESTAMP,
+            completed_at    TIMESTAMP,
+            created_by_user_id INTEGER REFERENCES users(id),
+            created_at  TIMESTAMP NOT NULL DEFAULT now()
         )
-    else:
-        cols = [r[0] for r in conn.execute(
-            sa.text("SELECT column_name FROM information_schema.columns WHERE table_name = 'broadcasts'")
-        ).fetchall()]
-        if 'subject' not in cols:
-            op.add_column('broadcasts', sa.Column('subject', sa.String(500), nullable=True))
+    """))
 
-    # ── broadcast_contacts table ───────────────────────────────────────────────
-    bc_exists = conn.execute(
-        sa.text("SELECT 1 FROM information_schema.tables WHERE table_name = 'broadcast_contacts'")
-    ).fetchone()
+    # Add subject column in case the table already existed without it
+    op.execute(sa.text("""
+        DO $$ BEGIN
+            ALTER TABLE broadcasts ADD COLUMN subject VARCHAR(500);
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+    """))
 
-    if bc_exists is None:
-        op.create_table(
-            'broadcast_contacts',
-            sa.Column('id', sa.Integer(), primary_key=True, index=True),
-            sa.Column('broadcast_id', sa.Integer(), sa.ForeignKey('broadcasts.id', ondelete='CASCADE'), nullable=False, index=True),
-            sa.Column('contact_id', sa.Integer(), sa.ForeignKey('contacts.id'), nullable=False),
-            sa.Column('company_id', sa.Integer(), sa.ForeignKey('companies.id'), nullable=False),
-            sa.Column('status', sa.Enum('pending', 'sent', 'failed', 'skipped', name='broadcastcontactstatus', create_type=False), nullable=False),
-            sa.Column('error_message', sa.Text(), nullable=True),
-            sa.Column('sent_at', sa.DateTime(), nullable=True),
+    # ── broadcast_contacts table ──────────────────────────────────────────────
+    op.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS broadcast_contacts (
+            id           SERIAL PRIMARY KEY,
+            broadcast_id INTEGER NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
+            contact_id   INTEGER NOT NULL REFERENCES contacts(id),
+            company_id   INTEGER NOT NULL REFERENCES companies(id),
+            status       broadcastcontactstatus NOT NULL,
+            error_message TEXT,
+            sent_at      TIMESTAMP
         )
+    """))
 
 
 def downgrade():
-    op.drop_column('broadcasts', 'subject')
-    # Note: PostgreSQL does not support removing enum values; downgrade leaves the enum intact
+    op.execute(sa.text("DROP TABLE IF EXISTS broadcast_contacts"))
+    op.execute(sa.text("DROP TABLE IF EXISTS broadcasts"))
