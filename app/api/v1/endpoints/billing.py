@@ -256,59 +256,61 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     Processes subscription lifecycle events.
     """
     if not RAZORPAY_AVAILABLE:
-        raise HTTPException(
-            status_code=501,
-            detail="Razorpay is not available."
-        )
+        raise HTTPException(status_code=501, detail="Razorpay is not available.")
 
     payload = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
 
-    # Verify webhook signature
-    if settings.RAZORPAY_WEBHOOK_SECRET:
-        expected_signature = hmac.new(
-            settings.RAZORPAY_WEBHOOK_SECRET.encode('utf-8'),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
+    # Require HMAC signature verification — never skip, even in dev without a secret
+    if not settings.RAZORPAY_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
 
-        if signature != expected_signature:
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    expected_signature = hmac.new(
+        settings.RAZORPAY_WEBHOOK_SECRET.encode('utf-8'),
+        payload,
+        hashlib.sha256
+    ).hexdigest()
+
+    if not signature or not hmac.compare_digest(expected_signature, signature):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     try:
         import json
         event = json.loads(payload)
-    except:
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
+    event_id = event.get("id")
     event_type = event.get("event")
     payload_data = event.get("payload", {})
 
-    # Handle subscription.activated - Subscription activated
+    # Idempotency: ignore already-processed events (Razorpay retries on non-200)
+    if event_id:
+        from sqlalchemy import text
+        existing = db.execute(
+            text("SELECT id FROM razorpay_processed_events WHERE event_id = :eid"),
+            {"eid": event_id}
+        ).fetchone()
+        if existing:
+            return {"status": "already_processed"}
+        db.execute(
+            text("INSERT INTO razorpay_processed_events (event_id, event_type, processed_at) VALUES (:eid, :etype, NOW())"),
+            {"eid": event_id, "etype": event_type}
+        )
+        db.commit()
+
     if event_type == "subscription.activated":
         await handle_subscription_activated(db, payload_data)
-
-    # Handle subscription.charged - Successful payment
     elif event_type == "subscription.charged":
         await handle_subscription_charged(db, payload_data)
-
-    # Handle subscription.pending - Payment pending
     elif event_type == "subscription.pending":
         await handle_subscription_pending(db, payload_data)
-
-    # Handle subscription.halted - Payment failed multiple times
     elif event_type == "subscription.halted":
         await handle_subscription_halted(db, payload_data)
-
-    # Handle subscription.cancelled - Subscription cancelled
     elif event_type == "subscription.cancelled":
         await handle_subscription_cancelled(db, payload_data)
-
-    # Handle subscription.completed - Subscription completed all cycles
     elif event_type == "subscription.completed":
         await handle_subscription_completed(db, payload_data)
-
-    # Handle payment.failed
     elif event_type == "payment.failed":
         await handle_payment_failed(db, payload_data)
 
@@ -393,14 +395,14 @@ async def handle_subscription_pending(db: Session, payload: dict):
 
 
 async def handle_subscription_halted(db: Session, payload: dict):
-    """Handle subscription.halted event - payment failed multiple times."""
+    """Handle subscription.halted event - Razorpay exhausted all retries. Cancel + free plan fallback."""
     subscription = payload.get("subscription", {}).get("entity", {})
     razorpay_subscription_id = subscription.get("id")
 
     if not razorpay_subscription_id:
         return
 
-    company_subscription_service.handle_payment_failed(
+    company_subscription_service.handle_subscription_halted(
         db=db,
         razorpay_subscription_id=razorpay_subscription_id,
     )

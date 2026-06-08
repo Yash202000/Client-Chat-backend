@@ -482,3 +482,111 @@ def verify_phone_otp(
     current_user.phone_verified = True
     db.commit()
     return {"message": "Phone number verified successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Password Reset
+# ---------------------------------------------------------------------------
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/forgot-password")
+@limiter.limit("3/minute")
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Send a password reset email. Always returns 200 to avoid email enumeration.
+    Token is valid for 1 hour and single-use.
+    """
+    import secrets
+    from datetime import datetime, timedelta
+    from sqlalchemy import text
+
+    # Timing-safe: always return 200 regardless of whether email exists
+    user = user_service.get_user_by_email(db, body.email)
+    if not user:
+        return {"message": "If that email exists, a reset link has been sent."}
+
+    # Invalidate any existing unused tokens for this user
+    db.execute(
+        text("UPDATE password_reset_tokens SET used = true WHERE user_id = :uid AND used = false"),
+        {"uid": user.id}
+    )
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=1)
+    db.execute(
+        text("INSERT INTO password_reset_tokens (user_id, token, expires_at, used, created_at) VALUES (:uid, :tok, :exp, false, NOW())"),
+        {"uid": user.id, "tok": token, "exp": expires_at}
+    )
+    db.commit()
+
+    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    html_body = f"""
+    <p>Hi {user.first_name or user.email},</p>
+    <p>We received a request to reset your password. Click the link below — it expires in 1 hour.</p>
+    <p><a href="{reset_url}" style="background:#7c3aed;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;">Reset Password</a></p>
+    <p>If you didn't request this, ignore this email. Your password will not change.</p>
+    """
+
+    try:
+        from app.services.trial_email_service import _send_system_email
+        _send_system_email(user.email, "Reset your HeyGenAlly password", html_body)
+    except Exception:
+        pass  # Never leak SMTP errors to the caller
+
+    return {"message": "If that email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+def reset_password(
+    body: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Validate reset token and set new password. Token is marked used on success.
+    """
+    from datetime import datetime
+    from sqlalchemy import text
+    from app.core.security import get_password_hash
+
+    row = db.execute(
+        text("""
+            SELECT prt.id, prt.user_id, prt.expires_at, prt.used
+            FROM password_reset_tokens prt
+            WHERE prt.token = :tok
+        """),
+        {"tok": body.token}
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+    if row.used:
+        raise HTTPException(status_code=400, detail="Reset token has already been used.")
+    if row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Reset token has expired. Request a new one.")
+
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    user = db.query(models_user.User).filter(models_user.User.id == row.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid token.")
+
+    user.hashed_password = get_password_hash(body.new_password)
+    db.execute(
+        text("UPDATE password_reset_tokens SET used = true WHERE id = :tid"),
+        {"tid": row.id}
+    )
+    db.commit()
+    return {"message": "Password reset successfully. You can now log in."}

@@ -627,6 +627,38 @@ def handle_payment_failed(
     return subscription
 
 
+def handle_subscription_halted(
+    db: Session,
+    razorpay_subscription_id: str,
+) -> Optional[CompanySubscription]:
+    """
+    Handle subscription.halted event — Razorpay exhausted all payment retries.
+    Cancel the subscription and fall back to the free/trial plan so the user
+    retains read access rather than hitting a hard block.
+    """
+    subscription = get_subscription_by_razorpay_subscription_id(db, razorpay_subscription_id)
+    if not subscription:
+        return None
+
+    # Find the lowest-priced active free plan to fall back to
+    free_plan = (
+        db.query(SubscriptionPlan)
+        .filter(SubscriptionPlan.price == 0, SubscriptionPlan.is_active == True)
+        .order_by(SubscriptionPlan.id.asc())
+        .first()
+    )
+
+    subscription.status = "canceled"
+    subscription.cancel_at_period_end = False
+    subscription.razorpay_subscription_id = None
+    if free_plan:
+        subscription.plan_id = free_plan.id
+    subscription.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(subscription)
+    return subscription
+
+
 def check_and_expire_trials(db: Session) -> int:
     """
     Background task to expire trials that have ended.
