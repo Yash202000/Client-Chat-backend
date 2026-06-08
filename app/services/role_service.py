@@ -115,6 +115,45 @@ PERMISSIONS = {
     "company:read": "Read companies",
     "company:update": "Update companies",
     "company:delete": "Delete companies",
+    # CRM - Deals
+    "deal:create": "Create deals",
+    "deal:read": "Read deals",
+    "deal:update": "Update deals",
+    "deal:delete": "Delete deals",
+    # CRM - Accounts
+    "account:create": "Create accounts",
+    "account:read": "Read accounts",
+    "account:update": "Update accounts",
+    "account:delete": "Delete accounts",
+    # Tickets / Projects
+    "ticket:create": "Create tickets and projects",
+    "ticket:read": "Read tickets and projects",
+    "ticket:update": "Update tickets",
+    "ticket:delete": "Delete tickets",
+    # Social / Marketing Hub
+    "social:create": "Create and schedule social posts",
+    "social:read": "Read social content and analytics",
+    "social:update": "Update social posts",
+    "social:delete": "Delete social posts",
+    # Forms
+    "form:create": "Create forms",
+    "form:read": "Read forms",
+    "form:update": "Update forms",
+    "form:delete": "Delete forms",
+    # Booking Links
+    "booking:create": "Create booking links",
+    "booking:read": "Read booking links",
+    "booking:update": "Update booking links",
+    "booking:delete": "Delete booking links",
+    # Calendar
+    "calendar:read": "Read and access calendar",
+    # Drive / File Storage
+    "drive:read": "Read and access file storage",
+    # API Vault
+    "api_vault:create": "Create API vault entries",
+    "api_vault:read": "Read API vault entries",
+    "api_vault:update": "Update API vault entries",
+    "api_vault:delete": "Delete API vault entries",
 }
 
 # Page-based permissions for controlling access to dashboard sections
@@ -154,6 +193,18 @@ PAGE_PERMISSIONS = {
     "page:settings": "Access to company settings",
     "page:api_vault": "Access to API vault",
     "page:billing": "Access to billing management",
+    # CRM - Additional modules
+    "page:deals": "Access to deals management",
+    "page:accounts": "Access to accounts / companies",
+    "page:forms": "Access to forms builder",
+    "page:booking_links": "Access to booking links",
+    # Workspace
+    "page:calendar": "Access to calendar",
+    "page:drive": "Access to drive and file storage",
+    # Support
+    "page:tickets": "Access to tickets and projects",
+    # Marketing Hub
+    "page:social": "Access to social media / marketing hub",
 }
 
 def get_role(db: Session, role_id: int, company_id: int = None):
@@ -291,10 +342,19 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             # CRM permissions (limited)
             "lead:read", "lead:create", "lead:update",
             "contact:read", "contact:create", "contact:update",
+            "deal:read", "deal:create", "deal:update",
+            "account:read", "account:create", "account:update",
             "campaign:read",
             "tag:read",
             "segment:read",
             "email_template:read",
+            "ticket:read", "ticket:create", "ticket:update",
+            "social:read", "social:create",
+            "form:read", "form:create",
+            "booking:read", "booking:create",
+            "calendar:read",
+            "drive:read",
+            "api_vault:read",
             # Message Templates
             "message_template:read", "message_template:create",
             # Page permissions
@@ -303,7 +363,9 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             "page:voice_lab", "page:team_management", "page:team_chat",
             "page:message_templates", "page:ai_chat", "page:ai_tools",
             "page:ai_image_generator", "page:ai_image_gallery",
-            "page:contacts", "page:leads",
+            "page:contacts", "page:leads", "page:deals", "page:accounts",
+            "page:tickets", "page:social", "page:forms", "page:booking_links",
+            "page:calendar", "page:drive",
         ],
         "Analyst": [
             # API permissions
@@ -312,15 +374,25 @@ def create_initial_roles_for_company(db: Session, company_id: int):
             # CRM read-only permissions
             "lead:read",
             "contact:read",
+            "deal:read",
+            "account:read",
             "campaign:read",
             "tag:read",
             "segment:read",
             "email_template:read",
             "message_template:read",
+            "ticket:read",
+            "social:read",
+            "form:read",
+            "booking:read",
+            "calendar:read",
             # Page permissions
             "page:conversations", "page:reports",
             "page:crm_dashboard", "page:contacts", "page:leads",
+            "page:deals", "page:accounts",
             "page:campaigns", "page:tags", "page:segments", "page:crm_templates",
+            "page:tickets", "page:social", "page:forms", "page:booking_links",
+            "page:calendar",
         ],
         "Client": [
             "client:read_dashboard", "agent:read"

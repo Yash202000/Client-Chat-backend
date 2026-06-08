@@ -4,6 +4,7 @@ import hmac
 import hashlib
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_db, get_current_active_user, require_super_admin
@@ -495,6 +496,27 @@ async def cancel_subscription(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel subscription: {str(e)}")
+
+
+class CancellationFeedback(BaseModel):
+    reason: str
+    notes: str = ""
+
+
+@router.post("/cancellation-feedback")
+async def record_cancellation_feedback(
+    payload: CancellationFeedback,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Log cancellation reason for product analytics."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[Cancellation] company={current_user.company_id} user={current_user.id} "
+        f"reason='{payload.reason}' notes='{payload.notes}'"
+    )
+    return {"status": "recorded"}
 
 
 # Admin endpoints

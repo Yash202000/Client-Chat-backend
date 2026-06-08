@@ -39,6 +39,11 @@ def get_contacts(db: Session, company_id: int, skip: int = 0, limit: int = 100, 
     return query.offset(skip).limit(limit).all()
 
 def create_contact(db: Session, contact: schemas_contact.ContactCreate, company_id: int, source: str = None):
+    from app.services.company_subscription_service import can_create_contact
+    allowed, reason = can_create_contact(db, company_id)
+    if not allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail=reason)
     from app.services.ticket_service import get_crm_workflow
     from app.models.ticket_workflow import TicketStatus
 

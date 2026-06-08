@@ -110,6 +110,10 @@ def create_campaign(
     """
     Create a new campaign
     """
+    from app.services.company_subscription_service import can_create_campaign
+    allowed, reason = can_create_campaign(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     return campaign_service.create_campaign(
         db=db,
         campaign=campaign,

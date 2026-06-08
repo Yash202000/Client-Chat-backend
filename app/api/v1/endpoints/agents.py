@@ -106,6 +106,11 @@ def publish_agent_settings(
     if not db_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    from app.services.company_subscription_service import can_publish_agent
+    allowed, reason = can_publish_agent(db, current_user.company_id, agent_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+
     published_settings, is_new = crud_published_widget_settings.create_or_update(db, agent_id=agent_id, settings=settings)
     return {
         "publish_id": published_settings.publish_id,

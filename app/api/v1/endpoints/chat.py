@@ -44,6 +44,10 @@ def create_channel(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.services.company_subscription_service import can_create_channel
+    allowed, reason = can_create_channel(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     if channel.team_id:
         is_member = team_membership_service.is_user_in_team(db, user_id=current_user.id, team_id=channel.team_id)
         if not is_member:

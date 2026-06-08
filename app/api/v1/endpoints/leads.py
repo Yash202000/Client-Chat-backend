@@ -211,6 +211,10 @@ def create_lead(
     """
     Create a new lead from an existing contact
     """
+    from app.services.company_subscription_service import can_create_lead
+    allowed, reason = can_create_lead(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     return lead_service.create_lead(
         db=db,
         lead=lead,
@@ -227,6 +231,10 @@ def create_lead_with_contact(
     """
     Create a new lead along with a new contact
     """
+    from app.services.company_subscription_service import can_create_lead
+    allowed, reason = can_create_lead(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     from app.models.contact import Contact
     from app.schemas.contact import ContactCreate
 

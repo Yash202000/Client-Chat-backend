@@ -357,6 +357,13 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
     user_message = sanitized_message
     # === END SECURITY ===
 
+    # === CONVERSATION QUOTA CHECK ===
+    from app.services.company_subscription_service import increment_conversation_count
+    allowed, quota_reason = increment_conversation_count(db, company_id)
+    if not allowed:
+        return "I'm sorry, your workspace has reached its monthly AI conversation limit. Please upgrade your plan to continue."
+    # === END QUOTA ===
+
     agent = agent_service.get_agent(db, agent_id, company_id)
     if not agent:
         return

@@ -1,11 +1,108 @@
 from app.core.database import SessionLocal
 from app.services import company_service, user_service, agent_service, role_service, tool_service, widget_settings_service
 from app.schemas import company as schemas_company, user as schemas_user, agent as schemas_agent, widget_settings as schemas_widget_settings
+from app.models.subscription_plan import SubscriptionPlan
 from create_tool import create_api_call_tool
+
+# ─── Subscription plan feature sets ──────────────────────────────────────────
+# Starter: conversations + agents + basic CRM (no deals/accounts) + support basics
+_STARTER_FEATURES = (
+    "conversations,agents,knowledge_base,tools,widget_designer,"
+    "contacts,leads,forms,team_chat,calendar,drive,"
+    "settings,billing,team_management"
+)
+# Growth: unlock the pipeline (deals, accounts), outreach (campaigns), automation,
+#         analytics, social, AI chat, ticketing, booking, and all CRM enrichment
+_GROWTH_FEATURES = (
+    _STARTER_FEATURES + ","
+    "deals,accounts,booking_links,tickets,crm_dashboard,"
+    "campaigns,workflows,reports,social,ai_chat,"
+    "segments,tags,crm_templates,api_vault"
+)
+# Pro: voice/call center + advanced AI (tools, images) + power builder features
+_PRO_FEATURES = (
+    _GROWTH_FEATURES + ","
+    "voice_lab,ai_tools,ai_images,catalog,cts,link_shortener,comms_analytics"
+)
+
+_DEFAULT_PLANS = [
+    {
+        "name": "Free Trial",
+        "price": 0.0,
+        "currency": "INR",
+        "billing_interval": "month",
+        "default_user_limit": 5,
+        "trial_days": 14,
+        "description": "14-day free trial with access to all features",
+        "features": "all",
+        "is_active": True,
+    },
+    {
+        "name": "Starter",
+        "price": 2900.0,
+        "currency": "INR",
+        "billing_interval": "month",
+        "default_user_limit": 10,
+        "trial_days": 0,
+        "description": "Core tools for small teams",
+        "features": _STARTER_FEATURES,
+        "is_active": True,
+    },
+    {
+        "name": "Growth",
+        "price": 7900.0,
+        "currency": "INR",
+        "billing_interval": "month",
+        "default_user_limit": 25,
+        "trial_days": 0,
+        "description": "Pipeline, automation, analytics and outreach for growing teams",
+        "features": _GROWTH_FEATURES,
+        "is_active": True,
+    },
+    {
+        "name": "Pro",
+        "price": 14900.0,
+        "currency": "INR",
+        "billing_interval": "month",
+        "default_user_limit": 50,
+        "trial_days": 0,
+        "description": "Full platform — voice, advanced AI and power builder features",
+        "features": _PRO_FEATURES,
+        "is_active": True,
+    },
+    {
+        "name": "Enterprise",
+        "price": 0.0,
+        "currency": "INR",
+        "billing_interval": "month",
+        "default_user_limit": 9999,
+        "trial_days": 0,
+        "description": "Custom enterprise solution with unlimited users",
+        "features": "all",
+        "is_active": True,
+    },
+]
+
+
+def seed_subscription_plans(db) -> None:
+    """Upsert default subscription plans — creates new ones and updates features/descriptions on existing ones."""
+    for plan_data in _DEFAULT_PLANS:
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.name == plan_data["name"]).first()
+        if plan:
+            plan.features = plan_data["features"]
+            plan.description = plan_data["description"]
+            plan.default_user_limit = plan_data["default_user_limit"]
+        else:
+            db.add(SubscriptionPlan(**plan_data))
+    db.commit()
+
 
 def create_initial_data():
     db = SessionLocal()
     try:
+        # Seed subscription plans
+        seed_subscription_plans(db)
+
         # Create global permissions and Super Admin role
         role_service.create_global_permissions_and_super_admin(db)
 
@@ -18,7 +115,7 @@ def create_initial_data():
 
         # Create roles for the company
         role_service.create_initial_roles_for_company(db, company.id)
-        
+
         # Get the Super Admin role
         super_admin_role = role_service.get_role_by_name(db, "Super Admin")
 
@@ -55,7 +152,7 @@ def create_initial_data():
                 create_api_call_tool(db, company.id)
         else:
             agent = default_agent_list[0]
-        
+
         # Check if default widget settings exist, if not, create them
         default_widget_settings = widget_settings_service.get_widget_settings(db, agent_id=agent.id)
         if not default_widget_settings:

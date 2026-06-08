@@ -114,9 +114,26 @@ async def send_email_message(
     """
     try:
         from app.models.company_settings import CompanySettings
+        from app.services.company_subscription_service import can_send_emails
 
         # Validate contact has email
         if not contact.email:
+            return False
+
+        # Enforce monthly email quota
+        allowed, reason = can_send_emails(db, campaign.company_id, count=1)
+        if not allowed:
+            logger.warning("Email quota exceeded for company %s: %s", campaign.company_id, reason)
+            activity = CampaignActivity(
+                campaign_id=campaign.id,
+                contact_id=contact.id,
+                lead_id=enrollment.lead_id,
+                message_id=message.id,
+                activity_type=ActivityType.ERROR,
+                error_message=reason
+            )
+            db.add(activity)
+            db.commit()
             return False
 
         # Personalize content

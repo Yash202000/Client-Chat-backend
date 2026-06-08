@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = ""
+    PHONE_VERIFICATION_ENABLED: bool = False  # Enable when Twilio OTP is configured
 
     # MinIO/S3 settings
     minio_endpoint: str
@@ -78,6 +79,16 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "S48jcPB4nMH0gVLHb3Py7DBGp91Xv3bUaDzsn5zB3jg="
     ALGORITHM: str = "HS256"
 
+    # System SMTP — used for transactional emails (signup verification, password reset)
+    # Separate from per-company SMTP configured in Settings > Email
+    SYSTEM_SMTP_HOST: str = ""
+    SYSTEM_SMTP_PORT: int = 587
+    SYSTEM_SMTP_USER: str = ""
+    SYSTEM_SMTP_PASSWORD: str = ""
+    SYSTEM_SMTP_FROM_EMAIL: str = ""
+    SYSTEM_SMTP_FROM_NAME: str = "AgentConnect"
+    SYSTEM_SMTP_USE_TLS: bool = True
+
     # Server configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -90,6 +101,13 @@ class Settings(BaseSettings):
     WS_REGULAR_SESSION_TIMEOUT: int = 1800  # 30 minutes (1800 seconds)
     WS_PREVIEW_SESSION_TIMEOUT: int = 300  # 5 minutes (300 seconds)
     WS_ENABLE_HEARTBEAT: bool = True  # Feature flag to enable/disable heartbeat
+
+    # Sentry error monitoring
+    SENTRY_DSN: str = ""
+
+    # Kill switches / rollback controls
+    MAINTENANCE_MODE: bool = False   # When True → 503 for all non-exempt paths
+    SIGNUP_PAUSED: bool = False      # When True → block new user registrations
 
     # Workflow Configuration
     MAX_SUBWORKFLOW_DEPTH: int = 5  # Maximum depth for nested subworkflows

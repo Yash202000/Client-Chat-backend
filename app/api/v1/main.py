@@ -36,6 +36,7 @@ from app.api.v1.endpoints.cms import publishing as cms_publishing
 from app.api.v1.endpoints.cms import public as cms_public
 from app.api.v1.endpoints import verify, cod, whatsapp_widget, ctwa, broadcast, developer_api, wa_templates, comms_analytics, webhook_logs, catalog, social_widget, cts
 from app.api.v1.endpoints import short_links
+from app.api.v1.endpoints import onboarding
 
 
 api_router = APIRouter()
@@ -228,3 +229,4 @@ api_router.include_router(webhook_logs.router, prefix="/webhook-logs", tags=["we
 # Link Shortener
 api_router.include_router(short_links.router, prefix="/short-links", tags=["short-links"])
 api_router.include_router(short_links.public_router, prefix="/s", tags=["short-links-public"])
+api_router.include_router(onboarding.router, prefix="/onboarding", tags=["onboarding"])

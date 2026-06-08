@@ -1,6 +1,6 @@
 """Company Subscription Model for company-level billing and user limits."""
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, BigInteger
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 import datetime
@@ -39,8 +39,35 @@ class CompanySubscription(Base):
     # User limit for the company (can be customized per company)
     user_limit = Column(Integer, default=5, nullable=False)
 
+    # Addon seats purchased on top of the plan limit (Growth only)
+    addon_seats = Column(Integer, default=0, nullable=False)
+
+    # Grace period end date — set when company exceeds limit due to plan downgrade
+    grace_period_end = Column(DateTime, nullable=True)
+
+    # Monthly conversation tracking (reset on the 1st of each month)
+    monthly_conversation_count = Column(Integer, default=0, nullable=False)
+    conversation_count_reset_at = Column(DateTime, nullable=True)
+
+    # Monthly email tracking and storage quota
+    monthly_email_count = Column(Integer, default=0, nullable=False)
+    email_count_reset_at = Column(DateTime, nullable=True)
+    total_storage_bytes = Column(BigInteger, default=0, nullable=False)
+
     # Whether the subscription is scheduled to cancel at period end
     cancel_at_period_end = Column(Boolean, default=False)
+
+    # Trial lifecycle email flags (day 0, 7, 12, expiry)
+    trial_welcome_sent = Column(Boolean, default=False, nullable=False)
+    trial_day7_sent = Column(Boolean, default=False, nullable=False)
+    trial_day12_sent = Column(Boolean, default=False, nullable=False)
+    trial_expiry_sent = Column(Boolean, default=False, nullable=False)
+
+    # Dunning email flags for payment failure sequences
+    dunning_attempt_1_sent = Column(Boolean, default=False, nullable=False)
+    dunning_attempt_2_sent = Column(Boolean, default=False, nullable=False)
+    dunning_attempt_3_sent = Column(Boolean, default=False, nullable=False)
+    last_dunning_sent_at = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

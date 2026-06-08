@@ -2,6 +2,8 @@ import json
 import re
 import uuid
 import asyncio
+import time
+from collections import defaultdict
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models import workflow
@@ -20,6 +22,23 @@ import httpx
 import numexpr
 import logging
 logger = logging.getLogger(__name__)
+
+_workflow_execution_counts: dict[int, list[float]] = defaultdict(list)
+_CIRCUIT_BREAKER_WINDOW = 300  # 5 minutes
+_CIRCUIT_BREAKER_MAX = 100
+
+
+def _check_workflow_circuit_breaker(workflow_id: int) -> bool:
+    """Returns True if workflow is allowed to execute, False if circuit broken."""
+    now = time.time()
+    window_start = now - _CIRCUIT_BREAKER_WINDOW
+    counts = _workflow_execution_counts[workflow_id]
+    # Purge old entries
+    _workflow_execution_counts[workflow_id] = [t for t in counts if t > window_start]
+    if len(_workflow_execution_counts[workflow_id]) >= _CIRCUIT_BREAKER_MAX:
+        return False
+    _workflow_execution_counts[workflow_id].append(now)
+    return True
 
 
 class WorkflowExecutionService:
@@ -1939,6 +1958,16 @@ Return only valid JSON, nothing else:"""
 
         if not workflow_obj:
             return {"error": f"Workflow not found."}
+
+        # Circuit breaker: skip execution if this workflow fires too frequently
+        cb_id = workflow_obj.id
+        if cb_id and not _check_workflow_circuit_breaker(cb_id):
+            logger.warning(
+                "Circuit breaker tripped for workflow %s (company %s): "
+                "exceeded %d executions in %ds window. Skipping.",
+                cb_id, company_id, _CIRCUIT_BREAKER_MAX, _CIRCUIT_BREAKER_WINDOW,
+            )
+            return {"status": "completed", "response": ""}
 
         # Get the executing agent - either from parameter, workflow's agents, or None
         executing_agent = None

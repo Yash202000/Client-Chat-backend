@@ -86,6 +86,10 @@ class WorkflowImportRequest(BaseModel):
 
 @router.post("/", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:create"))])
 def create_workflow(workflow: schemas_workflow.WorkflowCreate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    from app.services.company_subscription_service import can_create_workflow
+    allowed, reason = can_create_workflow(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     return workflow_service.create_workflow(db=db, workflow=workflow, company_id=current_user.company_id)
 
 @router.get("/", response_model=List[schemas_workflow.Workflow], dependencies=[Depends(require_permission("workflow:read"))])
@@ -341,6 +345,10 @@ def import_workflow(
     Import a workflow from an exported JSON file.
     Validates that required tools exist in the company before creating the workflow.
     """
+    from app.services.company_subscription_service import can_create_workflow
+    allowed, reason = can_create_workflow(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     result = workflow_service.import_workflow(
         db=db,
         import_data=request.workflow_data,

@@ -48,6 +48,20 @@ def upload_for_processing(
     Upload a document, extract its raw text, and cache it for processing.
     """
     try:
+        from app.services.company_subscription_service import get_plan_limits, can_upload_storage, update_storage_usage
+        limits = get_plan_limits(db, current_user.company_id)
+        max_bytes = limits.get("max_kb_upload_bytes")
+        first_chunk = file.file.read()
+        if max_bytes and len(first_chunk) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Your plan allows uploads up to {max_bytes // (1024*1024)} MB per file."
+            )
+        # Enforce workspace storage quota
+        storage_ok, storage_reason = can_upload_storage(db, current_user.company_id, len(first_chunk))
+        if not storage_ok:
+            raise HTTPException(status_code=413, detail=storage_reason)
+        file.file.seek(0)
         raw_text = ""
         mime_type = magic.from_buffer(file.file.read(2048), mime=True)
         file.file.seek(0)
@@ -64,7 +78,7 @@ def upload_for_processing(
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {mime_type}")
 
         temp_doc = crud_temporary_document.create_temporary_document(db=db, text_content=raw_text)
-        
+        update_storage_usage(db, current_user.company_id, len(first_chunk))
         return temp_doc
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
@@ -117,8 +131,23 @@ def upload_knowledge_base_file(
     Upload a file to create a new knowledge base.
     Supported formats: PDF (.pdf), Text (.txt), Word (.docx)
     """
-    # Validate file type using MIME type detection
+    from app.services.company_subscription_service import can_create_knowledge_base, get_plan_limits, can_upload_storage, update_storage_usage
+    allowed, reason = can_create_knowledge_base(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+    # Enforce per-file upload size limit based on plan
+    limits = get_plan_limits(db, current_user.company_id)
+    max_bytes = limits.get("max_kb_upload_bytes")
     file_content = file.file.read()
+    if max_bytes and len(file_content) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Your plan allows uploads up to {max_bytes // (1024*1024)} MB per file."
+        )
+    # Enforce workspace storage quota
+    storage_ok, storage_reason = can_upload_storage(db, current_user.company_id, len(file_content))
+    if not storage_ok:
+        raise HTTPException(status_code=413, detail=storage_reason)
     mime_type = magic.from_buffer(file_content[:2048], mime=True)
     file.file.seek(0)  # Reset file pointer
 
@@ -142,6 +171,7 @@ def upload_knowledge_base_file(
     knowledge_base = knowledge_base_processing_service.process_and_store_document(
         db=db, file=file, agent=agent, company_id=current_user.company_id, name=name, description=description, vector_store_type=vector_store_type
     )
+    update_storage_usage(db, current_user.company_id, len(file_content))
     return knowledge_base
 
 @router.post("/from-url", response_model=schemas_knowledge_base.KnowledgeBase, dependencies=[Depends(require_permission("knowledgebase:create"))])
@@ -150,6 +180,10 @@ def create_knowledge_base_from_url(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)
 ):
+    from app.services.company_subscription_service import can_create_knowledge_base
+    allowed, reason = can_create_knowledge_base(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     try:
         content = knowledge_base_service.extract_text_from_url(str(kb_from_url.url))
         
@@ -185,6 +219,10 @@ def create_knowledge_base(
     embedding_model: str = Form("nvidia"), # Add embedding_model to the form
     vector_store_type: str = Form("chroma") # Add vector_store_type to the form
 ):
+    from app.services.company_subscription_service import can_create_knowledge_base
+    allowed, reason = can_create_knowledge_base(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     agent = SimpleNamespace(embedding_model=embedding_model)
     return knowledge_base_processing_service.process_and_store_text(
         db=db, text=knowledge_base.content, agent=agent, company_id=current_user.company_id, name=knowledge_base.name, description=knowledge_base.description, vector_store_type=vector_store_type
@@ -200,6 +238,10 @@ def create_empty_knowledge_base(
     Create an empty knowledge base without any initial content.
     Documents can be added later through the Documents tab.
     """
+    from app.services.company_subscription_service import can_create_knowledge_base
+    allowed, reason = can_create_knowledge_base(db, current_user.company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     return knowledge_base_processing_service.create_empty_knowledge_base(
         db=db,
         company_id=current_user.company_id,

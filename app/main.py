@@ -2,13 +2,28 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.core.limiter import limiter
 import uvicorn
 import os
+import sentry_sdk
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.database import Base, engine, SessionLocal
 from app.models import role, permission, contact, comment, otp_verification, cod_verification, whatsapp_widget, ctwa_link, broadcast, webhook_delivery_log, api_key_log, short_link, social_widget, cts_link # Import new models
 from app.core.config import settings
+
+# Sentry init - only if DSN configured
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        traces_sample_rate=0.1,
+        environment=settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production',
+    )
 from app.api.v1.main import api_router, websocket_router
 from app.api.v1.endpoints import ws_updates, comments, gmail, google, published, ai_images, ai_chat, public_pages
 from app.core.dependencies import get_db
@@ -29,6 +44,11 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )
 
+# Rate limiting — limiter instance lives in app.core.limiter to avoid circular imports
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # Register license exception handler (shows HTML page for browser, JSON for API)
 app.add_exception_handler(LicenseError, license_exception_handler)
 
@@ -43,6 +63,40 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# ---------------------------------------------------------------------------
+# Maintenance mode middleware
+# Paths listed here bypass the 503 gate so health checks and super-admin
+# toggle endpoints remain reachable even when maintenance mode is active.
+# ---------------------------------------------------------------------------
+MAINTENANCE_EXEMPT_PREFIXES = [
+    "/api/v1/health",
+    "/api/v1/system/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+]
+
+
+class MaintenanceModeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if settings.MAINTENANCE_MODE:
+            path = request.url.path
+            if not any(path.startswith(p) for p in MAINTENANCE_EXEMPT_PREFIXES):
+                return JSONResponse(
+                    {
+                        "detail": (
+                            "HeyGenAlly is under maintenance. "
+                            "We'll be back shortly. Follow @HeyGenAlly for updates."
+                        )
+                    },
+                    status_code=503,
+                    headers={"Retry-After": "300"},
+                )
+        return await call_next(request)
+
+
+app.add_middleware(MaintenanceModeMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_updates.router, prefix="/ws") # New company-wide updates
@@ -98,6 +152,18 @@ async def run_social_post_scheduler():
                 await service.publish_post_to_platform(db, post)
             except Exception as e:
                 print(f"[SocialScheduler] Failed to publish post {post.id}: {e}")
+    finally:
+        db.close()
+
+
+async def run_webhook_retry_job():
+    """Retry failed outbound webhooks whose next_retry_at has passed."""
+    from app.services.webhook_delivery_service import retry_failed_webhooks
+    db = SessionLocal()
+    try:
+        await retry_failed_webhooks(db)
+    except Exception as e:
+        print(f"[WebhookRetry] Unexpected error in retry job: {e}")
     finally:
         db.close()
 
@@ -208,6 +274,37 @@ async def on_startup():
         replace_existing=True,
     )
     print("[Startup] Queue overflow/SLA checker started (interval: 30s)")
+
+    # Trial expiry email sequence — runs daily at 9am UTC
+    async def run_trial_email_job():
+        from app.services.trial_email_service import run_trial_email_scheduler
+        db = SessionLocal()
+        try:
+            run_trial_email_scheduler(db)
+        finally:
+            db.close()
+
+    async def run_dunning_email_job():
+        from app.services.trial_email_service import run_dunning_email_scheduler
+        db = SessionLocal()
+        try:
+            run_dunning_email_scheduler(db)
+        finally:
+            db.close()
+
+    scheduler.add_job(run_trial_email_job, 'cron', hour=9, minute=0, id='trial_email_scheduler', replace_existing=True)
+    scheduler.add_job(run_dunning_email_job, 'cron', hour=9, minute=30, id='dunning_email_scheduler', replace_existing=True)
+    print("[Startup] Trial and dunning email schedulers started (daily at 9:00 and 9:30 UTC)")
+
+    # Webhook retry scheduler — runs every 5 minutes to retry failed outbound deliveries
+    scheduler.add_job(
+        run_webhook_retry_job,
+        'interval',
+        minutes=5,
+        id='webhook_retry_scheduler',
+        replace_existing=True,
+    )
+    print("[Startup] Webhook retry scheduler started (interval: 5 min)")
 
     # Start the scheduler if not already started
     if not scheduler.running:

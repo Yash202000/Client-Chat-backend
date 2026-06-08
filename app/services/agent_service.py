@@ -17,6 +17,12 @@ def get_agents(db: Session, company_id: int, skip: int = 0, limit: int = 100):
     return db.query(models_agent.Agent).filter(models_agent.Agent.company_id == company_id).offset(skip).limit(limit).all()
 
 def create_agent(db: Session, agent: schemas_agent.AgentCreate, company_id: int):
+    from fastapi import HTTPException
+    from app.services.company_subscription_service import can_create_agent
+    allowed, reason = can_create_agent(db, company_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+
     db_agent = models_agent.Agent(
         name=agent.name,
         welcome_message=agent.welcome_message,

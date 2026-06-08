@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -8,6 +8,9 @@ class Company(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
+    team_size = Column(String, nullable=True)
+    primary_use_case = Column(String, nullable=True)
+    onboarding_completed = Column(Boolean, default=False, nullable=False, server_default='false')
 
     users = relationship("User", back_populates="company")
     agents = relationship("Agent", back_populates="company")

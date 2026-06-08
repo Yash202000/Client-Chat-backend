@@ -1,7 +1,7 @@
 """Company Subscription Schemas for billing and user limit management."""
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 from enum import Enum
 
@@ -37,6 +37,8 @@ class CompanySubscriptionUpdate(BaseModel):
     current_period_start: Optional[datetime] = None
     current_period_end: Optional[datetime] = None
     user_limit: Optional[int] = None
+    addon_seats: Optional[int] = None
+    grace_period_end: Optional[datetime] = None
     cancel_at_period_end: Optional[bool] = None
 
 
@@ -71,8 +73,25 @@ class SubscriptionStatus(BaseModel):
     user_limit: int
     current_user_count: int
     users_remaining: int
+    addon_seats: int = 0
+    addon_seat_cap: int = 0
+    addon_seat_price_usd: Optional[float] = None
+    addon_seat_price_inr: Optional[float] = None
+    warn_threshold: Optional[int] = None
+    users_near_limit: bool = False
+    grace_period_end: Optional[datetime] = None
+    monthly_conversation_count: int = 0
+    max_monthly_conversations: Optional[int] = None
+    conversations_near_limit: bool = False
+    monthly_email_count: int = 0
+    max_monthly_emails: Optional[int] = None
+    emails_near_limit: bool = False
+    total_storage_bytes: int = 0
+    max_storage_bytes: Optional[int] = None
+    storage_near_limit: bool = False
     cancel_at_period_end: bool = False
     razorpay_customer_id: Optional[str] = None
+    plan_features: List[str] = []
 
 
 class UserLimitUpdate(BaseModel):

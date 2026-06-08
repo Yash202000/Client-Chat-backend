@@ -198,6 +198,36 @@ async def require_active_subscription(
     return current_user
 
 
+def require_feature(feature_name: str):
+    """Dependency factory that blocks access if the company's plan does not include a feature.
+
+    Super admins always bypass this check.
+    Returns HTTP 402 (Payment Required) when the feature is locked.
+    """
+    async def feature_checker(
+        db: Session = Depends(get_db),
+        current_user: models_user.User = Depends(get_current_active_user),
+    ):
+        if current_user.is_super_admin:
+            return current_user
+
+        if not current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User is not associated with a company.",
+            )
+
+        features = company_subscription_service.get_company_features(db, current_user.company_id)
+        if "all" not in features and feature_name not in features:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Feature '{feature_name}' is not available on your current plan. Please upgrade.",
+            )
+        return current_user
+
+    return feature_checker
+
+
 def require_user_limit_not_exceeded(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user)

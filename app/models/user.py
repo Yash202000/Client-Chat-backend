@@ -49,6 +49,10 @@ class User(Base):
     # Skills-based routing (Phase 2)
     skills = Column(JSONB, nullable=True)  # e.g. ["billing", "technical", "spanish"]
 
+    # Email and phone verification
+    email_verified = Column(Boolean, default=False, nullable=False)
+    phone_verified = Column(Boolean, default=False, nullable=False)
+
     # Two-Factor Authentication (TOTP)
     totp_secret = Column(String, nullable=True)
     totp_enabled = Column(Boolean, default=False, nullable=False)
