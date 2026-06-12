@@ -13,7 +13,7 @@ from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.role import Role
 from app.schemas.user_invitation import UserInvitationCreate, AcceptInvitationRequest
-from app.services import user_service
+from app.services import user_service, company_subscription_service
 from app.services.email_service import send_email_smtp
 from app.schemas.user import UserCreate
 from app.core.config import settings
@@ -254,6 +254,14 @@ def accept_invitation(
     existing_user = user_service.get_user_by_email(db, invitation.email)
     if existing_user:
         raise ValueError("A user with this email already exists")
+
+    # Check seat limit at accept time (plan may have changed since invite was sent)
+    if not company_subscription_service.can_add_user(db, invitation.company_id):
+        status_info = company_subscription_service.get_subscription_status(db, invitation.company_id)
+        raise ValueError(
+            f"User limit reached. The company's plan allows {status_info.user_limit} users. "
+            "Please ask an admin to upgrade the plan."
+        )
 
     # Create user
     user_create = UserCreate(

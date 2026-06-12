@@ -5,6 +5,8 @@ from typing import Optional
 from app.core.dependencies import get_db, get_current_active_user
 from app.models import user as models_user
 from app.models.company import Company
+from app.models.company_subscription import CompanySubscription
+from app.models.subscription_plan import SubscriptionPlan
 
 router = APIRouter()
 
@@ -43,6 +45,57 @@ def submit_qualification(
 
 
 @router.get("/status")
+class PlanSelection(BaseModel):
+    plan_id: int
+
+
+@router.post("/select-plan")
+def select_plan(
+    body: PlanSelection,
+    db: Session = Depends(get_db),
+    current_user: models_user.User = Depends(get_current_active_user),
+):
+    plan = db.query(SubscriptionPlan).filter(
+        SubscriptionPlan.id == body.plan_id,
+        SubscriptionPlan.is_active == True,
+    ).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+
+    subscription = db.query(CompanySubscription).filter(
+        CompanySubscription.company_id == current_user.company_id
+    ).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found.")
+
+    subscription.subscription_plan_id = plan.id
+    subscription.user_limit = plan.default_user_limit
+    db.commit()
+    return {"message": "Plan selected.", "plan_id": plan.id, "plan_name": plan.name}
+
+
+@router.get("/select-plan")
+def get_plans_for_selection(db: Session = Depends(get_db)):
+    """Return active plans for onboarding plan picker (public)."""
+    plans = db.query(SubscriptionPlan).filter(SubscriptionPlan.is_active == True).order_by(SubscriptionPlan.price).all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "price": p.price,
+            "currency": p.currency,
+            "description": p.description,
+            "features": p.features,
+            "default_user_limit": p.default_user_limit,
+            "trial_days": p.trial_days,
+            "billing_interval": p.billing_interval,
+            "max_agents": p.max_agents,
+            "max_monthly_conversations": p.max_monthly_conversations,
+        }
+        for p in plans
+    ]
+
+
 def get_onboarding_status(
     db: Session = Depends(get_db),
     current_user: models_user.User = Depends(get_current_active_user),

@@ -128,7 +128,7 @@ def _decode_temp_token(token: str) -> str:
 
 @limiter.limit("5/minute")
 @router.post("/signup", response_model=schemas_user.User)
-def signup(request: Request, user: schemas_user.UserCreate, db: Session = Depends(get_db)):
+async def signup(request: Request, user: schemas_user.UserCreate, db: Session = Depends(get_db)):
     if settings.SIGNUP_PAUSED:
         raise HTTPException(
             status_code=503,

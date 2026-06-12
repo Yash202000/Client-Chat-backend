@@ -200,10 +200,16 @@ def get_company_features(db: Session, company_id: int) -> list[str]:
     if subscription.status in ("canceled", "expired"):
         return []
 
-    # Active trial — full access
+    # Active trial — access scoped to the trial plan's features
     if subscription.status == "trial":
         if subscription.trial_end_date and datetime.utcnow() > subscription.trial_end_date:
             return []
+        # If trial is tied to a specific plan, respect that plan's feature list
+        if subscription.subscription_plan and subscription.subscription_plan.features:
+            raw = subscription.subscription_plan.features
+            parts = [f.strip() for f in raw.split(",") if f.strip()]
+            return parts
+        # Generic trial with no plan assigned (e.g. Free Trial) — full access
         return ["all"]
 
     # Active/past_due subscription — derive from plan
