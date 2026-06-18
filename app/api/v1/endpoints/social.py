@@ -1,12 +1,28 @@
 import json
 import logging
 import httpx
+from urllib.parse import urlencode, quote
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
+
+
+def _oauth_popup_html(platform: str, success: bool, frontend_url: str) -> HTMLResponse:
+    """Return HTML that postMessages to opener (popup flow) or redirects (direct flow)."""
+    if success:
+        event = f'{{"type":"oauth_complete","platform":"{platform}"}}'
+        fallback = f"{frontend_url}/dashboard/social/accounts?connected={platform}"
+    else:
+        event = f'{{"type":"oauth_error","platform":"{platform}"}}'
+        fallback = f"{frontend_url}/dashboard/social/accounts?error={platform}_failed"
+    html = f"""<!DOCTYPE html><html><body><script>
+if(window.opener){{window.opener.postMessage({event},'{frontend_url}');window.close();}}
+else{{window.location.href='{fallback}';}}
+</script></body></html>"""
+    return HTMLResponse(content=html)
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -206,14 +222,13 @@ def linkedin_connect(
     redirect_uri = settings.LINKEDIN_REDIRECT_URI
     state = f"social:{current_user.company_id}:{current_user.id}"
 
-    url = (
-        f"https://www.linkedin.com/oauth/v2/authorization"
-        f"?response_type=code"
-        f"&client_id={settings.LINKEDIN_CLIENT_ID}"
-        f"&redirect_uri={redirect_uri}"
-        f"&scope={scope}"
-        f"&state={state}"
-    )
+    url = "https://www.linkedin.com/oauth/v2/authorization?" + urlencode({
+        "response_type": "code",
+        "client_id": settings.LINKEDIN_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+    })
     return RedirectResponse(url=url)
 
 
@@ -350,24 +365,28 @@ def facebook_connect(
     redirect_uri = settings.FACEBOOK_REDIRECT_URI or f"{settings.FRONTEND_URL}/api/v1/social/auth/facebook/callback"
     state = f"{current_user.company_id}:{current_user.id}"
 
-    url = (
-        f"https://www.facebook.com/v19.0/dialog/oauth"
-        f"?client_id={settings.FACEBOOK_APP_ID}"
-        f"&redirect_uri={redirect_uri}"
-        f"&scope={scope}"
-        f"&state={state}"
-    )
+    url = "https://www.facebook.com/v19.0/dialog/oauth?" + urlencode({
+        "client_id": settings.FACEBOOK_APP_ID,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+    })
     return RedirectResponse(url=url)
 
 
 @router.get("/auth/facebook/callback")
 async def facebook_callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str = Query(None),
+    state: str = Query(None),
+    error_code: str = Query(None),
+    error_message: str = Query(None),
     db: Session = Depends(get_db),
 ):
     """Handle Facebook OAuth callback."""
-    parts = state.split(":")
+    if error_code or not code:
+        return _oauth_popup_html("facebook", False, settings.FRONTEND_URL)
+
+    parts = (state or "").split(":")
     if len(parts) != 2:
         raise HTTPException(status_code=400, detail="Invalid state parameter")
     company_id, user_id = int(parts[0]), int(parts[1])
@@ -432,7 +451,7 @@ async def facebook_callback(
         db.add(account)
 
     db.commit()
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard/social/accounts?connected=facebook")
+    return _oauth_popup_html("facebook", True, settings.FRONTEND_URL)
 
 
 @router.get("/auth/instagram/connect")
@@ -449,99 +468,109 @@ def instagram_connect(
     redirect_uri = settings.FACEBOOK_REDIRECT_URI.replace("facebook", "instagram") if settings.FACEBOOK_REDIRECT_URI else f"{settings.FRONTEND_URL}/api/v1/social/auth/instagram/callback"
     state = f"{current_user.company_id}:{current_user.id}"
 
-    url = (
-        f"https://www.facebook.com/v19.0/dialog/oauth"
-        f"?client_id={settings.FACEBOOK_APP_ID}"
-        f"&redirect_uri={redirect_uri}"
-        f"&scope={scope}"
-        f"&state={state}"
-    )
+    url = "https://www.facebook.com/v19.0/dialog/oauth?" + urlencode({
+        "client_id": settings.FACEBOOK_APP_ID,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+    })
     return RedirectResponse(url=url)
 
 
 @router.get("/auth/instagram/callback")
 async def instagram_callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str = Query(None),
+    state: str = Query(None),
+    error_code: str = Query(None),
+    error_message: str = Query(None),
     db: Session = Depends(get_db),
 ):
     """Handle Instagram OAuth callback via Facebook Graph API."""
-    parts = state.split(":")
+    if error_code or not code:
+        return _oauth_popup_html("instagram", False, settings.FRONTEND_URL)
+
+    parts = (state or "").split(":")
     if len(parts) != 2:
         raise HTTPException(status_code=400, detail="Invalid state parameter")
     company_id, user_id = int(parts[0]), int(parts[1])
 
     redirect_uri = settings.FACEBOOK_REDIRECT_URI.replace("facebook", "instagram") if settings.FACEBOOK_REDIRECT_URI else f"{settings.FRONTEND_URL}/api/v1/social/auth/instagram/callback"
 
-    async with httpx.AsyncClient() as client:
-        token_resp = await client.get(
-            "https://graph.facebook.com/v19.0/oauth/access_token",
-            params={
-                "client_id": settings.FACEBOOK_APP_ID,
-                "client_secret": settings.FACEBOOK_APP_SECRET,
-                "redirect_uri": redirect_uri,
-                "code": code,
-            },
-        )
-        if token_resp.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to exchange Instagram authorization code")
-        access_token = token_resp.json().get("access_token")
-
-        # Get pages, then their linked Instagram Business accounts
-        pages_resp = await client.get(
-            "https://graph.facebook.com/v19.0/me/accounts",
-            params={"access_token": access_token},
-        )
-        pages = pages_resp.json().get("data", []) if pages_resp.status_code == 200 else []
-
-        for page in pages:
-            ig_resp = await client.get(
-                f"https://graph.facebook.com/v19.0/{page['id']}",
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token_resp = await client.get(
+                "https://graph.facebook.com/v19.0/oauth/access_token",
                 params={
-                    "fields": "instagram_business_account",
-                    "access_token": page.get("access_token", access_token),
+                    "client_id": settings.FACEBOOK_APP_ID,
+                    "client_secret": settings.FACEBOOK_APP_SECRET,
+                    "redirect_uri": redirect_uri,
+                    "code": code,
                 },
             )
-            ig_data = ig_resp.json().get("instagram_business_account") if ig_resp.status_code == 200 else None
-            if not ig_data:
-                continue
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to exchange Instagram authorization code")
+            access_token = token_resp.json().get("access_token")
 
-            ig_id = ig_data.get("id")
-            ig_profile_resp = await client.get(
-                f"https://graph.facebook.com/v19.0/{ig_id}",
-                params={
-                    "fields": "username,followers_count,profile_picture_url",
-                    "access_token": page.get("access_token", access_token),
-                },
+            # Get pages, then their linked Instagram Business accounts
+            pages_resp = await client.get(
+                "https://graph.facebook.com/v19.0/me/accounts",
+                params={"access_token": access_token},
             )
-            ig_profile = ig_profile_resp.json() if ig_profile_resp.status_code == 200 else {}
+            pages = pages_resp.json().get("data", []) if pages_resp.status_code == 200 else []
 
-            credentials_json = json.dumps({
-                "access_token": page.get("access_token", access_token),
-                "ig_user_id": ig_id,
-                "page_id": page.get("id"),
-                "token_type": "Bearer",
-            })
-            account = SocialAccount(
-                company_id=company_id,
-                platform=SocialPlatform.INSTAGRAM,
-                account_name=f"@{ig_profile.get('username', 'instagram')}",
-                account_id=ig_id,
-                account_type="business",
-                credentials=vault_service.encrypt(credentials_json),
-                status=SocialAccountStatus.ACTIVE,
-                token_expires_at=datetime.utcnow() + timedelta(days=60),
-                scopes=["instagram_basic", "instagram_content_publish"],
-                metadata_={
-                    "username": ig_profile.get("username"),
-                    "followers_count": ig_profile.get("followers_count"),
-                    "avatar_url": ig_profile.get("profile_picture_url"),
-                },
-            )
-            db.add(account)
+            for page in pages:
+                ig_resp = await client.get(
+                    f"https://graph.facebook.com/v19.0/{page['id']}",
+                    params={
+                        "fields": "instagram_business_account",
+                        "access_token": page.get("access_token", access_token),
+                    },
+                )
+                ig_resp_json = ig_resp.json() if ig_resp.status_code == 200 else {}
+                logger.info(f"Instagram business account check for page {page['id']}: {ig_resp_json}")
+                ig_data = ig_resp_json.get("instagram_business_account")
+                if not ig_data:
+                    continue
+
+                ig_id = ig_data.get("id")
+                ig_profile_resp = await client.get(
+                    f"https://graph.facebook.com/v19.0/{ig_id}",
+                    params={
+                        "fields": "username,followers_count,profile_picture_url",
+                        "access_token": page.get("access_token", access_token),
+                    },
+                )
+                ig_profile = ig_profile_resp.json() if ig_profile_resp.status_code == 200 else {}
+
+                credentials_json = json.dumps({
+                    "access_token": page.get("access_token", access_token),
+                    "ig_user_id": ig_id,
+                    "page_id": page.get("id"),
+                    "token_type": "Bearer",
+                })
+                account = SocialAccount(
+                    company_id=company_id,
+                    platform=SocialPlatform.INSTAGRAM,
+                    account_name=f"@{ig_profile.get('username', 'instagram')}",
+                    account_id=ig_id,
+                    account_type="business",
+                    credentials=vault_service.encrypt(credentials_json),
+                    status=SocialAccountStatus.ACTIVE,
+                    token_expires_at=datetime.utcnow() + timedelta(days=60),
+                    scopes=["instagram_basic", "instagram_content_publish"],
+                    metadata_={
+                        "username": ig_profile.get("username"),
+                        "followers_count": ig_profile.get("followers_count"),
+                        "avatar_url": ig_profile.get("profile_picture_url"),
+                    },
+                )
+                db.add(account)
+
+    except httpx.ConnectTimeout:
+        return _oauth_popup_html("instagram", False, settings.FRONTEND_URL)
 
     db.commit()
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard/social/accounts?connected=instagram")
+    return _oauth_popup_html("instagram", True, settings.FRONTEND_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -1172,4 +1201,268 @@ async def get_platform_posts(
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    raise HTTPException(status_code=400, detail=f"Platform post sync not yet supported for {account.platform}")
+
+# ---------------------------------------------------------------------------
+# Reddit OAuth
+# ---------------------------------------------------------------------------
+
+@router.get("/auth/reddit/connect")
+def reddit_connect(
+    token: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Initiate Reddit OAuth2 flow. Token passed as query param (browser navigation)."""
+    current_user = get_user_from_token(db, token)
+    client_id = getattr(settings, "REDDIT_CLIENT_ID", None)
+    if not client_id:
+        raise HTTPException(status_code=501, detail="Reddit integration is not configured. Add REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET to settings.")
+
+    redirect_uri = settings.REDDIT_REDIRECT_URI or f"{settings.BACKEND_URL}/api/v1/social/auth/reddit/callback"
+    state = f"social:reddit:{current_user.company_id}:{current_user.id}"
+    scope = "identity submit read"
+
+    auth_url = "https://www.reddit.com/api/v1/authorize?" + urlencode({
+        "client_id": client_id,
+        "response_type": "code",
+        "state": state,
+        "redirect_uri": redirect_uri,
+        "duration": "permanent",
+        "scope": scope,
+    })
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/auth/reddit/callback")
+async def reddit_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+):
+    """Handle Reddit OAuth callback, exchange code for tokens, store account."""
+    client_id = getattr(settings, "REDDIT_CLIENT_ID", None)
+    client_secret = getattr(settings, "REDDIT_CLIENT_SECRET", None)
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=501, detail="Reddit integration is not configured.")
+
+    redirect_uri = settings.REDDIT_REDIRECT_URI or f"{settings.BACKEND_URL}/api/v1/social/auth/reddit/callback"
+
+    # Parse company_id from state
+    try:
+        parts = state.split(":")
+        company_id = int(parts[2])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid state parameter.")
+
+    async with httpx.AsyncClient() as client:
+        # Exchange code for tokens
+        token_resp = await client.post(
+            "https://www.reddit.com/api/v1/access_token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            auth=(client_id, client_secret),
+            headers={"User-Agent": "AgentConnect/1.0"},
+        )
+        if token_resp.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Reddit token exchange failed: {token_resp.text}")
+        tokens = token_resp.json()
+
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        expires_in = tokens.get("expires_in", 3600)
+
+        # Fetch Reddit username
+        me_resp = await client.get(
+            "https://oauth.reddit.com/api/v1/me",
+            headers={
+                "Authorization": f"bearer {access_token}",
+                "User-Agent": "AgentConnect/1.0",
+            },
+        )
+        if me_resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch Reddit user info.")
+        me = me_resp.json()
+
+    reddit_username = me.get("name", "unknown")
+    reddit_id = str(me.get("id", reddit_username))
+
+    creds = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    }
+    encrypted = vault_service.encrypt(json.dumps(creds))
+
+    token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+
+    # Upsert account
+    existing = db.query(SocialAccount).filter(
+        SocialAccount.company_id == company_id,
+        SocialAccount.platform == SocialPlatform.REDDIT,
+        SocialAccount.account_id == reddit_id,
+    ).first()
+
+    if existing:
+        existing.credentials = encrypted
+        existing.token_expires_at = token_expires_at
+        existing.status = SocialAccountStatus.ACTIVE
+        existing.account_name = f"u/{reddit_username}"
+        db.commit()
+    else:
+        account = SocialAccount(
+            company_id=company_id,
+            platform=SocialPlatform.REDDIT,
+            account_name=f"u/{reddit_username}",
+            account_id=reddit_id,
+            account_type="personal",
+            credentials=encrypted,
+            token_expires_at=token_expires_at,
+            scopes=["identity", "submit", "read"],
+            status=SocialAccountStatus.ACTIVE,
+            metadata_={"username": reddit_username},
+        )
+        db.add(account)
+        db.commit()
+
+    return _oauth_popup_html("reddit", True, settings.FRONTEND_URL)
+
+
+# ---------------------------------------------------------------------------
+# Twitter / X OAuth 2.0 with PKCE
+# ---------------------------------------------------------------------------
+
+import hashlib
+import base64
+import secrets as _secrets
+
+
+def _twitter_code_verifier() -> str:
+    return _secrets.token_urlsafe(43)
+
+
+def _twitter_code_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+@router.get("/auth/twitter/connect")
+def twitter_connect(
+    token: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Initiate Twitter/X OAuth 2.0 PKCE flow."""
+    current_user = get_user_from_token(db, token)
+    if not settings.TWITTER_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="Twitter integration is not configured. Add TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET to settings.")
+
+    verifier = _twitter_code_verifier()
+    challenge = _twitter_code_challenge(verifier)
+    redirect_uri = settings.TWITTER_REDIRECT_URI or f"{settings.BACKEND_URL}/api/v1/social/auth/twitter/callback"
+
+    # Encode verifier in state so callback can retrieve it (no server-side session needed)
+    state = f"social:twitter:{current_user.company_id}:{current_user.id}:{verifier}"
+
+    params = {
+        "response_type": "code",
+        "client_id": settings.TWITTER_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": "tweet.read tweet.write users.read offline.access",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    auth_url = "https://twitter.com/i/oauth2/authorize?" + urlencode(params, quote_via=quote)
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/auth/twitter/callback")
+async def twitter_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+):
+    """Handle Twitter OAuth callback."""
+    if not settings.TWITTER_CLIENT_ID or not settings.TWITTER_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="Twitter integration is not configured.")
+
+    redirect_uri = settings.TWITTER_REDIRECT_URI or f"{settings.BACKEND_URL}/api/v1/social/auth/twitter/callback"
+
+    # state format: social:twitter:{company_id}:{user_id}:{code_verifier}
+    try:
+        parts = state.split(":")
+        company_id = int(parts[2])
+        verifier = parts[4]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid state parameter.")
+
+    async with httpx.AsyncClient() as client:
+        # Exchange code for tokens
+        token_resp = await client.post(
+            "https://api.twitter.com/2/oauth2/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
+            },
+            auth=(settings.TWITTER_CLIENT_ID, settings.TWITTER_CLIENT_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if token_resp.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Twitter token exchange failed: {token_resp.text}")
+        tokens = token_resp.json()
+
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        expires_in = tokens.get("expires_in", 7200)
+
+        # Fetch Twitter user info
+        me_resp = await client.get(
+            "https://api.twitter.com/2/users/me",
+            params={"user.fields": "id,name,username,profile_image_url,public_metrics"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if me_resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch Twitter user info.")
+        me = me_resp.json().get("data", {})
+
+    twitter_id = str(me.get("id", ""))
+    twitter_username = me.get("username", "unknown")
+    twitter_name = me.get("name", twitter_username)
+    followers = me.get("public_metrics", {}).get("followers_count", 0)
+
+    creds = {"access_token": access_token, "refresh_token": refresh_token}
+    encrypted = vault_service.encrypt(json.dumps(creds))
+    token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+
+    existing = db.query(SocialAccount).filter(
+        SocialAccount.company_id == company_id,
+        SocialAccount.platform == SocialPlatform.TWITTER,
+        SocialAccount.account_id == twitter_id,
+    ).first()
+
+    if existing:
+        existing.credentials = encrypted
+        existing.token_expires_at = token_expires_at
+        existing.status = SocialAccountStatus.ACTIVE
+        existing.account_name = f"@{twitter_username}"
+        existing.metadata_ = {"username": twitter_username, "name": twitter_name, "followers": followers}
+        db.commit()
+    else:
+        account = SocialAccount(
+            company_id=company_id,
+            platform=SocialPlatform.TWITTER,
+            account_name=f"@{twitter_username}",
+            account_id=twitter_id,
+            account_type="personal",
+            credentials=encrypted,
+            token_expires_at=token_expires_at,
+            scopes=["tweet.read", "tweet.write", "users.read", "offline.access"],
+            status=SocialAccountStatus.ACTIVE,
+            metadata_={"username": twitter_username, "name": twitter_name, "followers": followers},
+        )
+        db.add(account)
+        db.commit()
+
+    return _oauth_popup_html("twitter", True, settings.FRONTEND_URL)

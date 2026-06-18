@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     FACEBOOK_APP_SECRET: str = ""
     FACEBOOK_REDIRECT_URI: str = ""
     INSTAGRAM_GRAPH_API_VERSION: str = "v19.0"
+    REDDIT_CLIENT_ID: str = ""
+    REDDIT_CLIENT_SECRET: str = ""
+    REDDIT_REDIRECT_URI: str = ""  # e.g. https://api.yourdomain.com/api/v1/social/auth/reddit/callback
+    TWITTER_CLIENT_ID: str = ""
+    TWITTER_CLIENT_SECRET: str = ""
+    TWITTER_REDIRECT_URI: str = ""  # e.g. https://api.yourdomain.com/api/v1/social/auth/twitter/callback
     RAPIDAPI_KEY: str = ""
     RAPIDAPI_LINKEDIN_TRENDS_HOST: str = "linkedin-data-api.p.rapidapi.com"
     RAZORPAY_KEY_ID: str = ""

@@ -36,6 +36,13 @@ class SocialPublishingService:
                 result = await self._publish_to_instagram(creds, full_content, post.media_urls)
             elif post.platform == SocialPlatform.FACEBOOK:
                 result = await self._publish_to_facebook(creds, full_content, post.media_urls)
+            elif post.platform == SocialPlatform.REDDIT:
+                metadata = post.post_metadata or {}
+                subreddit = metadata.get("subreddit", "")
+                title = metadata.get("title", full_content[:300])
+                result = await self._publish_to_reddit(creds, title, full_content, subreddit)
+            elif post.platform == SocialPlatform.TWITTER:
+                result = await self._publish_to_twitter(creds, full_content)
             else:
                 raise ValueError(f"Unsupported platform: {post.platform}")
 
@@ -96,14 +103,27 @@ class SocialPublishingService:
         access_token = creds.get("access_token")
         author_urn = f"urn:li:person:{member_id}"
 
+        share_content: dict = {
+            "shareCommentary": {"text": content},
+            "shareMediaCategory": "NONE",
+        }
+        if media_urls:
+            share_content["shareMediaCategory"] = "IMAGE"
+            share_content["media"] = [
+                {
+                    "status": "READY",
+                    "originalUrl": url,
+                    "description": {"text": ""},
+                    "title": {"text": ""},
+                }
+                for url in media_urls[:9]
+            ]
+
         payload = {
             "author": author_urn,
             "lifecycleState": "PUBLISHED",
             "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": content},
-                    "shareMediaCategory": "NONE",
-                }
+                "com.linkedin.ugc.ShareContent": share_content
             },
             "visibility": {
                 "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
@@ -166,6 +186,60 @@ class SocialPublishingService:
             )
             publish_resp.raise_for_status()
             return {"id": publish_resp.json().get("id")}
+
+    async def _publish_to_twitter(self, creds: dict, content: str) -> dict:
+        """Post a tweet via Twitter v2 API (free tier — text only, 280 chars)."""
+        access_token = creds.get("access_token")
+        tweet_text = content[:280]
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.twitter.com/2/tweets",
+                json={"text": tweet_text},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            if not resp.is_success:
+                raise ValueError(f"Twitter API error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            tweet_id = data.get("data", {}).get("id", "")
+            return {"id": tweet_id}
+
+    async def _publish_to_reddit(self, creds: dict, title: str, content: str, subreddit: str) -> dict:
+        """Submit a self-post to a subreddit via Reddit OAuth API."""
+        if not subreddit:
+            raise ValueError("Subreddit is required for Reddit posts.")
+        access_token = creds.get("access_token")
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://oauth.reddit.com/api/submit",
+                data={
+                    "sr": subreddit.lstrip("r/"),
+                    "kind": "self",
+                    "title": title,
+                    "text": content,
+                    "nsfw": False,
+                    "spoiler": False,
+                    "resubmit": True,
+                },
+                headers={
+                    "Authorization": f"bearer {access_token}",
+                    "User-Agent": "AgentConnect/1.0",
+                },
+                timeout=30,
+            )
+            if not resp.is_success:
+                raise ValueError(f"Reddit submit failed ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            # Reddit returns {"jquery": [...], "success": true/false} or nested json
+            json_data = data.get("json", {})
+            errors = json_data.get("errors", [])
+            if errors:
+                raise ValueError(f"Reddit API errors: {errors}")
+            post_url = json_data.get("data", {}).get("url", "")
+            return {"id": post_url, "url": post_url}
 
     async def _publish_to_facebook(self, creds: dict, content: str, media_urls: Optional[list]) -> dict:
         """Publish a post to a Facebook Page."""

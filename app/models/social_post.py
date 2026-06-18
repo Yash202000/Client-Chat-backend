@@ -33,6 +33,9 @@ class SocialPost(Base):
     platform_post_id = Column(String, nullable=True)        # ID returned by platform after publish
     error_message = Column(Text, nullable=True)
 
+    # Platform-specific metadata (e.g. subreddit for Reddit posts, post_type, title)
+    post_metadata = Column(JSONB, nullable=True)
+
     # AI generation metadata
     ai_generated = Column(Boolean, default=False, nullable=False)
     source_topic = Column(String, nullable=True)            # topic prompt used for generation

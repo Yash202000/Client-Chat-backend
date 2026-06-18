@@ -10,6 +10,8 @@ class SocialPlatform(str, enum.Enum):
     LINKEDIN = "linkedin"
     INSTAGRAM = "instagram"
     FACEBOOK = "facebook"
+    REDDIT = "reddit"
+    TWITTER = "twitter"
 
 
 class SocialAccountStatus(str, enum.Enum):
