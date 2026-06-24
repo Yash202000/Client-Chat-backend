@@ -348,7 +348,94 @@ async def linkedin_exchange(
     db.commit()
     db.refresh(account)
 
-    return {"status": "connected", "account_id": account.id, "account_name": account_name}
+    # Fetch LinkedIn Pages (organizations) this user admins and store each as a separate account
+    pages_added = []
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            acls_resp = await client.get(
+                "https://api.linkedin.com/v2/organizationAcls",
+                params={"q": "roleAssignee", "role": "ADMINISTRATOR", "state": "APPROVED", "count": 50},
+                headers={"Authorization": f"Bearer {access_token}", "X-Restli-Protocol-Version": "2.0.0"},
+            )
+            if acls_resp.status_code == 200:
+                elements = acls_resp.json().get("elements", [])
+                for elem in elements:
+                    org_urn = elem.get("organization", "")
+                    # URN format: urn:li:organization:12345
+                    org_id = org_urn.split(":")[-1] if ":" in org_urn else org_urn
+                    if not org_id:
+                        continue
+
+                    # Fetch org details
+                    org_resp = await client.get(
+                        f"https://api.linkedin.com/v2/organizations/{org_id}",
+                        params={"projection": "(id,name,logoV2(original~:playableStreams))"},
+                        headers={"Authorization": f"Bearer {access_token}", "X-Restli-Protocol-Version": "2.0.0"},
+                    )
+                    if org_resp.status_code != 200:
+                        continue
+                    org_data = org_resp.json()
+                    org_name = (
+                        org_data.get("name", {}).get("localized", {})
+                        or {}
+                    )
+                    # localized is a dict like {"en_US": "Acme Corp"}
+                    page_name = next(iter(org_name.values()), None) if isinstance(org_name, dict) else None
+                    page_name = page_name or f"LinkedIn Page {org_id}"
+
+                    # Logo URL
+                    logo_url = None
+                    try:
+                        logo_url = (
+                            org_data["logoV2"]["original~"]["elements"][0]["identifiers"][0]["identifier"]
+                        )
+                    except (KeyError, IndexError, TypeError):
+                        pass
+
+                    page_credentials = json.dumps({
+                        "access_token": access_token,
+                        "token_type": "Bearer",
+                        "expires_in": expires_in,
+                    })
+
+                    existing_page = db.query(SocialAccount).filter(
+                        SocialAccount.company_id == company_id,
+                        SocialAccount.platform == SocialPlatform.LINKEDIN,
+                        SocialAccount.account_id == str(org_id),
+                    ).first()
+
+                    if existing_page:
+                        existing_page.account_name = page_name
+                        existing_page.credentials = vault_service.encrypt(page_credentials)
+                        existing_page.status = SocialAccountStatus.ACTIVE
+                        existing_page.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+                        existing_page.metadata_ = {"avatar_url": logo_url, "org_urn": org_urn}
+                    else:
+                        page_account = SocialAccount(
+                            company_id=company_id,
+                            platform=SocialPlatform.LINKEDIN,
+                            account_name=page_name,
+                            account_id=str(org_id),
+                            account_type="page",
+                            credentials=vault_service.encrypt(page_credentials),
+                            status=SocialAccountStatus.ACTIVE,
+                            token_expires_at=datetime.utcnow() + timedelta(seconds=expires_in),
+                            scopes=["w_member_social"],
+                            metadata_={"avatar_url": logo_url, "org_urn": org_urn},
+                        )
+                        db.add(page_account)
+                        pages_added.append(page_name)
+
+        db.commit()
+    except Exception:
+        logger.exception("Failed to fetch LinkedIn Pages — personal account still connected")
+
+    return {
+        "status": "connected",
+        "account_id": account.id,
+        "account_name": account_name,
+        "pages_added": pages_added,
+    }
 
 
 @router.get("/auth/facebook/connect")
@@ -1397,17 +1484,24 @@ async def twitter_callback(
         raise HTTPException(status_code=400, detail="Invalid state parameter.")
 
     async with httpx.AsyncClient() as client:
-        # Exchange code for tokens
+        # Exchange code for tokens.
+        # SPA/public clients send client_id in body (no secret); confidential/web-app clients use Basic auth.
+        token_data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+        }
+        token_kwargs: dict = {"headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+        if settings.TWITTER_CLIENT_SECRET:
+            token_kwargs["auth"] = (settings.TWITTER_CLIENT_ID, settings.TWITTER_CLIENT_SECRET)
+        else:
+            token_data["client_id"] = settings.TWITTER_CLIENT_ID
+
         token_resp = await client.post(
             "https://api.twitter.com/2/oauth2/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "code_verifier": verifier,
-            },
-            auth=(settings.TWITTER_CLIENT_ID, settings.TWITTER_CLIENT_SECRET),
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=token_data,
+            **token_kwargs,
         )
         if token_resp.status_code != 200:
             raise HTTPException(status_code=400, detail=f"Twitter token exchange failed: {token_resp.text}")

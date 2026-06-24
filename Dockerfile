@@ -22,8 +22,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.minimal.txt .
+RUN pip install --no-cache-dir -r requirements.minimal.txt
 
 # Stage 2: Final Image
 FROM python:3.12-slim AS final

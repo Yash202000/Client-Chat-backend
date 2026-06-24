@@ -131,7 +131,7 @@ def update_subscription(
     update_data: CompanySubscriptionUpdate
 ) -> CompanySubscription:
     """Update subscription with provided data."""
-    update_dict = update_data.model_dump(exclude_unset=True)
+    update_dict = update_data if isinstance(update_data, dict) else update_data.model_dump(exclude_unset=True)
     for field, value in update_dict.items():
         setattr(subscription, field, value)
     subscription.updated_at = datetime.utcnow()

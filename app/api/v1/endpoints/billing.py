@@ -25,6 +25,7 @@ from app.schemas.company_subscription import (
     UserLimitUpdate,
     SubscriptionCreateRequest,
     SubscriptionCreateResponse,
+    CompanySubscriptionUpdate,
 )
 from app.schemas.license import (
     LicenseActivationRequest,
@@ -151,7 +152,7 @@ async def create_subscription(
                 company_subscription_service.update_subscription(
                     db=db,
                     subscription=existing_subscription,
-                    update_data={"razorpay_customer_id": customer_id}
+                    update_data=CompanySubscriptionUpdate(razorpay_customer_id=customer_id)
                 )
 
         # Create subscription in Razorpay
@@ -180,7 +181,14 @@ async def create_subscription(
             customer_id=customer_id,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
+        err_str = str(e).lower()
+        if "authentication" in err_str or "unauthorized" in err_str or "auth" in err_str:
+            raise HTTPException(status_code=500, detail="Razorpay authentication failed — check RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in your .env file.")
+        if "plan" in err_str and ("not found" in err_str or "invalid" in err_str):
+            raise HTTPException(status_code=400, detail=f"Razorpay plan ID is invalid or not found. Verify the plan exists in your Razorpay dashboard.")
         raise HTTPException(status_code=500, detail=f"Razorpay error: {str(e)}")
 
 

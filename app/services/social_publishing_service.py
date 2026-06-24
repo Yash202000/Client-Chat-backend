@@ -31,7 +31,10 @@ class SocialPublishingService:
                 full_content = f"{full_content}\n\n{tag_str}"
 
             if post.platform == SocialPlatform.LINKEDIN:
-                result = await self._publish_to_linkedin(creds, full_content, post.media_urls, account.account_id)
+                result = await self._publish_to_linkedin(
+                    creds, full_content, post.media_urls, account.account_id,
+                    account_type=getattr(account, "account_type", "personal"),
+                )
             elif post.platform == SocialPlatform.INSTAGRAM:
                 result = await self._publish_to_instagram(creds, full_content, post.media_urls)
             elif post.platform == SocialPlatform.FACEBOOK:
@@ -98,10 +101,14 @@ class SocialPublishingService:
     # Platform-specific publishing
     # -----------------------------------------------------------------------
 
-    async def _publish_to_linkedin(self, creds: dict, content: str, media_urls: Optional[list], member_id: str) -> dict:
+    async def _publish_to_linkedin(self, creds: dict, content: str, media_urls: Optional[list], member_id: str, account_type: str = "personal") -> dict:
         """Publish a post to LinkedIn via UGC Posts API."""
         access_token = creds.get("access_token")
-        author_urn = f"urn:li:person:{member_id}"
+        author_urn = (
+            f"urn:li:organization:{member_id}"
+            if account_type == "page"
+            else f"urn:li:person:{member_id}"
+        )
 
         share_content: dict = {
             "shareCommentary": {"text": content},

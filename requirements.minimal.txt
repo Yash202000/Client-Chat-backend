@@ -136,6 +136,11 @@ mutagen==1.47.0
 APScheduler==3.11.0
 
 # ============================================
+# RATE LIMITING
+# ============================================
+slowapi==0.1.9
+
+# ============================================
 # UTILITIES & HELPERS
 # ============================================
 python-dotenv==1.1.0
@@ -144,6 +149,10 @@ pytz==2025.2
 beautifulsoup4==4.13.4
 RestrictedPython==8.0
 fastmcp==2.11.1
+cachetools==5.5.2
+numexpr==2.11.0
+pyotp==2.9.0
+qrcode==8.0
 
 # ============================================
 # ASYNC & CONCURRENCY
@@ -153,10 +162,11 @@ aiofiles==24.1.0
 nest-asyncio==1.6.0
 
 # ============================================
-# MONITORING (if needed)
+# MONITORING & ERROR TRACKING
 # ============================================
 prometheus-fastapi-instrumentator==6.0.0
 prometheus_client==0.22.1
+sentry-sdk[fastapi]==2.61.1
 
 # ============================================
 # ESSENTIAL DEPENDENCIES
