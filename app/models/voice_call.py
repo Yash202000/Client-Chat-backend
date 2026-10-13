@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Float, Text
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Float, Text, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.database import Base
@@ -66,9 +66,43 @@ class VoiceCall(Base):
     # Additional data
     call_metadata = Column(JSONB, nullable=True)
 
+    # Contact centre (provider-neutral; LiveKit SIP calls use call_sid = SIP call id)
+    provider = Column(String(32), nullable=False, default="twilio", server_default="twilio")
+    room_name = Column(String(128), nullable=True, index=True)
+    phone_number_id = Column(Integer, ForeignKey("phone_numbers.id", ondelete="SET NULL"), nullable=True)
+    handled_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ended_by = Column(String(32), nullable=True)  # caller | agent | system
+    talk_seconds = Column(Float, nullable=True)
+    hold_seconds = Column(Float, nullable=False, default=0, server_default="0")
+    wrap_up_seconds = Column(Float, nullable=True)
+    queue_id = Column(Integer, ForeignKey("call_queues.id", ondelete="SET NULL"), nullable=True)
+    disposition_code_id = Column(Integer, ForeignKey("call_disposition_codes.id", ondelete="SET NULL"), nullable=True)
+    disposition_note = Column(Text, nullable=True)
+    hold_started_at = Column(DateTime, nullable=True)  # set while the caller is on hold
+    manual_entry = Column(Boolean, nullable=False, default=False, server_default="false")  # CTI-down record (FR-CC-004)
+    reconciled_with_call_id = Column(Integer, ForeignKey("voice_calls.id", ondelete="SET NULL"), nullable=True)
+    recording_status = Column(String(16), nullable=True)  # starting | recording | paused | completed | failed | off
+    recording_started_at = Column(DateTime, nullable=True)
+    recording_ended_at = Column(DateTime, nullable=True)
+    recording_egress_id = Column(String(64), nullable=True)
+    recording_object_key = Column(String(512), nullable=True)  # object in MinIO / S3 (first part)
+    # FR-CC-051: a paused recording is stored as parts: [{egress_id, key, started_at, ended_at, status, duration}]
+    recording_parts = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    recording_paused_at = Column(DateTime, nullable=True)
+    quality = Column(JSONB, nullable=True)
+    call_purpose_id = Column(Integer, ForeignKey("call_purpose_codes.id", ondelete="SET NULL"), nullable=True)
+    outbound_result = Column(String(24), nullable=True)  # answered | no_answer | busy | invalid_number | failed
+    missed_classification = Column(String(16), nullable=True)  # missed | abandoned | short_abandon  # jitter / packet loss / RTT reported by the agent's browser (NFR-007)
+
     # Relationships
     company = relationship("Company")
     agent = relationship("Agent")
     integration = relationship("Integration")
     contact = relationship("Contact")
     session = relationship("ConversationSession", foreign_keys=[conversation_id])
+    handled_by = relationship("User", foreign_keys=[handled_by_user_id])
+    phone_number = relationship("PhoneNumber")
+    # passive_deletes: the database cascades (ON DELETE CASCADE) — deleting a call (e.g. retention) never
+    # tries to null call_events.call_id, even if events are written concurrently
+    events = relationship("CallEvent", back_populates="call", order_by="CallEvent.seq",
+                          cascade="all, delete-orphan", passive_deletes=True)

@@ -9,7 +9,8 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 
-from app.core.dependencies import get_db, get_current_user
+from app.core.audit import log_action
+from app.core.dependencies import get_db, require_permission
 from app.services import security_log_service
 from app.models.user import User
 
@@ -53,7 +54,7 @@ async def get_security_logs(
     limit: int = Query(100, ge=1, le=500, description="Maximum records to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("security_log:read"))
 ):
     """
     Get security logs for the current user's company.
@@ -92,7 +93,7 @@ async def get_security_logs(
 async def get_security_stats(
     hours: int = Query(24, ge=1, le=720, description="Time window in hours (max 30 days)"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("security_log:read"))
 ):
     """
     Get security statistics for the dashboard.
@@ -115,7 +116,7 @@ async def get_security_stats(
 async def get_critical_events(
     limit: int = Query(10, ge=1, le=50, description="Maximum records to return"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("security_log:read"))
 ):
     """
     Get recent critical/high threat security events.
@@ -149,7 +150,7 @@ async def get_critical_events(
 async def delete_security_log(
     log_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("security_log:delete"))
 ):
     """
     Delete a specific security log entry.
@@ -167,6 +168,8 @@ async def delete_security_log(
         raise HTTPException(status_code=404, detail="Security log not found")
 
     db.delete(log)
+    log_action(db, current_user.company_id, current_user.id, "security_log.deleted", entity_type="security_log",
+               entity_id=log_id, changes={"event_type": log.event_type, "threat_level": log.threat_level})
     db.commit()
 
     return {"message": "Security log deleted successfully"}
@@ -176,7 +179,7 @@ async def delete_security_log(
 async def clear_old_logs(
     older_than_days: int = Query(30, ge=7, le=365, description="Delete logs older than X days"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_permission("security_log:delete"))
 ):
     """
     Clear old security logs.
@@ -193,7 +196,8 @@ async def clear_old_logs(
         SecurityLog.company_id == current_user.company_id,
         SecurityLog.created_at < cutoff_date
     ).delete()
-
+    log_action(db, current_user.company_id, current_user.id, "security_log.purged", entity_type="security_log",
+               changes={"older_than_days": older_than_days, "deleted": deleted_count})
     db.commit()
 
     return {"message": f"Deleted {deleted_count} old security logs"}

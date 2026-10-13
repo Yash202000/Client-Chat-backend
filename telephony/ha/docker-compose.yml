@@ -1,0 +1,132 @@
+# High-availability lab: the whole contact-centre media stack twice ("side a" and "side b") on one
+# machine, on ports that don't clash with the normal dev stack. In production each side runs on its
+# own host (standard ports) and the third sentinel on a third machine — see ../HA.md.
+#
+#   docker compose -f telephony/ha/docker-compose.yml up -d        (from backend/)
+#   python -m scripts.telephony_ha_test                            (fails pieces and checks calls still work)
+#   docker compose -f telephony/ha/docker-compose.yml down -v
+#
+#   Redis  6390 (master at start) · 6391 (replica) · sentinels 26390-26392, master name "agentconnect"
+#   LiveKit a 7960/7961 · b 7970/7971 (local LB a 7950 · b 7951)   LiveKit SIP a 5160 · b 5170   Egress a/b
+#   SIP registrars a 5180 · b 5190 (registrations shared in the database)
+name: agentconnect-ha
+
+x-registrar: &registrar
+  image: agentconnect-sip-registrar:1.1.0
+  network_mode: host
+  restart: unless-stopped
+  env_file: [../../.env]
+  read_only: true
+  tmpfs: ["/run/kamailio:uid=100,gid=101,mode=0750", "/tmp"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+x-sentinel: &sentinel
+  image: redis:7.4-alpine
+  network_mode: host
+  restart: unless-stopped
+  depends_on: [redis-a]
+
+services:
+  redis-a:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--port", "6390", "--appendonly", "yes"]
+    network_mode: host
+    restart: unless-stopped
+    volumes: [ha_redis_a:/data]
+
+  redis-b:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--port", "6391", "--appendonly", "yes", "--replicaof", "127.0.0.1", "6390"]
+    network_mode: host
+    restart: unless-stopped
+    volumes: [ha_redis_b:/data]
+    depends_on: [redis-a]
+
+  # three sentinels (a majority of 2 decides a failover); sentinel config must be writable, so it is
+  # written at start
+  sentinel-1:
+    <<: *sentinel
+    command: ["sh", "-c", "printf 'port 26390\\nsentinel monitor agentconnect 127.0.0.1 6390 2\\nsentinel down-after-milliseconds agentconnect 3000\\nsentinel failover-timeout agentconnect 10000\\nsentinel parallel-syncs agentconnect 1\\n' > /tmp/s.conf && exec redis-sentinel /tmp/s.conf"]
+  sentinel-2:
+    <<: *sentinel
+    command: ["sh", "-c", "printf 'port 26391\\nsentinel monitor agentconnect 127.0.0.1 6390 2\\nsentinel down-after-milliseconds agentconnect 3000\\nsentinel failover-timeout agentconnect 10000\\nsentinel parallel-syncs agentconnect 1\\n' > /tmp/s.conf && exec redis-sentinel /tmp/s.conf"]
+  sentinel-3:
+    <<: *sentinel
+    command: ["sh", "-c", "printf 'port 26392\\nsentinel monitor agentconnect 127.0.0.1 6390 2\\nsentinel down-after-milliseconds agentconnect 3000\\nsentinel failover-timeout agentconnect 10000\\nsentinel parallel-syncs agentconnect 1\\n' > /tmp/s.conf && exec redis-sentinel /tmp/s.conf"]
+
+  livekit-a:
+    image: livekit/livekit-server:v1.13.7
+    command: ["--config", "/etc/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./livekit-a.yaml:/etc/livekit.yaml:ro]
+    depends_on: [sentinel-1, sentinel-2, sentinel-3]
+  livekit-b:
+    image: livekit/livekit-server:v1.13.7
+    command: ["--config", "/etc/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./livekit-b.yaml:/etc/livekit.yaml:ro]
+    depends_on: [sentinel-1, sentinel-2, sentinel-3]
+
+  # local LiveKit address on each host (own node first, the other when it is down) for SIP / Egress / voice
+  lb-a:
+    image: haproxy:2.8-alpine
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./lb-a.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro]
+  lb-b:
+    image: haproxy:2.8-alpine
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./lb-b.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro]
+
+  sip-a:
+    image: livekit/sip:v1.15.0
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./sip-a.yaml:/sip/config.yaml:ro]
+    depends_on: [lb-a]
+  sip-b:
+    image: livekit/sip:v1.15.0
+    network_mode: host
+    restart: unless-stopped
+    volumes: [./sip-b.yaml:/sip/config.yaml:ro]
+    depends_on: [lb-b]
+
+  egress-a:
+    image: livekit/egress:v1.14.1
+    network_mode: host
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]   # headless Chrome used for room-composite recordings
+    environment: {EGRESS_CONFIG_FILE: /etc/egress.yaml}
+    volumes: [./egress-a.yaml:/etc/egress.yaml:ro]
+    depends_on: [lb-a]
+  egress-b:
+    image: livekit/egress:v1.14.1
+    network_mode: host
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]
+    environment: {EGRESS_CONFIG_FILE: /etc/egress.yaml}
+    volumes: [./egress-b.yaml:/etc/egress.yaml:ro]
+    depends_on: [lb-b]
+
+  registrar-a:
+    <<: *registrar
+    environment:
+      SIP_SERVER_ID: "11"
+      TELEPHONY_SIP_REGISTRAR_ADDRESS: 192.168.31.107:5180
+      SIP_PEERS: 192.168.31.107:5190
+      LIVEKIT_SIP_ADDRESSES: 192.168.31.107:5160,192.168.31.107:5170
+  registrar-b:
+    <<: *registrar
+    environment:
+      SIP_SERVER_ID: "12"
+      TELEPHONY_SIP_REGISTRAR_ADDRESS: 192.168.31.107:5190
+      SIP_PEERS: 192.168.31.107:5180
+      LIVEKIT_SIP_ADDRESSES: 192.168.31.107:5160,192.168.31.107:5170
+
+volumes:
+  ha_redis_a:
+  ha_redis_b:

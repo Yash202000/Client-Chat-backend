@@ -86,6 +86,44 @@ class WorkflowExecutionService:
             return {"output": result["result"]}
         return result
 
+    def _call_node_output(self, node_type: str, params: dict, context: dict, results: dict) -> dict:
+        """Output of the phone-call nodes play_audio / transfer_to_agent / hangup: {text, audio_url?, action?}."""
+        text = self._resolve_placeholders(params.get("text", "") or "", context, results)
+        output = {"text": str(text or "")}
+        if params.get("audio_url"):
+            output["audio_url"] = params["audio_url"]
+        if node_type == "transfer_to_agent":
+            output["action"] = {
+                "type": "transfer_to_agent",
+                "queue_id": params.get("queue_id") or None,
+                "team_id": params.get("team_id") or None,
+                "max_wait_seconds": int(params.get("max_wait_seconds") or 0) or None,
+                "overflow_text": self._resolve_placeholders(params.get("overflow_text", "") or "", context, results),
+                "reason": params.get("reason") or "IVR transfer",
+            }
+        elif node_type == "hangup":
+            output["action"] = {"type": "hangup"}
+        return output
+
+    def _business_hours_state(self, params: dict) -> str:
+        """
+        "open" | "closed" | "holiday" for now in the node's timezone.
+        params: timezone (IANA), holidays ["YYYY-MM-DD"], schedule [{"days": [0-6, Mon=0], "start": "08:00", "end": "16:00"}]
+        """
+        from zoneinfo import ZoneInfo
+        try:
+            tz = ZoneInfo(params.get("timezone") or "UTC")
+        except Exception:
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz)
+        if now.strftime("%Y-%m-%d") in set(params.get("holidays") or []):
+            return "holiday"
+        hhmm = now.strftime("%H:%M")
+        for slot in params.get("schedule") or []:
+            if now.weekday() in [int(d) for d in slot.get("days", [])] and slot.get("start", "00:00") <= hhmm < slot.get("end", "24:00"):
+                return "open"
+        return "closed"
+
     def _resolve_placeholders(self, value: str, context: dict, results: dict):
         """Resolves placeholders like {{context.variable}}, {{context.obj.key}}, or {{step_id.output}}."""
         if not isinstance(value, str) or '{{' not in value:
@@ -2396,6 +2434,30 @@ Return only valid JSON, nothing else:"""
                     "question_text": question_text if question_text else None
                 }
 
+            elif node_type == "get_digits":
+                # Phone keypad input (IVR). Pauses like "listen"; the voice process collects the digits
+                # and resumes the workflow with them, saved to params.save_to_variable.
+                params = node_data.get("params", {})
+                prompt_text = self._resolve_placeholders(params.get("prompt_text", ""), context, results)
+                if prompt_text:
+                    context["_last_agent_message"] = prompt_text
+                context["expected_input_type"] = "digits"
+                result = {
+                    "status": "paused_for_input",
+                    "expected_input_type": "digits",
+                    "question_text": prompt_text or None,
+                    "digits": {
+                        "max_digits": int(params.get("max_digits") or 1),
+                        "terminator": params.get("terminator") or "#",
+                        "timeout_seconds": int(params.get("timeout_seconds") or 6),
+                        "retries": int(params.get("retries") or 2),
+                        "audio_url": params.get("audio_url") or None,
+                    },
+                }
+
+            elif node_type == "business_hours":
+                result = {"output": self._business_hours_state(node_data.get("params", {}))}
+
             elif node_type == "prompt":
                 params = node_data.get("params", {})
                 options_mode = params.get("options_mode", "manual")
@@ -2487,9 +2549,14 @@ Return only valid JSON, nothing else:"""
                     }
                 }
 
-            elif node_type == "response":
-                output_value = node_data.get("output_value", "")
-                resolved_output = self._resolve_placeholders(output_value, context, results)
+            elif node_type in ("response", "play_audio", "transfer_to_agent", "hangup"):
+                if node_type == "response":
+                    output_value = node_data.get("output_value", "")
+                    resolved_output = self._resolve_placeholders(output_value, context, results)
+                else:
+                    # Phone-call nodes: a message (text) plus what the call should do. On text channels
+                    # only the text is shown; the contact-centre voice process acts on audio_url / action.
+                    resolved_output = self._call_node_output(node_type, node_data.get("params", {}), context, results)
                 result = {"output": resolved_output}
                 # Track last agent message for validation context (used when listen node has no explicit question)
                 if resolved_output:
@@ -2760,10 +2827,16 @@ Return only valid JSON, nothing else:"""
                     response_payload["form"] = result["form"]
                 if "expected_input_type" in result:
                     response_payload["expected_input_type"] = result["expected_input_type"]
+                if result.get("question_text"):
+                    response_payload["question_text"] = result["question_text"]
+                if result.get("digits"):
+                    response_payload["digits"] = result["digits"]
 
                 # Include last response message for TTS in voice mode
                 if response_messages:
                     response_payload["response"] = response_messages[-1]
+                # All response-node outputs of this run, in order (phone calls speak every one)
+                response_payload["response_messages"] = list(response_messages)
 
                 return response_payload
 
@@ -2904,4 +2977,5 @@ Return only valid JSON, nothing else:"""
         if self._executing_agent_id:
             memory_service.delete_all_memories(self.db, agent_id=self._executing_agent_id, session_id=conversation_id)
 
-        return {"status": "completed", "response": final_output, "conversation_id": conversation_id}
+        return {"status": "completed", "response": final_output, "conversation_id": conversation_id,
+                "response_messages": list(response_messages)}

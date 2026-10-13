@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.audit import log_action
+from app.core.dependencies import get_db, require_permission
 from app.models.user import User
 import logging
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def _rows_to_csv_bytes(headers: list, rows: list) -> bytes:
 @router.post("/data")
 async def export_all_data(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_permission("data:export")),
 ):
     """
     Generate and return a ZIP file containing CSVs of all company data:
@@ -166,29 +167,30 @@ async def export_all_data(
     )
 
     # ------------------------------------------------------------------
-    # Tickets (optional table — may not exist)
+    # Tickets
     # ------------------------------------------------------------------
-    tickets_csv = b"id,subject,status,priority,contact_id,created_at\n"
-    try:
-        from sqlalchemy import text
+    from app.models.ticket import Ticket
+    from app.models.ticket_workflow import TicketStatus
 
-        rows = db.execute(
-            text(
-                "SELECT id, subject, status, priority, contact_id, created_at "
-                "FROM tickets WHERE company_id = :cid"
-            ),
-            {"cid": company_id},
-        ).fetchall()
-        if rows:
-            buf = io.StringIO()
-            writer = csv.writer(buf)
-            writer.writerow(["id", "subject", "status", "priority", "contact_id", "created_at"])
-            for row in rows:
-                writer.writerow(list(row))
-            tickets_csv = buf.getvalue().encode("utf-8")
-    except Exception:
-        # Table does not exist yet — emit empty CSV with headers only
-        logger.exception("Unexpected error")
+    tickets_rows = []
+    for t, status_name in (db.query(Ticket, TicketStatus.name)
+                           .outerjoin(TicketStatus, TicketStatus.id == Ticket.status_id)
+                           .filter(Ticket.company_id == company_id).all()):
+        tickets_rows.append(
+            {
+                "id": t.id,
+                "ticket_number": t.ticket_number,
+                "title": t.title,
+                "status": status_name,
+                "priority": t.priority.value if t.priority else None,
+                "contact_id": t.contact_id,
+                "created_at": t.created_at,
+            }
+        )
+    tickets_csv = _rows_to_csv_bytes(
+        ["id", "ticket_number", "title", "status", "priority", "contact_id", "created_at"],
+        tickets_rows,
+    )
 
     # ------------------------------------------------------------------
     # Templates
@@ -227,6 +229,9 @@ async def export_all_data(
         zf.writestr("templates.csv", templates_csv)
 
     zip_buffer.seek(0)
+    log_action(db, company_id, current_user.id, "data.exported", entity_type="company", entity_id=company_id,
+               changes={"files": ["contacts", "leads", "deals", "campaigns", "sequences", "tickets", "templates"]})
+    db.commit()
 
     filename = f"export_{today}.zip"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}

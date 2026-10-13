@@ -9,7 +9,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 
-from app.core.dependencies import get_db, get_current_active_user
+from app.core.dependencies import get_db, require_permission
 from app.models.audit_log import AuditLog
 from app.models.user import User
 
@@ -60,7 +60,7 @@ async def list_audit_logs(
     skip: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=500, description="Number of records"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_permission("audit:read")),
 ):
     """
     Return audit log entries for the current user's company, newest first.
@@ -121,3 +121,42 @@ async def list_audit_logs(
         )
 
     return result
+
+
+@router.get("/export", dependencies=[Depends(require_permission("audit:read"))])
+def export_audit_logs(
+    entity_type: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("reports:export")),
+):
+    """CSV export of the (read-only) audit log; the export itself is audited."""
+    import csv
+    import io
+    from fastapi.responses import Response
+    from app.core.audit import log_action
+
+    q = db.query(AuditLog).filter(AuditLog.company_id == current_user.company_id)
+    if entity_type:
+        q = q.filter(AuditLog.entity_type == entity_type)
+    if action:
+        q = q.filter(AuditLog.action.ilike(f"%{action}%"))
+    if user_id:
+        q = q.filter(AuditLog.user_id == user_id)
+    if date_from:
+        q = q.filter(AuditLog.created_at >= date_from)
+    if date_to:
+        q = q.filter(AuditLog.created_at <= date_to)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["created_at", "user_id", "action", "entity_type", "entity_id", "entity_name", "changes", "ip"])
+    for row in q.order_by(AuditLog.created_at.desc()).limit(50000):
+        w.writerow([row.created_at.isoformat() if row.created_at else "", row.user_id, row.action, row.entity_type,
+                    row.entity_id, row.entity_name, row.changes, row.ip_address])
+    log_action(db, current_user.company_id, current_user.id, "audit_log.exported", entity_type="audit_log",
+               changes={"entity_type": entity_type, "action": action})
+    db.commit()
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="audit-log.csv"'})

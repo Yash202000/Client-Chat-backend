@@ -1,0 +1,24 @@
+# Standalone deployment of the SIP registrar (e.g. on the telephony server).
+#   cp registrar.env.example registrar.env   # fill it in
+#   docker compose -f docker-compose.deploy.yml up -d
+#
+# Host networking: SIP replies and NAT keep-alives must leave from the real address (Linux hosts).
+# Firewall: allow 5080/udp+tcp (and 5081/tcp with TLS) from where the softphones are.
+# Audio does not pass through here — open LiveKit SIP's RTP range (10000-20000/udp) on its host.
+services:
+  sip-registrar:
+    image: ${SIP_REGISTRAR_IMAGE:-agentconnect-sip-registrar:1.1.0}
+    network_mode: host
+    restart: unless-stopped
+    env_file: [registrar.env]
+    # with TLS: mount the certificate (readable by uid 100) and set SIP_TLS_CERT / SIP_TLS_KEY
+    # volumes:
+    #   - /etc/letsencrypt/live/sip.example.com/fullchain.pem:/certs/fullchain.pem:ro
+    #   - /etc/letsencrypt/live/sip.example.com/privkey.pem:/certs/privkey.pem:ro
+    read_only: true
+    tmpfs: ["/run/kamailio:uid=100,gid=101,mode=0750", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: 20m, max-file: "5"}

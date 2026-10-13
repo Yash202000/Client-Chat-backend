@@ -255,9 +255,25 @@ def get_workflows_using_as_subworkflow(
 
 @router.put("/{workflow_id}", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
 def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+    # A workflow that is a phone number's IVR changes what live callers hear (FR-CC-014):
+    # only telephony managers may change it, and every change is audited.
+    from app.models.phone_number import PhoneNumber
+    ivr_numbers = [n for (n,) in db.query(PhoneNumber.number).filter(
+        PhoneNumber.entry_workflow_id == workflow_id, PhoneNumber.company_id == current_user.company_id).all()]
+    if ivr_numbers and not current_user.is_super_admin:
+        perms = {p.name for p in (current_user.role.permissions if current_user.role else [])}
+        if "telephony:manage" not in perms:
+            raise HTTPException(status_code=403, detail="This workflow is a phone number's IVR. Requires 'telephony:manage'.")
+
     db_workflow = workflow_service.update_workflow(db=db, workflow_id=workflow_id, workflow=workflow, company_id=current_user.company_id)
     if db_workflow is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    if ivr_numbers:
+        from app.core.audit import log_action
+        log_action(db, current_user.company_id, current_user.id, "ivr.updated", entity_type="workflow",
+                   entity_id=db_workflow.id, entity_name=db_workflow.name,
+                   changes={"phone_numbers": ivr_numbers, "fields": sorted(workflow.model_dump(exclude_unset=True).keys())})
+        db.commit()
     return db_workflow
 
 @router.post("/{workflow_id}/regenerate-description", dependencies=[Depends(require_permission("workflow:update"))])

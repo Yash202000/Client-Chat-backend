@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!kamailio.cfg.tpl
+!entrypoint.sh
+!healthcheck.sh

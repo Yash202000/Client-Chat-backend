@@ -70,6 +70,13 @@ from app.models.voice_call import VoiceCall, CallStatus
 from app.models.call_queue import CallQueueEntry
 from app.models.twilio_phone_number import TwilioPhoneNumber
 from app.models.freeswitch_phone_number import FreeSwitchPhoneNumber
+from app.models.phone_number import PhoneNumber
+from app.models.call_event import CallEvent, CallLeg
+from app.models.contact_center import (
+    CallQueue, CallQueueMember, AgentState, AgentStateHistory, AgentReasonCode, DispositionCode,
+    Shift, ShiftAssignment, Extension, DirectoryEntry,
+    ContactCenterSettings, BlockedNumber, CallPurposeCode, MissedCallTask, CallbackAttempt, QaForm, QaEvaluation, SipAccount,
+)
 
 # Security Models
 from app.models.security_log import SecurityLog

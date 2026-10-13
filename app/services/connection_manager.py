@@ -1,6 +1,8 @@
+import asyncio
 import json
 import time
-from typing import Any, Dict, List, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import WebSocket
 import logging
 logger = logging.getLogger(__name__)
@@ -11,6 +13,75 @@ class ConnectionManager:
         self.active_connections: Dict[str, List[Dict[str, Any]]] = {}
         # Track last activity timestamp for each websocket: {session_id: {websocket_id: timestamp}}
         self.last_activity: Dict[str, Dict[int, float]] = {}
+        # Redis fan-out (optional). When enabled, text broadcasts are published to Redis and
+        # every process (including this one) delivers them to its own local sockets.
+        self._redis = None
+        self._fanout_channel: Optional[str] = None
+        self._subscriber_task: Optional[asyncio.Task] = None
+        self.instance_id = uuid.uuid4().hex[:8]
+
+    # ------------------------------------------------------------------ fan-out
+
+    @property
+    def fanout_enabled(self) -> bool:
+        return self._redis is not None
+
+    async def start_fanout(self, channel: str, subscribe: bool = True):
+        """Enable Redis fan-out (REDIS_URL or Redis Sentinel). Processes without websockets (e.g. the voice
+        process) pass subscribe=False."""
+        from app.core.redis_client import async_redis, redis_enabled
+
+        if not redis_enabled() or self._redis is not None:
+            return
+        client = async_redis(decode_responses=True)
+        await client.ping()
+        self._redis = client
+        self._fanout_channel = channel
+        if subscribe:
+            self._subscriber_task = asyncio.create_task(self._fanout_listener())
+        logger.info(f"[ws-fanout] enabled on {channel} (instance {self.instance_id}, subscribe={subscribe})")
+
+    async def stop_fanout(self):
+        if self._subscriber_task:
+            self._subscriber_task.cancel()
+            try:
+                await self._subscriber_task
+            except asyncio.CancelledError:
+                pass
+            self._subscriber_task = None
+        if self._redis is not None:
+            await self._redis.aclose()
+            self._redis = None
+
+    async def _publish(self, envelope: Dict[str, Any]) -> bool:
+        try:
+            await self._redis.publish(self._fanout_channel, json.dumps(envelope))
+            return True
+        except Exception:
+            logger.exception("[ws-fanout] publish failed, delivering locally only")
+            return False
+
+    async def _fanout_listener(self):
+        while True:
+            try:
+                pubsub = self._redis.pubsub()
+                await pubsub.subscribe(self._fanout_channel)
+                async for item in pubsub.listen():
+                    if item.get("type") != "message":
+                        continue
+                    try:
+                        env = json.loads(item["data"])
+                        if env.get("op") == "session":
+                            await self._local_broadcast_to_session(env["target"], env["message"])
+                        else:
+                            await self._local_broadcast(env["message"], env["target"])
+                    except Exception:
+                        logger.exception("[ws-fanout] bad envelope")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("[ws-fanout] listener error, reconnecting in 2s")
+                await asyncio.sleep(2)
 
     async def connect(self, websocket: WebSocket, session_id: str, user_type: str, connection_type: str = "chat"):
         await websocket.accept()
@@ -18,12 +89,25 @@ class ConnectionManager:
             self.active_connections[session_id] = []
             self.last_activity[session_id] = {}
 
-        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type, "connection_type": connection_type})
+        self.active_connections[session_id].append({"websocket": websocket, "user_type": user_type, "connection_type": connection_type, "user_id": None})
 
         # Initialize activity timestamp
         ws_id = id(websocket)
         self.last_activity[session_id][ws_id] = time.time()
 
+    def tag_user(self, websocket: WebSocket, session_id: str, user_id: int):
+        """Associate an authenticated user_id with a connection, once known post-accept."""
+        if session_id in self.active_connections:
+            for connection in self.active_connections[session_id]:
+                if connection["websocket"] == websocket:
+                    connection["user_id"] = user_id
+                    break
+
+    def has_user_connection_by_id(self, session_id: str, user_id: int) -> bool:
+        """Check whether a specific user still holds any other active connection in this channel."""
+        if session_id not in self.active_connections:
+            return False
+        return any(c.get("user_id") == user_id for c in self.active_connections[session_id])
 
     def disconnect(self, websocket: WebSocket, session_id: str):
         if session_id in self.active_connections:
@@ -43,7 +127,12 @@ class ConnectionManager:
         else:
             pass
 
-    async def broadcast_to_session(self, session_id: str, message: str, sender_type: str):
+    async def broadcast_to_session(self, session_id: str, message: str, sender_type: str = ""):
+        if self.fanout_enabled and await self._publish({"op": "session", "target": session_id, "message": message}):
+            return
+        await self._local_broadcast_to_session(session_id, message)
+
+    async def _local_broadcast_to_session(self, session_id: str, message: str):
         if session_id in self.active_connections:
             message_data = json.loads(message)
             if message_data.get('message_type') == 'note':
@@ -73,7 +162,11 @@ class ConnectionManager:
             pass
     
     async def broadcast(self, message: str, channel_id: str):
+        if self.fanout_enabled and await self._publish({"op": "channel", "target": channel_id, "message": message}):
+            return
+        await self._local_broadcast(message, channel_id)
 
+    async def _local_broadcast(self, message: str, channel_id: str):
         if channel_id in self.active_connections:
 
             # Track connections that fail so we can remove them after iteration

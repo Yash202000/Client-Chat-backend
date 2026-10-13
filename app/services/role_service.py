@@ -59,6 +59,15 @@ PERMISSIONS = {
     "conversation:update": "Update conversations",
     "conversation:delete": "Delete conversations",
     # Voice Lab
+    # Telephony / contact centre
+    "telephony:read": "View phone numbers and telephony settings",
+    "telephony:manage": "Manage phone numbers, trunks and telephony settings",
+    "calls:supervise": "Listen to, whisper to or join agents' live calls",
+    "recordings:listen": "Play call recordings",
+    "recordings:download": "Download call recordings",
+    "recordings:pause": "Pause and resume the recording of a call (e.g. while card details are given)",
+    "calls:evaluate": "Evaluate call quality (QA forms and evaluations)",
+    "reports:export": "Export contact-centre reports",
     "voice:create": "Create and manage voice models",
     "voice:read": "Read voice models",
     "voice:update": "Update voice models",
@@ -154,6 +163,13 @@ PERMISSIONS = {
     "api_vault:read": "Read API vault entries",
     "api_vault:update": "Update API vault entries",
     "api_vault:delete": "Delete API vault entries",
+    # Admin / compliance
+    "audit:read": "View the audit log",
+    "security_log:read": "View security events (prompt injection, rate limits)",
+    "security_log:delete": "Delete security events",
+    "data:export": "Export all company data (ZIP of CSVs)",
+    "settings:write": "Manage routing rules and custom fields",
+    "ticket:manage": "Manage ticket workflows and statuses",
 }
 
 # Page-based permissions for controlling access to dashboard sections

@@ -1,0 +1,23 @@
+# LiveKit server — development defaults.
+# For production: replace the key/secret (secret must be 32+ chars) and keep them in sync with
+# backend .env (LIVEKIT_API_KEY / LIVEKIT_API_SECRET), sip.yaml and egress.yaml.
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  # On a LAN / single host the local interface IPs are advertised. Set to true when the
+  # server sits behind NAT and must advertise its public IP.
+  use_external_ip: false
+redis:
+  address: localhost:6379
+keys:
+  devkey: agentconnect_dev_secret_change_me_0123456789
+webhook:
+  api_key: devkey
+  urls:
+    - http://localhost:8000/api/v1/telephony/livekit/webhook
+logging:
+  level: info

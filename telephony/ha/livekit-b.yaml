@@ -1,0 +1,21 @@
+# HA lab — LiveKit node b. Both nodes share Redis (Sentinel), so rooms on either node can be joined and
+# controlled through both. Production: one node per host, standard ports (7880 / 7881 / 50000-60000).
+port: 7970
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  tcp_port: 7971
+  port_range_start: 62000
+  port_range_end: 62999
+  use_external_ip: false
+redis:
+  sentinel_master_name: agentconnect
+  sentinel_addresses: [127.0.0.1:26390, 127.0.0.1:26391, 127.0.0.1:26392]
+keys:
+  devkey: agentconnect_dev_secret_change_me_0123456789
+webhook:
+  api_key: devkey
+  urls:
+    - http://localhost:8010/api/v1/telephony/livekit/webhook   # HA lab test API
+logging:
+  level: info

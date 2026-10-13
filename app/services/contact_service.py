@@ -13,6 +13,7 @@ CHANNEL_CONFIG = {
     'whatsapp': {'attribute_key': 'whatsapp_id', 'is_phone_channel': True},
     'twilio_voice': {'attribute_key': 'twilio_voice_id', 'is_phone_channel': True},
     'freeswitch': {'attribute_key': 'freeswitch_id', 'is_phone_channel': True},
+    'voice': {'attribute_key': 'voice_id', 'is_phone_channel': True},  # contact-centre calls (LiveKit SIP)
     'telegram': {'attribute_key': 'telegram_id', 'is_phone_channel': False},
     'instagram': {'attribute_key': 'instagram_id', 'is_phone_channel': False},
     'messenger': {'attribute_key': 'messenger_id', 'is_phone_channel': False},

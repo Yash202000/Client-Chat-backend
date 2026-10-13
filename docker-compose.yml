@@ -110,6 +110,110 @@ services:
   #     - VITE_VOICE_ENGINE_URL=http://localhost:8001
   #   restart: always
 
+  # ---------------------------------------------------------------- LiveKit (calls / contact centre)
+  # Config files live in ./telephony (shared with telephony/docker-compose.yml — run one or the other,
+  # not both: they use the same host ports). Setup + softphone testing: ./telephony/README.md
+  #
+  #   docker compose up -d redis livekit livekit-sip livekit-egress sip-registrar
+  #   docker compose --profile voice up -d voice-agent      # AI / IVR voice process (needs .env)
+  #
+  # Host networking: LiveKit and LiveKit SIP need large UDP port ranges (Linux hosts only).
+  #   6379 Redis · 7880/7881 LiveKit · 50000-60000/udp WebRTC · 5060 SIP (LiveKit) · 5080 SIP registrar
+  #   (softphone logins) · 10000-20000/udp RTP
+
+  redis:
+    image: redis:7.4-alpine
+    # persistent: LiveKit keeps SIP trunks and dispatch rules here
+    command: ["redis-server", "--port", "6379", "--appendonly", "yes"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - livekit_redis:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    command: ["--config", "/etc/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./telephony/livekit.yaml:/etc/livekit.yaml:ro
+    depends_on: [redis]
+
+  livekit-sip:
+    image: livekit/sip:v1.15.0
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./telephony/sip.yaml:/sip/config.yaml:ro
+    depends_on: [redis, livekit]
+
+  livekit-egress:
+    image: livekit/egress:v1.14.1   # call recordings -> MinIO / S3
+    network_mode: host
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./telephony/egress.yaml:/etc/egress.yaml:ro
+    depends_on: [redis, livekit]
+
+  # SIP registrar for softphones (PortSIP, Zoiper, …): logins are HeyGenAlly users' SIP accounts
+  # (Contact Center → SIP phones). Listens on TELEPHONY_SIP_REGISTRAR_ADDRESS (udp+tcp, default :5080)
+  # and forwards calls to LiveKit SIP. Reads the kamailio_subscriber view in the app database.
+  # SIP registrar (softphone logins). Image: telephony/kamailio/build.sh; standalone deploy:
+  # telephony/kamailio/docker-compose.deploy.yml. DB login: KAMAILIO_DB_URL (read-only role).
+  sip-registrar:
+    build:
+      context: ./telephony/kamailio
+      args: {VERSION: "1.1.0"}
+    image: agentconnect-sip-registrar:1.1.0
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SIP_SERVER_ID: "1"
+      SIP_PEERS: ${SIP_REGISTRAR_PEERS:-}
+    read_only: true
+    tmpfs: ["/run/kamailio:uid=100,gid=101,mode=0750", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on: [livekit-sip]
+
+  # Second registrar sharing the registrations in the database (high availability; see telephony/HA.md).
+  #   SIP_REGISTRAR_PEERS=192.168.31.107:5082 docker compose --profile ha up -d sip-registrar sip-registrar-2
+  sip-registrar-2:
+    profiles: ["ha"]
+    image: agentconnect-sip-registrar:1.1.0
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SIP_SERVER_ID: "2"
+      TELEPHONY_SIP_REGISTRAR_ADDRESS: ${SIP_REGISTRAR_2_ADDRESS:-192.168.31.107:5082}
+      SIP_PEERS: ${SIP_REGISTRAR_PEERS_2:-192.168.31.107:5080}
+    read_only: true
+    tmpfs: ["/run/kamailio:uid=100,gid=101,mode=0750", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on: [livekit-sip]
+
+  # AgentConnect voice process: answers AI / IVR phone calls (app/agents/contact_center_agent.py).
+  # Uses the backend image and .env (LIVEKIT_*, REDIS_URL, DATABASE_URL, speech keys).
+  voice-agent:
+    profiles: ["voice"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.agents.contact_center_agent", "start"]
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on: [livekit, livekit-sip, redis]
+
   # Documentation Service - Docusaurus
   docs:
     build:
@@ -141,3 +245,4 @@ volumes:
   chroma_data:
   agentconnect_db:
   backend_logs:
+  livekit_redis:

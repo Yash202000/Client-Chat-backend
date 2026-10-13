@@ -1,0 +1,56 @@
+# Local / on-prem telephony stack for HeyGenAlly (LiveKit SIP contact centre), standalone version.
+# The same services are also in backend/docker-compose.yml — use one or the other (same host ports).
+# See README.md (this folder) for setup and softphone testing.
+#
+# All services use host networking: LiveKit and LiveKit SIP need large UDP port ranges
+# for media, which is unreliable through Docker's port mapping. Linux hosts only.
+#
+#   cd backend && docker compose -f telephony/docker-compose.yml up -d
+#
+# Ports used on the host:
+#   6379          Redis (LiveKit + HeyGenAlly websocket fan-out)
+#   7880 / 7881   LiveKit API+WebSocket / WebRTC over TCP
+#   50000-60000   LiveKit WebRTC media (UDP)
+#   5060          SIP signalling (UDP+TCP)
+#   10000-20000   SIP media / RTP (UDP)
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # Persistent: LiveKit keeps SIP trunks and dispatch rules in Redis
+    command: ["redis-server", "--port", "6379", "--appendonly", "yes"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - telephony_redis:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    command: ["--config", "/etc/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    depends_on: [redis]
+
+  sip:
+    image: livekit/sip:v1.15.0
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./sip.yaml:/sip/config.yaml:ro   # path the livekit/sip image reads
+    depends_on: [redis, livekit]
+
+  egress:
+    image: livekit/egress:v1.14.1
+    network_mode: host
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]   # headless Chrome used for room-composite recordings
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./egress.yaml:/etc/egress.yaml:ro
+    depends_on: [redis, livekit]
+
+volumes:
+  telephony_redis:

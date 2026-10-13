@@ -13,6 +13,43 @@ class Settings(BaseSettings):
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""
     LIVEKIT_URL: str = ""
+    # Redis used to fan out websocket broadcasts across processes (API workers, voice process).
+    # Empty = single-process mode (broadcasts only reach sockets in the current process).
+    # High availability: all LiveKit nodes of the cluster (comma separated ws:// URLs) and the matching
+    # addresses for browsers; the backend uses a healthy one (services/livekit_nodes.py). Empty = LIVEKIT_URL.
+    LIVEKIT_URLS: str = ""
+    LIVEKIT_PUBLIC_URLS: str = ""
+    REDIS_URL: str = ""
+    # High availability: Redis Sentinel instead of REDIS_URL ("host:26379,host2:26379"); clients follow failovers
+    REDIS_SENTINELS: str = ""
+    REDIS_SENTINEL_MASTER: str = "agentconnect"
+    REDIS_SENTINEL_PASSWORD: str = ""
+    REDIS_PASSWORD: str = ""
+    WS_FANOUT_CHANNEL: str = "agentconnect:ws"
+
+    # Telephony (LiveKit SIP contact centre). LIVEKIT_URL/KEY/SECRET above must point at the
+    # LiveKit server that runs LiveKit SIP (see telephony/README.md).
+    # LiveKit URL browsers use to join calls (defaults to LIVEKIT_URL); e.g. ws://192.168.1.10:7880
+    LIVEKIT_PUBLIC_URL: str = ""
+    # How long an inbound call may ring before LiveKit SIP gives up (direct-to-agent numbers)
+    TELEPHONY_RINGING_TIMEOUT_SECONDS: int = 45
+    TELEPHONY_VOICE_AGENT_NAME: str = "agentconnect-voice"  # voice process registers under this name
+    TELEPHONY_ROOM_PREFIX: str = "call"  # LiveKit names rooms <prefix>_<caller>_<random>
+    # Warm job processes kept ready for incoming calls (each holds the backend + embedding model in memory)
+    TELEPHONY_VOICE_IDLE_PROCESSES: int = 2
+    # Load the local embedding model in each voice process up front (only needed if call flows use it)
+    TELEPHONY_PREWARM_EMBEDDINGS: bool = False
+    # SIP registrar (Kamailio) for softphones such as PortSIP — accounts are system users (sip_accounts)
+    TELEPHONY_SIP_REALM: str = "agentconnect"            # digest realm; changing it requires resetting SIP passwords
+    TELEPHONY_SIP_REGISTRAR_ADDRESS: str = "192.168.31.107:5080"  # what softphones use as SIP server (shown in the UI)
+    # AI -> human handoff on calls: how long the caller holds before the AI takes the call back
+    TELEPHONY_HANDOFF_WAIT_SECONDS: int = 90
+    TELEPHONY_DEEPGRAM_MODEL: str = "nova-3"
+    # Who may send calls into inbound trunks: comma-separated IPs/CIDRs (softphone or SIP provider).
+    # Empty = no IP restriction (dev only); use auth username/password or IPs in production.
+    TELEPHONY_SIP_ALLOWED_ADDRESSES: str = ""
+    TELEPHONY_SIP_AUTH_USERNAME: str = ""
+    TELEPHONY_SIP_AUTH_PASSWORD: str = ""
     FRONTEND_URL: str
     BACKEND_URL: str = ""  # Public URL of this backend (used for widget script URLs)
     WHATSAPP_VERIFY_TOKEN: str = ""

@@ -64,6 +64,15 @@ class GraphExecutionEngine:
             else:
                 return None
 
+        elif node_type == 'business_hours':
+            # open / closed / holiday handles; a missing "holiday" edge falls back to "closed"
+            state = result.get('output') if result else None
+            for handle in ([state, 'closed'] if state == 'holiday' else [state]):
+                edge = next((e for e in self.edges if e['source'] == current_node_id and e.get('sourceHandle') == handle), None)
+                if edge:
+                    return edge['target']
+            return None
+
         elif node_type == 'question_classifier':
             # Routes based on LLM classification result
             if result and 'output' in result:

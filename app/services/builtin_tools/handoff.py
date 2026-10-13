@@ -26,6 +26,14 @@ async def execute_handoff_tool(db: Session, session_id: str, parameters: dict):
 
     # Get the session to find the agent
     session = conversation_session_service.get_session(db, session_id)
+
+    # Contact-centre phone call: ring the number's agents instead of creating a meeting room
+    if session and session.channel == "voice":
+        from app.services import call_service
+        result = await call_service.request_human(db, session.conversation_id, reason=summary or reason)
+        if result is not None:
+            result["message"] = "The caller is being connected to a human agent. Tell them briefly to hold."
+            return {"result": result}
     if not session or not session.agent_id:
         team_name = "Support"  # Default fallback
     else:

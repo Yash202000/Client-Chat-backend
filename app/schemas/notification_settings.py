@@ -5,6 +5,7 @@ class NotificationSettingsBase(BaseModel):
     email_notifications_enabled: bool
     slack_notifications_enabled: bool
     auto_assignment_enabled: bool
+    suggested_replies_enabled: bool
 
 class NotificationSettingsCreate(NotificationSettingsBase):
     pass

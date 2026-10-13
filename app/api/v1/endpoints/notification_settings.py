@@ -16,7 +16,8 @@ def read_notification_settings(db: Session = Depends(get_db), current_user: mode
         default_settings = schemas_notification_settings.NotificationSettingsCreate(
             email_notifications_enabled=True,
             slack_notifications_enabled=False,
-            auto_assignment_enabled=True
+            auto_assignment_enabled=True,
+            suggested_replies_enabled=True
         )
         return notification_settings_service.create_notification_settings(db, current_user.company_id, default_settings)
     return settings

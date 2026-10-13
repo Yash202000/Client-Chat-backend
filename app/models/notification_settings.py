@@ -11,5 +11,6 @@ class NotificationSettings(Base):
     email_notifications_enabled = Column(Boolean, default=True)
     slack_notifications_enabled = Column(Boolean, default=False)
     auto_assignment_enabled = Column(Boolean, default=True)
+    suggested_replies_enabled = Column(Boolean, default=True)
 
     company = relationship("Company")

@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from sqlalchemy.orm import Session
 from app.services import agent_service, chat_service, tool_service, tool_execution_service, workflow_execution_service, workflow_service, widget_settings_service, credential_service, conversation_session_service, agent_selection_service
 from app.services.system_config_service import is_managed_mode, get_system_credential
@@ -316,7 +317,8 @@ async def _get_tools_for_agent(agent, db: Session = None, company_id: int = None
 
     return tool_definitions
 
-async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str, _trace: dict = None):
+async def generate_agent_response(db: Session, agent_id: int, session_id: str, boradcast_session_id: str, company_id: int, user_message: str, _trace: dict = None,
+                                  voice: bool = False, voice_language: Optional[str] = None):
     """
     Orchestrates the agent's response, handling tool use and broadcasting messages.
     - If a tool is called, it broadcasts a 'tool_use' message, executes the tool,
@@ -457,7 +459,17 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
         )
 
         # Add contact collection instruction - emphasize more strongly for first message
-        if is_first_message:
+        if voice:
+            # Live phone call: the caller's number is already known, answers are spoken aloud
+            system_prompt += (
+                "9. **LIVE PHONE CALL**: You are speaking with a caller on the phone. Their phone number is already known, "
+                "so do NOT ask for name, email or phone number unless a tool requires it. "
+                "Reply in one to three short spoken sentences. Never use markdown, bullet points, tables, emojis, URLs or code. "
+                "Say numbers and dates the way a person would say them aloud. Ask one question at a time.\n"
+            )
+            if voice_language:
+                system_prompt += f"   Reply in the caller's language ({voice_language}) unless the caller switches language.\n"
+        elif is_first_message:
             system_prompt += (
                 "9. **CONTACT INFORMATION COLLECTION (CRITICAL - THIS IS THE FIRST MESSAGE)**: \n"
                 "   THIS IS THE USER'S FIRST MESSAGE. You MUST immediately call 'get_contact_info' BEFORE responding to anything else.\n"
@@ -503,7 +515,7 @@ async def generate_agent_response(db: Session, agent_id: int, session_id: str, b
             tool.get("function", {}).get("name") == "get_contact_info"
             for tool in generic_tools
         )
-        if is_first_message and agent.llm_provider == "openai" and has_get_contact_info:
+        if is_first_message and agent.llm_provider == "openai" and has_get_contact_info and not voice:
             # Force OpenAI to call get_contact_info on first message
             tool_choice_param = {
                 "type": "function",

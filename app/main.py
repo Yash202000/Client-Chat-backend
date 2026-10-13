@@ -314,6 +314,22 @@ async def on_startup():
     asyncio.create_task(call_timeout_service.start())
     print("[Startup] Call timeout service started (timeout: 30s, check interval: 10s)")
 
+    # Contact-centre ACD: offers queued phone calls to agents, ends expired wrap-ups
+    from app.services.acd_service import run_dispatcher
+    asyncio.create_task(run_dispatcher())
+    print("[Startup] Contact-centre call dispatcher started")
+    from app.services.qa_retention_service import run_retention_loop
+    asyncio.create_task(run_retention_loop())
+
+    # Fan out websocket broadcasts through Redis so other processes (voice process, extra workers) reach browsers
+    from app.core.redis_client import redis_enabled
+    if redis_enabled():
+        try:
+            await manager.start_fanout(settings.WS_FANOUT_CHANNEL)
+            print(f"[Startup] WebSocket Redis fan-out enabled ({settings.WS_FANOUT_CHANNEL})")
+        except Exception as e:
+            print(f"[Startup] WebSocket Redis fan-out unavailable, using in-process only: {e}")
+
 @app.on_event("shutdown")
 async def on_shutdown():
     print("Server is shutting down...")
@@ -326,6 +342,8 @@ async def on_shutdown():
     if scheduler.running:
         scheduler.shutdown(wait=False)
         print("[Shutdown] Scheduler stopped")
+
+    await manager.stop_fanout()
 
     # Disconnect all WebSocket clients
     await manager.disconnect_all()

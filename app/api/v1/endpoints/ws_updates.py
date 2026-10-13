@@ -58,6 +58,10 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Company mismatch")
         return
 
+    # Tag this connection with the authenticated user so disconnect handling can tell
+    # whether the user still holds another live connection (e.g. from a different page/tab)
+    manager.tag_user(websocket, channel_id, current_user.id)
+
     # Cancel any pending offline task (user reconnected)
     user_service.cancel_pending_offline(current_user.id)
 
@@ -82,6 +86,7 @@ async def websocket_endpoint(
     try:
         while True:
             data = await websocket.receive_text()
+            manager.update_activity(channel_id, websocket)
 
             # Handle ping/pong messages to keep connection alive
             try:
@@ -96,12 +101,15 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(websocket, channel_id)
 
-        # Mark user as inactive in DB so schedule_offline_update won't skip the "online" check
-        db = SessionLocal()
-        try:
-            user_service.update_user_presence(db, user_id=current_user.id, status="inactive")
-        finally:
-            db.close()
+        # Only mark the user inactive if this was their last live connection in this
+        # channel — otherwise another page/tab (e.g. AppLayout's persistent socket)
+        # is still open and the user is still genuinely online.
+        if not manager.has_user_connection_by_id(channel_id, current_user.id):
+            db = SessionLocal()
+            try:
+                user_service.update_user_presence(db, user_id=current_user.id, status="inactive")
+            finally:
+                db.close()
 
         # Schedule delayed offline update (allows reconnection within grace period)
         await user_service.schedule_offline_update(SessionLocal, current_user.id)

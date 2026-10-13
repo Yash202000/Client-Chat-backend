@@ -47,6 +47,14 @@ class CallQueueEntry(Base):
 
     extra = Column(JSONB, nullable=True)
 
+    # Contact centre ACD (LiveKit SIP calls)
+    queue_id = Column(Integer, ForeignKey("call_queues.id", ondelete="SET NULL"), nullable=True)
+    voice_call_id = Column(Integer, ForeignKey("voice_calls.id", ondelete="CASCADE"), nullable=True)
+    offered_to_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    offer_expires_at = Column(DateTime, nullable=True)
+    offer_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    declined_user_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
+
     # Relationships
     company = relationship("Company")
     session = relationship("ConversationSession", foreign_keys=[session_id])
