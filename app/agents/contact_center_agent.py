@@ -29,31 +29,10 @@ from app.core.config import settings
 
 logger = logging.getLogger("contact-center-voice")
 
-OPENAI_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"}
-GREETING = {
-    "en": "Hello, thank you for calling. How can I help you today?",
-    "ar": "مرحباً، شكراً لاتصالك. كيف يمكنني مساعدتك اليوم؟",
-}
-HOLD = {
-    "en": "Please hold while I connect you to a member of our team.",
-    "ar": "يرجى الانتظار بينما أقوم بتحويلك إلى أحد أعضاء فريقنا.",
-}
-STILL_HOLDING = {
-    "en": "Thank you for holding. Someone will be with you shortly.",
-    "ar": "شكراً لانتظارك. سيكون أحد أعضاء فريقنا معك قريباً.",
-}
-NO_AGENT = {
-    "en": "Sorry, all of our team members are busy right now. I can keep helping you, or you can call back later.",
-    "ar": "عذراً، جميع أعضاء فريقنا مشغولون حالياً. يمكنني مواصلة مساعدتك، أو يمكنك الاتصال لاحقاً.",
-}
-
-
-def _lang(code: Optional[str]) -> str:
-    return (code or "en").split("-")[0].lower()
-
-
-def _pick(texts: dict, language: str) -> str:
-    return texts.get(_lang(language), texts["en"])
+# Fixed phrases live with the pre-generated prompts so both use exactly the same text
+from app.services.tts_prompt_service import (  # noqa: E402
+    GREETING, HOLD, NO_AGENT, STILL_HOLDING, lang as _lang, pick as _pick,
+)
 
 
 # ---------------------------------------------------------------- blocking DB helpers (run via to_thread)
@@ -70,9 +49,9 @@ def _db_call(fn, *args, **kwargs):
 
 def _open_call(db, phone_number_id: Optional[int], room_name: str, attrs: dict) -> Optional[dict]:
     """Load the number + its Agent and create (or find) the call record; the AI has answered it."""
-    from app.models.agent import Agent as AgentModel
     from app.models.phone_number import PhoneNumber
     from app.services import call_service
+    from app.services import tts_prompt_service as tts_prompts
 
     phone = db.query(PhoneNumber).filter(PhoneNumber.id == phone_number_id).first() if phone_number_id else None
     if not phone:
@@ -82,7 +61,8 @@ def _open_call(db, phone_number_id: Optional[int], room_name: str, attrs: dict) 
         caller=attrs.get("sip.phoneNumber"), called=attrs.get("sip.trunkPhoneNumber"),
     )
     call_service.mark_answered(db, call, None, actor_type="ai")
-    agent = db.query(AgentModel).filter(AgentModel.id == phone.default_agent_id).first() if phone.default_agent_id else None
+    profile = tts_prompts.speech_profile(db, phone)
+    agent = profile["agent"]
     return {
         "call": call_service.serialize(call),
         "created": created,
@@ -90,32 +70,21 @@ def _open_call(db, phone_number_id: Optional[int], room_name: str, attrs: dict) 
         "company_id": phone.company_id,
         "conversation_id": call.conversation_id,
         "entry_workflow_id": phone.entry_workflow_id,
-        "language": _lang(phone.language or (agent.language if agent else None)),
+        "language": profile["language"],
         "agent": {
             "id": agent.id, "name": agent.name, "welcome_message": agent.welcome_message,
             "stt_provider": agent.stt_provider, "tts_provider": agent.tts_provider, "voice_id": agent.voice_id,
         } if agent else None,
         "keys": _speech_keys(db, phone.company_id),
+        "tts": {"provider": profile["provider"], "voice": profile["voice"]},  # the Agent's TTS settings
+        "stt": profile["stt_provider"],  # the Agent's STT provider
+        "prompts": tts_prompts.ready_map(db, phone.company_id, profile["provider"], profile["voice"]),
     }
 
 
 def _speech_keys(db, company_id: int) -> dict:
-    """Company credentials (vault) first, then system keys from settings."""
-    from app.services import credential_service
-
-    keys = {}
-    for service in ("openai", "deepgram"):
-        try:
-            cred = credential_service.get_credential_by_service_name(db, service, company_id)
-            if cred:
-                keys[service] = credential_service.get_decrypted_credential(db, cred.id, company_id)
-        except Exception:
-            logger.exception(f"could not read {service} credential for company {company_id}")
-    if not keys.get("openai") and settings.OPENAI_API_KEY:
-        keys["openai"] = settings.OPENAI_API_KEY
-    if not keys.get("deepgram") and settings.DEEPGRAM_API_KEY:
-        keys["deepgram"] = settings.DEEPGRAM_API_KEY
-    return {k: v for k, v in keys.items() if v}
+    from app.services import tts_prompt_service
+    return tts_prompt_service.speech_keys(db, company_id)
 
 
 def _record(db, call_id: int, type: str, actor_type: str = "system", payload: Optional[dict] = None):
@@ -209,23 +178,60 @@ async def _fetch_audio(url: str) -> Optional[str]:
         return None
 
 
+async def _stored_prompt(prompts: dict, speech: dict, text: str) -> Optional[str]:
+    """Local file of the pre-generated speech for exactly this text, if there is one (tts_prompt_service)."""
+    if not prompts or not text.strip():
+        return None
+    from app.services import tts_prompt_service
+    object_key = prompts.get(tts_prompt_service.cache_key(speech["provider"], speech["voice"], text))
+    if not object_key:
+        return None
+    return await asyncio.to_thread(tts_prompt_service.local_file, object_key)
+
+
+def _say_text(session: AgentSession, text: str, path: Optional[str]):
+    """Speak text: from the stored file when there is one, else live text-to-speech."""
+    if path:
+        from livekit.agents.utils.audio import audio_frames_from_file
+        return session.say(text, audio=audio_frames_from_file(path))
+    return session.say(text)
+
+
 # ---------------------------------------------------------------- speech providers
 
 def _build_speech(info: dict):
-    """STT/TTS from the Agent's settings and the company's keys. Returns (stt, tts); either may be None."""
-    keys, agent, language = info["keys"], info["agent"] or {}, info["language"]
-    stt = tts = None
-    if (agent.get("stt_provider") or "deepgram") == "deepgram" and keys.get("deepgram"):
+    """STT/TTS from the Agent's voice settings and the company's keys. Returns (stt, tts); either may be None."""
+    return _build_stt(info["stt"], info["language"], info["keys"]), _build_tts(info["tts"], info["keys"])
+
+
+def _build_stt(provider: str, language: str, keys: dict):
+    """The Agent's STT provider; None if it needs a key we don't have (the call then runs keypad-only)."""
+    from app.services.tts_prompt_service import stt_available
+
+    if not stt_available(provider, keys):
+        return None
+    if provider == "deepgram":
         from livekit.plugins import deepgram
-        stt = deepgram.STT(model=settings.TELEPHONY_DEEPGRAM_MODEL, language=language, api_key=keys["deepgram"])
-    elif keys.get("openai"):
-        from livekit.plugins import openai
-        stt = openai.STT(language=language, api_key=keys["openai"])
-    if keys.get("openai"):
-        from livekit.plugins import openai
-        voice = agent.get("voice_id") if agent.get("voice_id") in OPENAI_VOICES else "alloy"
-        tts = openai.TTS(voice=voice, api_key=keys["openai"])
-    return stt, tts
+        return deepgram.STT(model=settings.TELEPHONY_DEEPGRAM_MODEL, language=language, api_key=keys["deepgram"])
+    if provider == "groq":
+        from livekit.plugins import groq
+        return groq.STT(model=settings.GROQ_STT_MODEL, language=language, api_key=keys["groq"])
+    from livekit.plugins import openai
+    if provider == "localai":  # OpenAI-compatible Whisper, no key
+        return openai.STT(model=settings.LOCALAI_STT_MODEL, language=language, base_url=settings.LOCALAI_STT_URL,
+                          api_key="localai")
+    if provider == "openai":
+        return openai.STT(model=settings.OPENAI_STT_MODEL, language=language, api_key=keys["openai"])
+    logger.error(f"unknown speech-to-text provider {provider!r}")
+    return None
+
+
+def _build_tts(speech: dict, keys: dict):
+    """The Agent's TTS provider / voice through the shared TTSService; None if it needs a key we don't have."""
+    if speech["provider"] in ("openai", "groq") and not keys.get(speech["provider"]):
+        return None
+    from app.agents.provider_tts import ProviderTTS
+    return ProviderTTS(speech["provider"], speech["voice"], keys)
 
 
 # ---------------------------------------------------------------- the call
@@ -269,7 +275,9 @@ class PhoneCall:
                                                   add_to_chat_ctx=False)
                         continue
                 if text.strip():
-                    handle = self.session.say(text)
+                    path = await _stored_prompt(self.info.get("prompts"), self.info["tts"], text)
+                    logger.info(f"[call {self.call_id}] say ({'stored' if path else 'live ' + self.info['tts']['provider']}): {text[:60]!r}")
+                    handle = _say_text(self.session, text, path)
             except RuntimeError:
                 # audio session already closed (e.g. speech provider failure); call actions still run
                 logger.warning(f"[call {self.call_id}] could not speak (audio session closed): {text[:60]!r}")
@@ -563,6 +571,23 @@ def _hold_status(db, call_id: int) -> dict:
             "on_hold": call.hold_started_at is not None, "language": None}
 
 
+def _hold_speech(db, meta: dict) -> tuple[dict, dict, dict]:
+    """Hold mode speaks with the number's Agent voice: (tts settings, stored prompts, keys)."""
+    from app.models.phone_number import PhoneNumber
+    from app.services import tts_prompt_service
+
+    company_id = meta.get("company_id")
+    phone = db.query(PhoneNumber).filter(PhoneNumber.id == meta.get("phone_number_id")).first() \
+        if meta.get("phone_number_id") else None
+    if phone:
+        profile = tts_prompt_service.speech_profile(db, phone)
+        speech = {"provider": profile["provider"], "voice": profile["voice"]}
+    else:
+        speech = {"provider": settings.TELEPHONY_TTS_DEFAULT_PROVIDER, "voice": "default"}
+    prompts = tts_prompt_service.ready_map(db, company_id, speech["provider"], speech["voice"])
+    return speech, prompts, _speech_keys(db, company_id)
+
+
 async def hold_company(ctx: JobContext, meta: dict) -> None:
     """
     "hold" mode: keep a waiting caller company (blind transfer in progress, or agent consulting).
@@ -570,11 +595,11 @@ async def hold_company(ctx: JobContext, meta: dict) -> None:
     """
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     call_id = meta.get("call_id")
-    info_keys = await asyncio.to_thread(_db_call, _speech_keys, meta.get("company_id"))
+    speech, prompts, keys = await asyncio.to_thread(_db_call, _hold_speech, meta)
     session = None
-    if info_keys.get("openai"):
-        from livekit.plugins import openai
-        session = AgentSession(tts=openai.TTS(voice="alloy", api_key=info_keys["openai"]))
+    hold_tts = _build_tts(speech, keys)
+    if hold_tts is not None:
+        session = AgentSession(tts=hold_tts)
         try:
             await session.start(room=ctx.room, agent=Agent(instructions="hold"))
         except Exception:
@@ -594,8 +619,9 @@ async def hold_company(ctx: JobContext, meta: dict) -> None:
             break
         if session is not None and time.monotonic() - said_at >= interval:
             text, interval = await _waiting_message(call_id, language, first)
+            path = await _stored_prompt(prompts, speech, text)
             try:
-                session.say(text)
+                _say_text(session, text, path)
             except RuntimeError:
                 session = None
             first, said_at = False, time.monotonic()
@@ -646,9 +672,9 @@ async def entrypoint(ctx: JobContext):
     ctx.room.on("participant_disconnected", on_participant_disconnected)
 
     stt, tts = _build_speech(info)
-    if stt is None or tts is None:
-        # Without speech keys the AI can't talk: hand the caller straight to a human
-        logger.error(f"[call {call.call_id}] no speech-to-text / text-to-speech key (OpenAI or Deepgram); ringing agents")
+    if tts is None:
+        # Without a text-to-speech key the AI can't talk: hand the caller straight to a human
+        logger.error(f"[call {call.call_id}] no {info['tts']['provider']} key for text-to-speech; ringing agents")
         from app.core.database import SessionLocal
         from app.services import call_service
         db = SessionLocal()
@@ -658,7 +684,13 @@ async def entrypoint(ctx: JobContext):
             db.close()
         call.waiting_for_human = True
     else:
+        if stt is None:
+            # Can't listen: the IVR still works with the keypad; noise must not cut prompts short
+            logger.warning(f"[call {call.call_id}] no {info['stt']} key for speech-to-text; keypad only")
+            await asyncio.to_thread(_db_call, _record, call.call_id, "stt_unavailable", "system",
+                                    {"provider": info["stt"]})
         call.session = AgentSession(stt=stt, tts=tts, vad=ctx.proc.userdata.get("vad"),
+                                    allow_interruptions=stt is not None,
                                     min_endpointing_delay=0.5, max_endpointing_delay=4.0)
         call.session.on("close", lambda ev: asyncio.create_task(call.on_session_closed(ev.error or ev.reason)))
         await call.session.start(room=ctx.room, agent=CallAgent(call))

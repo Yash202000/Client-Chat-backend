@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from app.crud import crud_published_widget_settings
 from app.services import widget_settings_service
 from app.schemas import widget_settings as schemas_widget_settings
 from app.services.template_ai_service import TemplateAIService, LLM_PROVIDERS
+from app.services.system_config_service import get_system_credential, is_managed_mode, system_llm_providers
 from app.services import credential_service
 from app.services.vault_service import vault_service
 
@@ -20,7 +21,8 @@ router = APIRouter()
 
 class AgentGenerateRequest(BaseModel):
     description: str
-    credential_id: int
+    credential_id: Optional[int] = None  # vault credential (self-hosted)
+    provider: Optional[str] = None       # system key provider (MANAGED_CREDENTIALS)
 
 
 class AgentGenerateResponse(BaseModel):
@@ -36,12 +38,20 @@ async def generate_agent_config(
     current_user: models_user.User = Depends(get_current_active_user)
 ):
     """Generate agent name, prompt, and welcome message from a natural language description."""
-    credential = credential_service.get_credential(db, request.credential_id, current_user.company_id)
-    if not credential:
-        raise HTTPException(status_code=404, detail="Credential not found")
-
-    api_key = vault_service.decrypt(credential.encrypted_credentials)
-    provider = credential.service.lower()
+    if request.credential_id is not None:
+        credential = credential_service.get_credential(db, request.credential_id, current_user.company_id)
+        if not credential:
+            raise HTTPException(status_code=404, detail="Credential not found")
+        api_key = vault_service.decrypt(credential.encrypted_credentials)
+        provider = credential.service.lower()
+    elif is_managed_mode():
+        # Credentials are managed at system level: the vault is locked, use the system key
+        provider = (request.provider or "").lower() or next(iter(system_llm_providers()), "")
+        api_key = get_system_credential(provider) if provider else None
+        if not api_key:
+            raise HTTPException(status_code=400, detail=f"No system API key configured for '{provider or 'any provider'}'")
+    else:
+        raise HTTPException(status_code=400, detail="Select an API credential")
 
     if provider not in LLM_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
@@ -183,10 +193,13 @@ def read_agent(agent_id: int, db: Session = Depends(get_db), current_user: model
     return db_agent
 
 @router.put("/{agent_id}", response_model=schemas_agent.Agent, dependencies=[Depends(require_permission("agent:update"))])
-def update_agent(agent_id: int, agent: schemas_agent.AgentUpdate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+def update_agent(agent_id: int, agent: schemas_agent.AgentUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     db_agent = agent_service.update_agent(db, agent_id=agent_id, agent=agent, company_id=current_user.company_id)
     if db_agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if {"tts_provider", "voice_id", "welcome_message", "language"} & agent.model_dump(exclude_unset=True).keys():
+        from app.services import tts_prompt_service
+        background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return db_agent
 
 @router.delete("/{agent_id}", dependencies=[Depends(require_permission("agent:delete"))])

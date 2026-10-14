@@ -32,8 +32,11 @@ async def get_system_config(
     """
     managed_mode = is_managed_mode()
 
+    from app.services.system_config_service import system_llm_providers
     return {
         "managed_credentials": managed_mode,
+        # providers with a system key that can generate agents (managed mode only)
+        "system_llm_providers": system_llm_providers() if managed_mode else [],
         "credentials_editable": not managed_mode,
         "deployment_mode": settings.DEPLOYMENT_MODE
     }

@@ -45,6 +45,26 @@ class Settings(BaseSettings):
     # AI -> human handoff on calls: how long the caller holds before the AI takes the call back
     TELEPHONY_HANDOFF_WAIT_SECONDS: int = 90
     TELEPHONY_DEEPGRAM_MODEL: str = "nova-3"
+    # Speech-to-text for calls on numbers without an Agent; otherwise the Agent's stt_provider is used
+    # (deepgram | openai | groq | localai). Without a working key the call runs keypad-only.
+    TELEPHONY_STT_DEFAULT_PROVIDER: str = "groq"
+    GROQ_STT_MODEL: str = "whisper-large-v3-turbo"
+    OPENAI_STT_MODEL: str = "gpt-4o-mini-transcribe"
+    # LocalAI speech-to-text (OpenAI-compatible /audio/transcriptions, no key)
+    LOCALAI_STT_URL: str = "http://localhost:8082/v1"
+    LOCALAI_STT_MODEL: str = "whisper-1"
+    # Text-to-speech for calls on numbers without an Agent; otherwise the Agent's TTS provider / voice is used
+    TELEPHONY_TTS_DEFAULT_PROVIDER: str = "voice_engine"
+    # Groq text-to-speech (TTSService provider "groq"): model picked from the text (Arabic script -> AR).
+    # Default voices are used when the Agent's voice_id is "default".
+    GROQ_TTS_MODEL_EN: str = "canopylabs/orpheus-v1-english"
+    GROQ_TTS_MODEL_AR: str = "canopylabs/orpheus-arabic-saudi"
+    GROQ_TTS_VOICE_EN: str = "troy"
+    GROQ_TTS_VOICE_AR: str = "fahad"
+    # On a rate limit (on_demand tier: 10 requests/min per model) wait and retry up to this many seconds in total
+    GROQ_TTS_MAX_RETRY_WAIT: float = 60
+    # Pre-generate speech for fixed IVR prompts / greetings / hold messages (tts_prompt_service)
+    TELEPHONY_TTS_CACHE: bool = True
     # Who may send calls into inbound trunks: comma-separated IPs/CIDRs (softphone or SIP provider).
     # Empty = no IP restriction (dev only); use auth username/password or IPs in production.
     TELEPHONY_SIP_ALLOWED_ADDRESSES: str = ""

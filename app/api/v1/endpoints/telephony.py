@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from livekit import api
 from sqlalchemy.orm import Session
@@ -27,7 +27,7 @@ from app.schemas.telephony import (
 )
 from app.services import (
     acd_service, call_service, livekit_nodes, livekit_sip_service, missed_call_service, outbound_service, recording_service,
-    transfer_service,
+    transfer_service, tts_prompt_service,
 )
 from app.services.connection_manager import manager
 
@@ -84,6 +84,7 @@ def list_phone_numbers(
 @router.post("/phone-numbers", response_model=PhoneNumberResponse)
 async def create_phone_number(
     data: PhoneNumberCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("telephony:manage")),
 ):
@@ -100,6 +101,7 @@ async def create_phone_number(
     log_action(db, current_user.company_id, current_user.id, "phone_number.created", entity_type="phone_number",
                entity_id=phone.id, entity_name=phone.number, changes=data.model_dump())
     db.commit()
+    background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return await _sync(db, phone)
 
 
@@ -107,6 +109,7 @@ async def create_phone_number(
 async def update_phone_number(
     phone_id: int,
     data: PhoneNumberUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("telephony:manage")),
 ):
@@ -120,6 +123,7 @@ async def update_phone_number(
                entity_id=phone.id, entity_name=phone.number, changes=changes)
     db.commit()
     db.refresh(phone)
+    background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return await _sync(db, phone)
 
 
@@ -135,6 +139,7 @@ async def resync_phone_number(
 @router.delete("/phone-numbers/{phone_id}")
 async def delete_phone_number(
     phone_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("telephony:manage")),
 ):
@@ -147,7 +152,46 @@ async def delete_phone_number(
                entity_id=phone.id, entity_name=phone.number)
     db.delete(phone)
     db.commit()
+    background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return {"ok": True}
+
+
+@router.get("/tts-prompts")
+def tts_prompts_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("telephony:read")),
+):
+    """Per number: the TTS provider / voice its calls use (its Agent's) and how many fixed prompts are stored."""
+    return tts_prompt_service.status(db, current_user.company_id)
+
+
+class TtsPreviewRequest(BaseModel):
+    provider: str = Field(..., pattern="^(openai|localai|voice_engine|groq)$")
+    voice: Optional[str] = None
+    text: str = Field("Hello, thank you for calling. How can I help you today?", min_length=1, max_length=500)
+
+
+@router.post("/tts-prompts/preview")
+async def tts_prompts_preview(
+    data: TtsPreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("telephony:read")),
+):
+    """Speak a sample with a provider / voice, to check it before using it on calls."""
+    from fastapi import Response
+    try:
+        audio, mime = await tts_prompt_service.preview(db, current_user.company_id, data.provider, data.voice, data.text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return Response(content=audio, media_type=mime)
+
+
+@router.post("/tts-prompts/sync")
+async def tts_prompts_sync(current_user: User = Depends(require_permission("telephony:manage"))):
+    """Generate speech for new / changed fixed prompts now (and retry failed ones); removes unused ones."""
+    if not settings.TELEPHONY_TTS_CACHE:
+        raise HTTPException(status_code=400, detail="Pre-generated prompts are disabled (TELEPHONY_TTS_CACHE)")
+    return await tts_prompt_service.sync_company(current_user.company_id)
 
 
 @router.get("/status", response_model=TelephonyStatusResponse)

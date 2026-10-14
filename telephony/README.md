@@ -188,6 +188,7 @@ connected to the company websocket receive `voice_call_started`, `voice_call_dtm
 | `python -m scripts.telephony_turn_test` | conversation turns: IVR nodes, agent replies, handoff (no audio) |
 | `python -m scripts.telephony_acd_test` | queues, agent states, wrap-up, shifts, manual records, transfer rules (no audio) |
 | `python -m scripts.telephony_m9_test` | wait time estimate + announcement text; recording pause / resume through Egress into MinIO (parts, audit) |
+| `python -m scripts.tts_prompt_test [--live]` | pre-generated IVR prompts: fixed texts found, stored once in MinIO, played instead of live speech |
 | `python -m scripts.permissions_test` | audit log, security logs, data export, settings / ticket admin endpoints refuse users without the permission |
 
 ### Loopback details
@@ -204,13 +205,47 @@ python -m scripts.telephony_loopback_test --sip-host <host-LAN-ip>
 
 Needs the stack, `REDIS_URL` and a running voice process. SIPp scenarios for load tests come in M6.
 
+## Pre-generated prompts (fixed IVR text)
+
+Fixed texts a caller can hear — node text in a number's entry workflow and its sub-workflows (response,
+play_audio, prompt + keypad options, get_digits, listen, transfer / overflow, hang-up), the Agent's welcome
+message, and the greeting / hold phrases — are turned into speech once and stored in MinIO
+(`tts-prompts/<company>/<sha256>.<mp3|wav|ogg>`, table `tts_prompts`). Calls play the stored file; anything else
+(AI replies, text with `{{placeholders}}`) is spoken live. Recorded prompts (`audio_url`) always win.
+
+- Refreshed automatically (background) when a workflow, phone number or the Agent's voice / welcome / language changes.
+  Editing a text or changing the voice creates a new file and removes the old one.
+- Status: `GET /api/v1/telephony/tts-prompts`; generate now / retry failed: `POST /api/v1/telephony/tts-prompts/sync`
+  or `python -m scripts.tts_prompt_sync [--company-id N]` (e.g. after the provider was down or a key was fixed).
+- **Provider / voice**: calls (live speech, stored prompts and hold messages) use the number's Agent's TTS provider +
+  voice through the shared `TTSService` (`openai`, `localai`, `voice_engine`, `groq`). Groq picks its model from the text:
+  Arabic script → `GROQ_TTS_MODEL_AR` (Orpheus Saudi Arabic), otherwise `GROQ_TTS_MODEL_EN`; voice `default` →
+  `GROQ_TTS_VOICE_AR` / `GROQ_TTS_VOICE_EN`. The Groq org admin must accept each model's terms in the Groq console once. Check and change it in
+  Contact Center → **Voice prompts** (with Preview) or Agent settings → Voice Configuration. Numbers without an
+  Agent use `TELEPHONY_TTS_DEFAULT_PROVIDER`.
+- Settings: `TELEPHONY_TTS_CACHE` (on/off), `TELEPHONY_TTS_DEFAULT_PROVIDER`.
+
+## Understanding the caller (speech-to-text)
+
+Callers can talk over a prompt (it stops) and answer by voice: a prompt menu matches the spoken option name,
+a Listen node stores the answer, after the workflow the Agent replies. Get-digits nodes are keypad only.
+
+- Calls listen with the number's Agent **STT provider** (`deepgram`, `openai`, `groq` Whisper, `localai` Whisper —
+  no key, phone calls only); numbers without an Agent use `TELEPHONY_STT_DEFAULT_PROVIDER` (groq). Change it in
+  Contact Center → **Voice prompts** ("Listens with") or Agent settings → STT Provider.
+- No key for that provider → the call runs **keypad only** (event `stt_unavailable`; noise doesn't cut prompts).
+  A key that is set but rejected still fails mid-call → handed to a human (`ai_failed`).
+- Settings: `GROQ_STT_MODEL`, `OPENAI_STT_MODEL`, `TELEPHONY_DEEPGRAM_MODEL`, `LOCALAI_STT_URL`, `LOCALAI_STT_MODEL`.
+- Check: `python -m scripts.phone_stt_test [--stt groq localai deepgram openai]` (speaks a sentence, transcribes it).
+
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
 | Softphone gets 404 / no answer | Number synced (**Live** badge)? `/api/v1/telephony/status` shows trunks ≥ 1? |
 | 403 from LiveKit SIP | Your IP not in `TELEPHONY_SIP_ALLOWED_ADDRESSES` |
-| Answered but silent | `OPENAI_API_KEY` invalid (M0 greeting only); firewall blocking 10000–20000/UDP |
+| Answered but silent | Voice process not running; Agent's TTS key invalid (Voice prompts → Preview); firewall blocking 10000–20000/UDP |
+| Speaking hands the call to a human | Agent's STT key rejected — `python -m scripts.phone_stt_test --stt <provider>` |
 | Keys not detected | Softphone DTMF mode must be RFC 2833 |
 | Calls take 10+ s to answer | Voice process still warming up, or `TELEPHONY_VOICE_IDLE_PROCESSES=0` |
 | Webhook 401 in backend log | Backend `LIVEKIT_API_KEY/SECRET` don't match `livekit.yaml` |

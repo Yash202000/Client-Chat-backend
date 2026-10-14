@@ -53,3 +53,9 @@ def get_system_credential(service: str) -> Optional[str]:
         logger.warning(f"Managed mode enabled but no system credential configured for {service}")
 
     return credential if credential else None
+
+
+def system_llm_providers() -> list[str]:
+    """LLM providers usable for agent generation that have a system key (managed mode)."""
+    from app.services.template_ai_service import LLM_PROVIDERS
+    return [p for p in LLM_PROVIDERS if get_system_credential(p)]

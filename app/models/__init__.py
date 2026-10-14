@@ -75,7 +75,7 @@ from app.models.call_event import CallEvent, CallLeg
 from app.models.contact_center import (
     CallQueue, CallQueueMember, AgentState, AgentStateHistory, AgentReasonCode, DispositionCode,
     Shift, ShiftAssignment, Extension, DirectoryEntry,
-    ContactCenterSettings, BlockedNumber, CallPurposeCode, MissedCallTask, CallbackAttempt, QaForm, QaEvaluation, SipAccount,
+    ContactCenterSettings, BlockedNumber, CallPurposeCode, MissedCallTask, CallbackAttempt, QaForm, QaEvaluation, SipAccount, TtsPrompt,
 )
 
 # Security Models

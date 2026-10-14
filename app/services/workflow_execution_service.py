@@ -1986,7 +1986,7 @@ Return only valid JSON, nothing else:"""
             "depth": current_depth + 1
         }
 
-    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None, agent_id: int = None, execution_trace: list = None):
+    async def execute_workflow(self, user_message: str, company_id: int, workflow_id: int = None, workflow: Workflow = None, conversation_id: str = None, attachments: list = None, option_key: str = None, agent_id: int = None, execution_trace: list = None, carried_messages: list = None):
         if workflow_id:
             workflow_obj = workflow_service.get_workflow(self.db, workflow_id, company_id)
         elif workflow:
@@ -2362,7 +2362,9 @@ Return only valid JSON, nothing else:"""
             memory_service.set_memory(self.db, MemoryCreate(key="initial_user_message", value=user_message), agent_id=self._executing_agent_id, session_id=conversation_id)
 
         last_executed_node_id = None
-        response_messages = []  # Collect all response node outputs
+        # Collect all response node outputs; carried over when entering / leaving a subworkflow so a
+        # phone call still speaks what came before it
+        response_messages = list(carried_messages or [])
         _trace_t0 = datetime.now()
         while current_node_id:
             node = graph_engine.nodes[current_node_id]
@@ -2875,7 +2877,8 @@ Return only valid JSON, nothing else:"""
                     company_id=company_id,
                     workflow_id=subworkflow_id,
                     conversation_id=conversation_id,
-                    attachments=attachments
+                    attachments=attachments,
+                    carried_messages=response_messages,
                 )
 
             if result and "error" in result:
@@ -2943,7 +2946,8 @@ Return only valid JSON, nothing else:"""
                 company_id=company_id,
                 workflow_id=parent_workflow_id,
                 conversation_id=conversation_id,
-                attachments=None
+                attachments=None,
+                carried_messages=response_messages,
             )
 
         # Finalizing the workflow (only if not a subworkflow)

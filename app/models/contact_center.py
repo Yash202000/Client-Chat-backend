@@ -292,3 +292,28 @@ class SipAccount(Base):
     enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TtsPrompt(Base):
+    """
+    Pre-generated speech for fixed phone prompts (IVR node text, greetings, hold messages), so calls
+    play a stored file instead of calling text-to-speech every time. Keyed by the exact spoken text +
+    TTS provider + voice, so editing a prompt or changing the voice simply creates a new entry. Prompts with
+    {{placeholders}} are never stored. Kept in step with the workflows by tts_prompt_service.sync_company.
+    """
+    __tablename__ = "tts_prompts"
+    __table_args__ = (UniqueConstraint("company_id", "key", name="uq_tts_prompts_company_key"),)
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    key = Column(String(64), nullable=False)  # sha256 of provider|voice|text
+    text = Column(Text, nullable=False)
+    provider = Column(String(32), nullable=False)  # Agent.tts_provider: openai | localai | voice_engine
+    voice = Column(String(64), nullable=False)     # Agent.voice_id
+    language = Column(String(16), nullable=True)
+    object_key = Column(String(255), nullable=True)  # MinIO / S3 key once generated
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")  # pending | ready | failed
+    error = Column(Text, nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

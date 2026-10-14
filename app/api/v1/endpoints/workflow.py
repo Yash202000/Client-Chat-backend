@@ -1,13 +1,13 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.core.dependencies import get_db, get_current_active_user, require_permission
 from app.schemas import workflow as schemas_workflow
-from app.services import workflow_service, tool_service
+from app.services import workflow_service, tool_service, tts_prompt_service
 from app.services.workflow_intent_service import WorkflowIntentService
 from app.services.workflow_ai_service import workflow_ai_chat
 from app.services.workflow_simulation_service import simulate_workflow
@@ -254,7 +254,7 @@ def get_workflows_using_as_subworkflow(
     return using_workflows
 
 @router.put("/{workflow_id}", response_model=schemas_workflow.Workflow, dependencies=[Depends(require_permission("workflow:update"))])
-def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     # A workflow that is a phone number's IVR changes what live callers hear (FR-CC-014):
     # only telephony managers may change it, and every change is audited.
     from app.models.phone_number import PhoneNumber
@@ -274,6 +274,8 @@ def update_workflow(workflow_id: int, workflow: schemas_workflow.WorkflowUpdate,
                    entity_id=db_workflow.id, entity_name=db_workflow.name,
                    changes={"phone_numbers": ivr_numbers, "fields": sorted(workflow.model_dump(exclude_unset=True).keys())})
         db.commit()
+    # phone prompts may have changed (this workflow, or one it is a sub-workflow of): refresh stored speech
+    background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return db_workflow
 
 @router.post("/{workflow_id}/regenerate-description", dependencies=[Depends(require_permission("workflow:update"))])
@@ -311,10 +313,11 @@ def regenerate_workflow_description(
     return {"description": new_description, "workflow_id": workflow_id}
 
 @router.delete("/{workflow_id}", dependencies=[Depends(require_permission("workflow:delete"))])
-def delete_workflow(workflow_id: int, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
+def delete_workflow(workflow_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: models_user.User = Depends(get_current_active_user)):
     success = workflow_service.delete_workflow(db=db, workflow_id=workflow_id, company_id=current_user.company_id)
     if not success:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    background_tasks.add_task(tts_prompt_service.sync_company_safe, current_user.company_id)
     return {"message": "Workflow deleted successfully"}
 
 # --- Export/Import Endpoints ---

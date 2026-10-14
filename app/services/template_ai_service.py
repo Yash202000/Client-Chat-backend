@@ -16,11 +16,13 @@ LLM_PROVIDERS = {
     "groq": {
         "name": "Groq",
         "models": [
+            {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B"},
+            {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B (Fast)"},
             {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B"},
             {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B (Fast)"},
             {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B"},
         ],
-        "default_model": "llama-3.3-70b-versatile"
+        "default_model": "openai/gpt-oss-120b"  # Llama models are no longer offered to our Groq account
     },
     "openai": {
         "name": "OpenAI",
